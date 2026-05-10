@@ -343,10 +343,21 @@
         </div>
       </div>
 
-      <div class="qr-wrapper">
-        <img src="payment-qr.png" alt="PromptPay QR Code" />
+      <div class="qr-wrapper" id="qrWrapper">
+        <img
+          src="/payment-qr.png"
+          alt="PromptPay QR Code"
+          id="qrImg"
+          onerror="
+            document.getElementById('qrWrapper').innerHTML =
+              '<p style=\'color:#d94f3d;font-size:0.82rem;padding:12px;text-align:center\'>⚠️ QR code could not load.<br>Please contact staff.</p>';
+          "
+        />
       </div>
-      <p class="qr-note">Scan with any banking app · Transfer exactly ฿350</p>
+      <p class="qr-note">Scan with any banking app · Transfer exactly ฿<span id="qrAmount">350</span></p>
+      <div style="background:#eef5ea;border:1px solid #dbe5d8;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:0.82rem;color:#405044;text-align:center">
+        💳 Please transfer <strong>฿<span id="qrAmount2">350</span></strong> and upload your slip below.
+      </div>
 
       <div class="slip-area" id="slipArea" onclick="document.getElementById('slipFileInput').click()">
         <p id="slipAreaText">📎 <strong>Tap to upload payment slip</strong></p>
@@ -732,6 +743,11 @@ function showPaymentView(code, data, expiresAt) {
   $("payDate").textContent        = data.date;
   $("payTime").textContent        = `${data.startTime} – ${data.endTime}`;
 
+  // Populate QR amount spans
+  const amt = data.price ?? BUSINESS.pricePerHour;
+  const q1 = $("qrAmount");  if (q1) q1.textContent = amt;
+  const q2 = $("qrAmount2"); if (q2) q2.textContent = amt;
+
   const dl = expiresAt.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
   $("payDeadline").textContent = dl;
 }
@@ -760,27 +776,52 @@ slipFileInput.addEventListener("change", () => {
 
 submitSlipBtn.addEventListener("click", async () => {
   const file = slipFileInput.files[0];
-  if (!file || !state.currentBookingCode || !state.currentBookingDocId) return;
 
-  submitSlipBtn.disabled = true;
+  // ── Validation ──────────────────────────────────────────
+  if (!file) { showToast("Please select a file first.", true); return; }
+  if (!file.type.startsWith("image/")) { showToast("Invalid file type. Please upload an image (JPG, PNG).", true); return; }
+  if (file.size > 5 * 1024 * 1024) { showToast("File too large. Maximum size is 5MB.", true); return; }
+  if (!state.currentBookingCode || !state.currentBookingDocId) { showToast("Booking data missing. Please restart.", true); return; }
+
+  submitSlipBtn.disabled  = true;
   submitSlipBtn.textContent = "Uploading...";
 
+  // ── 20-second timeout ────────────────────────────────────
+  let didTimeout = false;
+  const timeoutId = setTimeout(() => {
+    didTimeout = true;
+    console.error("Slip upload timed out after 20s");
+    showToast("Upload timed out. Please check your connection and try again.", true);
+    submitSlipBtn.disabled  = false;
+    submitSlipBtn.textContent = "Submit Payment Slip";
+  }, 20000);
+
   try {
-    const ts       = Date.now();
-    const path     = `payment_slips/${state.currentBookingCode}/${ts}_${file.name}`;
-    const sRef     = storageRef(storage, path);
+    console.log("Starting slip upload", { bookingCode: state.currentBookingCode, fileName: file.name, size: file.size });
+
+    const ts   = Date.now();
+    const path = `payment_slips/${state.currentBookingCode}/${ts}_${file.name}`;
+    const sRef = storageRef(storage, path);
+
     await uploadBytes(sRef, file);
+    if (didTimeout) return;
+    console.log("Upload complete", path);
+
     const downloadUrl = await getDownloadURL(sRef);
+    if (didTimeout) return;
+    console.log("Download URL received", downloadUrl);
 
     // Update booking doc
     const bookingDocRef = doc(db, "bookings", state.currentBookingDocId);
     await updateDoc(bookingDocRef, {
-      bookingStatus:   "confirmed",
-      paymentStatus:   "pending_review",
-      slipUrl:         downloadUrl,
-      slipUploadedAt:  serverTimestamp(),
-      updatedAt:       serverTimestamp(),
+      bookingStatus:  "confirmed",
+      paymentStatus:  "pending_review",
+      slipUrl:        downloadUrl,
+      slipUploadedAt: serverTimestamp(),
+      updatedAt:      serverTimestamp(),
     });
+    if (didTimeout) return;
+    console.log("Booking updated", state.currentBookingDocId);
 
     // Update slot doc
     const slotDocId = `${RESOURCE_ID}_${state.currentBookingData.date}_${state.currentBookingData.startTime.replace(":", "")}`;
@@ -788,14 +829,18 @@ submitSlipBtn.addEventListener("click", async () => {
       bookingStatus: "confirmed",
       paymentStatus: "pending_review",
     });
+    console.log("Slot updated", slotDocId);
 
+    clearTimeout(timeoutId);
     showConfirmedView(state.currentBookingCode, state.currentBookingData);
     showToast("Slip received. Booking confirmed — pending admin review.");
 
   } catch (err) {
-    console.error(err);
-    showToast("Upload failed. Please try again.", true);
-    submitSlipBtn.disabled = false;
+    clearTimeout(timeoutId);
+    if (didTimeout) return; // timeout already handled
+    console.error("Slip upload failed:", err);
+    showToast(err.message || "Upload failed. Please try again.", true);
+    submitSlipBtn.disabled  = false;
     submitSlipBtn.textContent = "Submit Payment Slip";
   }
 });
