@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ultra Tennis · Admin</title>
+  <style>
+    :root {
+      --bg: #0f1710;
+      --surface: #192219;
+      --surface2: #1e2d20;
+      --border: #263028;
+      --green: #06c755;
+      --green-dim: #06c75520;
+      --text: #f0fdf4;
+      --muted: #7a8f7d;
+      --mid: #a0b8a3;
+      --danger: #f87171;
+      --warning: #fbbf24;
+      --accent: #34d399;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, sans-serif; min-height: 100vh; }
+    button { border: 0; font: inherit; cursor: pointer; }
+
+    /* HEADER */
+    .admin-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 24px;
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      position: sticky; top: 0; z-index: 100;
+    }
+    .admin-header h1 { font-size: 1.1rem; font-weight: 800; letter-spacing: 0.5px; }
+    .admin-header span { font-size: 0.75rem; color: var(--muted); }
+    .refresh-btn {
+      background: var(--green-dim); border: 1px solid var(--green);
+      color: var(--green); padding: 8px 14px; border-radius: var(--radius);
+      font-size: 0.82rem; font-weight: 700;
+    }
+    .refresh-btn:hover { background: #06c75535; }
+
+    /* FILTERS */
+    .filters {
+      padding: 14px 24px;
+      display: flex; gap: 8px; flex-wrap: wrap;
+      border-bottom: 1px solid var(--border);
+    }
+    .filter-btn {
+      padding: 6px 12px; border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface); color: var(--muted);
+      font-size: 0.78rem; font-weight: 700;
+    }
+    .filter-btn.active { border-color: var(--green); background: var(--green-dim); color: var(--green); }
+
+    /* STATS */
+    .stats-bar {
+      display: flex; gap: 1px;
+      border-bottom: 1px solid var(--border);
+    }
+    .stat {
+      flex: 1; padding: 12px 16px; background: var(--surface);
+      text-align: center; border-right: 1px solid var(--border);
+    }
+    .stat:last-child { border-right: 0; }
+    .stat-num { font-size: 1.3rem; font-weight: 900; }
+    .stat-label { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+    .stat-num.green  { color: var(--green); }
+    .stat-num.yellow { color: var(--warning); }
+    .stat-num.red    { color: var(--danger); }
+    .stat-num.teal   { color: var(--accent); }
+
+    /* MAIN */
+    .main { padding: 16px 24px; max-width: 1200px; margin: 0 auto; }
+
+    /* LOADING */
+    .loading-state { text-align: center; padding: 48px; color: var(--muted); font-size: 0.9rem; }
+    .spinner { width: 32px; height: 32px; border: 2px solid var(--border); border-top-color: var(--green); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* BOOKING CARDS */
+    .bookings-grid { display: grid; gap: 12px; }
+    .booking-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .booking-card-header {
+      padding: 12px 16px;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface2);
+    }
+    .booking-code { font-size: 0.95rem; font-weight: 900; color: var(--accent); }
+    .booking-type-badge {
+      padding: 3px 8px; border-radius: 999px; font-size: 0.68rem; font-weight: 800;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .badge-single  { background: #1e3a5f; color: #60a5fa; }
+    .badge-ultra   { background: #2d1e5f; color: #a78bfa; }
+    .badge-offpeak { background: #1e3d30; color: #34d399; }
+
+    .booking-card-body { padding: 14px 16px; }
+    .booking-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .field { }
+    .field-label { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; }
+    .field-value { font-size: 0.88rem; color: var(--text); font-weight: 600; margin-top: 2px; }
+    .field-value.muted { color: var(--muted); }
+
+    /* STATUS BADGES */
+    .status-pill {
+      display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 0.72rem; font-weight: 800;
+    }
+    .s-pending_payment { background: #3d2e00; color: var(--warning); }
+    .s-confirmed       { background: #0d3320; color: var(--green); }
+    .s-cancelled       { background: #3d1010; color: var(--danger); }
+    .s-unpaid          { background: #3d2e00; color: var(--warning); }
+    .s-pending_review  { background: #0f2d3a; color: #38bdf8; }
+    .s-paid            { background: #0d3320; color: var(--green); }
+    .s-rejected        { background: #3d1010; color: var(--danger); }
+    .s-package         { background: #1e1e3d; color: #a78bfa; }
+
+    /* SLIP */
+    .slip-section { margin-bottom: 14px; }
+    .slip-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; font-weight: 700; margin-bottom: 6px; }
+    .slip-img-link { display: inline-block; }
+    .slip-img-link img { max-width: 200px; max-height: 160px; border-radius: 6px; border: 1px solid var(--border); object-fit: contain; cursor: pointer; }
+    .slip-img-link:hover img { border-color: var(--green); }
+    .no-slip { font-size: 0.82rem; color: var(--muted); font-style: italic; }
+
+    /* ACTIONS */
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn-paid {
+      padding: 8px 16px; border-radius: 8px;
+      background: var(--green-dim); border: 1px solid var(--green); color: var(--green);
+      font-size: 0.82rem; font-weight: 800;
+    }
+    .btn-paid:hover { background: #06c75535; }
+    .btn-paid:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-cancel {
+      padding: 8px 16px; border-radius: 8px;
+      background: #3d101020; border: 1px solid var(--danger); color: var(--danger);
+      font-size: 0.82rem; font-weight: 800;
+    }
+    .btn-cancel:hover { background: #3d101040; }
+    .btn-cancel:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-done {
+      padding: 8px 16px; border-radius: 8px;
+      background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+      font-size: 0.82rem; font-weight: 700; cursor: default;
+    }
+
+    /* EMPTY STATE */
+    .empty-state { text-align: center; padding: 60px 20px; color: var(--muted); }
+    .empty-state p { margin-top: 10px; font-size: 0.88rem; }
+
+    /* TOAST */
+    .toast {
+      position: fixed; left: 50%; bottom: 18px; width: min(calc(100% - 32px), 400px);
+      padding: 11px 14px; border-radius: 8px; background: #17231c; color: white;
+      font-weight: 750; text-align: center; transform: translate(-50%, 120px); opacity: 0;
+      transition: opacity 180ms, transform 180ms; z-index: 500;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .toast.error { background: var(--danger); }
+
+    @media (max-width: 600px) {
+      .admin-header { padding: 14px 16px; }
+      .filters { padding: 12px 16px; }
+      .main { padding: 12px 16px; }
+      .stats-bar { flex-wrap: wrap; }
+      .stat { min-width: 50%; border-bottom: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+
+<header class="admin-header">
+  <div>
+    <h1>🎾 Ultra Tennis · Admin</h1>
+    <span id="lastUpdated">—</span>
+  </div>
+  <button class="refresh-btn" id="refreshBtn">↻ Refresh</button>
+</header>
+
+<!-- STATS -->
+<div class="stats-bar" id="statsBar">
+  <div class="stat"><div class="stat-num" id="statTotal">—</div><div class="stat-label">Total</div></div>
+  <div class="stat"><div class="stat-num yellow" id="statPending">—</div><div class="stat-label">Pending Pay</div></div>
+  <div class="stat"><div class="stat-num teal" id="statReview">—</div><div class="stat-label">Under Review</div></div>
+  <div class="stat"><div class="stat-num green" id="statPaid">—</div><div class="stat-label">Paid</div></div>
+  <div class="stat"><div class="stat-num red" id="statCancelled">—</div><div class="stat-label">Cancelled</div></div>
+</div>
+
+<!-- FILTERS -->
+<div class="filters" id="filterBar">
+  <button class="filter-btn active" data-filter="all">All</button>
+  <button class="filter-btn" data-filter="pending_payment">Pending Payment</button>
+  <button class="filter-btn" data-filter="pending_review">Pending Review</button>
+  <button class="filter-btn" data-filter="confirmed">Confirmed</button>
+  <button class="filter-btn" data-filter="cancelled">Cancelled</button>
+</div>
+
+<div class="main">
+  <div id="bookingsList">
+    <div class="loading-state"><div class="spinner"></div><p>Loading bookings...</p></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
+import {
+  getFirestore, collection, doc, getDocs, updateDoc, writeBatch,
+  query, where, orderBy, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBhJSJszidFge4fKQqExLM2cB2Sx6z2lPY",
+  authDomain: "ultra-tennis-booking.firebaseapp.com",
+  projectId: "ultra-tennis-booking",
+  storageBucket: "ultra-tennis-booking.firebasestorage.app",
+  messagingSenderId: "646504579934",
+  appId: "1:646504579934:web:44768b8ae6b744be5d05cf",
+  measurementId: "G-M6RPC2CCTM",
+};
+
+const fbApp = initializeApp(firebaseConfig);
+const db    = getFirestore(fbApp);
+const RESOURCE_ID = "room1";
+
+let allBookings  = [];
+let activeFilter = "all";
+
+const $ = id => document.getElementById(id);
+
+// ── LOAD BOOKINGS ─────────────────────────────────────────
+async function loadBookings() {
+  $("bookingsList").innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading bookings...</p></div>`;
+
+  try {
+    const q    = query(collection(db, "bookings"), orderBy("createdAt", "desc"));
+    const snap = await getDocs(q);
+    allBookings = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    updateStats();
+    renderBookings();
+    $("lastUpdated").textContent = `Updated ${new Date().toLocaleTimeString("en-US", { hour:"2-digit", minute:"2-digit" })}`;
+  } catch (e) {
+    console.error(e);
+    $("bookingsList").innerHTML = `<div class="empty-state"><p>❌ Failed to load bookings.<br>Check Firestore rules.</p></div>`;
+  }
+}
+
+// ── STATS ─────────────────────────────────────────────────
+function updateStats() {
+  $("statTotal").textContent     = allBookings.length;
+  $("statPending").textContent   = allBookings.filter(b => b.bookingStatus === "pending_payment").length;
+  $("statReview").textContent    = allBookings.filter(b => b.paymentStatus  === "pending_review").length;
+  $("statPaid").textContent      = allBookings.filter(b => b.paymentStatus  === "paid").length;
+  $("statCancelled").textContent = allBookings.filter(b => b.bookingStatus  === "cancelled").length;
+}
+
+// ── RENDER BOOKINGS ───────────────────────────────────────
+function renderBookings() {
+  const filtered = activeFilter === "all"
+    ? allBookings
+    : allBookings.filter(b => b.bookingStatus === activeFilter || b.paymentStatus === activeFilter);
+
+  if (filtered.length === 0) {
+    $("bookingsList").innerHTML = `<div class="empty-state"><p>📭 No bookings found.</p></div>`;
+    return;
+  }
+
+  $("bookingsList").innerHTML = `<div class="bookings-grid">${filtered.map(renderCard).join("")}</div>`;
+
+  // Bind action buttons
+  filtered.forEach(b => {
+    const paidBtn   = document.querySelector(`[data-paid="${b.id}"]`);
+    const cancelBtn = document.querySelector(`[data-cancel="${b.id}"]`);
+    if (paidBtn)   paidBtn.addEventListener("click",   () => markAsPaid(b));
+    if (cancelBtn) cancelBtn.addEventListener("click", () => cancelBooking(b));
+  });
+}
+
+function renderCard(b) {
+  const typeClass = b.bookingType?.toLowerCase().includes("ultra") ? "badge-ultra"
+    : b.bookingType?.toLowerCase().includes("off") ? "badge-offpeak" : "badge-single";
+
+  const isDone      = b.paymentStatus === "paid" || b.bookingStatus === "cancelled";
+  const canMarkPaid = b.paymentStatus === "pending_review" && b.bookingStatus !== "cancelled";
+  const canCancel   = b.bookingStatus !== "cancelled" && b.paymentStatus !== "paid";
+
+  const createdAt = b.createdAt?.toDate
+    ? b.createdAt.toDate().toLocaleString("en-US", { dateStyle:"short", timeStyle:"short" })
+    : "—";
+
+  const slip = b.slipUrl
+    ? `<div class="slip-section">
+        <div class="slip-label">Payment Slip</div>
+        <a class="slip-img-link" href="${b.slipUrl}" target="_blank" rel="noopener">
+          <img src="${b.slipUrl}" alt="Payment slip" />
+        </a>
+       </div>`
+    : `<div class="slip-section"><div class="slip-label">Payment Slip</div><p class="no-slip">No slip uploaded yet</p></div>`;
+
+  const actions = isDone
+    ? `<button class="btn-done" disabled>${b.paymentStatus === "paid" ? "✓ Paid" : "✗ Cancelled"}</button>`
+    : `
+      ${canMarkPaid ? `<button class="btn-paid" data-paid="${b.id}">✓ Mark as Paid</button>` : ""}
+      ${canCancel   ? `<button class="btn-cancel" data-cancel="${b.id}">✗ Cancel / Reject Slip</button>` : ""}
+    `;
+
+  return `
+    <div class="booking-card" id="card-${b.id}">
+      <div class="booking-card-header">
+        <span class="booking-code">${b.bookingCode || "—"}</span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span class="booking-type-badge ${typeClass}">${b.bookingType || "—"}</span>
+        </div>
+      </div>
+      <div class="booking-card-body">
+        <div class="booking-fields">
+          <div class="field"><div class="field-label">Customer</div><div class="field-value">${b.customerName || "—"}</div></div>
+          <div class="field"><div class="field-label">Phone</div><div class="field-value">${b.customerPhone || "—"}</div></div>
+          <div class="field"><div class="field-label">Date</div><div class="field-value">${b.date || "—"}</div></div>
+          <div class="field"><div class="field-label">Time</div><div class="field-value">${b.startTime || "—"} – ${b.endTime || "—"}</div></div>
+          <div class="field"><div class="field-label">Price</div><div class="field-value">฿${b.price ?? "—"}</div></div>
+          <div class="field"><div class="field-label">Booking Status</div><div class="field-value"><span class="status-pill s-${b.bookingStatus}">${b.bookingStatus || "—"}</span></div></div>
+          <div class="field"><div class="field-label">Payment Status</div><div class="field-value"><span class="status-pill s-${b.paymentStatus}">${b.paymentStatus || "—"}</span></div></div>
+          <div class="field"><div class="field-label">Created</div><div class="field-value muted">${createdAt}</div></div>
+          ${b.customerNote ? `<div class="field" style="grid-column:1/-1"><div class="field-label">Note</div><div class="field-value muted">${b.customerNote}</div></div>` : ""}
+        </div>
+        ${slip}
+        <div class="actions">${actions}</div>
+      </div>
+    </div>`;
+}
+
+// ── MARK AS PAID ──────────────────────────────────────────
+async function markAsPaid(booking) {
+  const btn = document.querySelector(`[data-paid="${booking.id}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = "Saving..."; }
+
+  try {
+    const batch   = writeBatch(db);
+    const bookRef = doc(db, "bookings", booking.id);
+    batch.update(bookRef, {
+      paymentStatus:    "paid",
+      bookingStatus:    "confirmed",
+      adminReviewedAt:  serverTimestamp(),
+      updatedAt:        serverTimestamp(),
+    });
+
+    const slotId  = `${RESOURCE_ID}_${booking.date}_${booking.startTime?.replace(":", "")}`;
+    const slotRef = doc(db, "booking_slots", slotId);
+    batch.update(slotRef, { paymentStatus: "paid", bookingStatus: "confirmed" });
+
+    await batch.commit();
+    showToast(`✓ ${booking.bookingCode} marked as paid`);
+    await loadBookings();
+  } catch (e) {
+    console.error(e);
+    showToast("Failed to update. Try again.", true);
+    if (btn) { btn.disabled = false; btn.textContent = "✓ Mark as Paid"; }
+  }
+}
+
+// ── CANCEL / REJECT ───────────────────────────────────────
+async function cancelBooking(booking) {
+  const confirmed = window.confirm(
+    `Cancel / Reject slip for booking ${booking.bookingCode}?\n\nCustomer: ${booking.customerName}\nDate: ${booking.date} · ${booking.startTime}\n\nThis will release the slot.`
+  );
+  if (!confirmed) return;
+
+  const btn = document.querySelector(`[data-cancel="${booking.id}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = "Cancelling..."; }
+
+  try {
+    const batch   = writeBatch(db);
+    const bookRef = doc(db, "bookings", booking.id);
+    batch.update(bookRef, {
+      bookingStatus: "cancelled",
+      paymentStatus: "rejected",
+      cancelReason:  "Slip rejected or payment not received",
+      cancelledAt:   serverTimestamp(),
+      updatedAt:     serverTimestamp(),
+    });
+
+    const slotId  = `${RESOURCE_ID}_${booking.date}_${booking.startTime?.replace(":", "")}`;
+    const slotRef = doc(db, "booking_slots", slotId);
+    batch.update(slotRef, { bookingStatus: "cancelled", paymentStatus: "rejected" });
+
+    await batch.commit();
+    showToast(`✗ ${booking.bookingCode} cancelled — slot released`);
+    await loadBookings();
+  } catch (e) {
+    console.error(e);
+    showToast("Failed to cancel. Try again.", true);
+    if (btn) { btn.disabled = false; btn.textContent = "✗ Cancel / Reject Slip"; }
+  }
+}
+
+// ── FILTERS ───────────────────────────────────────────────
+document.querySelectorAll(".filter-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    activeFilter = btn.dataset.filter;
+    document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    renderBookings();
+  });
+});
+
+$("refreshBtn").addEventListener("click", loadBookings);
+
+// ── TOAST ─────────────────────────────────────────────────
+function showToast(msg, isError = false) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = `toast show${isError ? " error" : ""}`;
+  setTimeout(() => t.classList.remove("show"), 3200);
+}
+
+// ── BOOT ──────────────────────────────────────────────────
+loadBookings();
+</script>
+</body>
+</html>

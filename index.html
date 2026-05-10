@@ -7,7 +7,6 @@
   <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     :root {
-      color-scheme: light;
       --bg: #f4f7f2;
       --surface: #ffffff;
       --surface-soft: #eef5ea;
@@ -17,254 +16,190 @@
       --brand: #06c755;
       --brand-dark: #079944;
       --accent: #0f7c80;
+      --danger: #d94f3d;
+      --warning: #e07d10;
       --shadow: 0 16px 36px rgba(26,42,31,0.12);
     }
     * { box-sizing: border-box; }
     body {
-      margin: 0;
-      min-height: 100vh;
+      margin: 0; min-height: 100vh;
       background: linear-gradient(180deg, rgba(6,199,85,0.12), transparent 280px), var(--bg);
       color: var(--ink);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
     }
-    button { border: 0; font: inherit; }
+    button { border: 0; font: inherit; cursor: pointer; }
 
-    .app-shell {
-      width: min(100%, 520px);
-      min-height: 100vh;
-      margin: 0 auto;
-      padding: 18px 14px 28px;
+    .app-shell { width: min(100%, 520px); min-height: 100vh; margin: 0 auto; padding: 18px 14px 40px; }
+
+    /* LOADING */
+    .loading-overlay {
+      position: fixed; inset: 0; background: rgba(244,247,242,0.95);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; z-index: 999;
     }
+    .spinner { width: 38px; height: 38px; border: 3px solid var(--line); border-top-color: var(--brand); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-overlay p { color: var(--muted); font-size: 0.9rem; margin: 0; }
 
     /* PROFILE HEADER */
-    .profile-header {
-      display: grid;
-      grid-template-columns: 58px 1fr;
-      gap: 14px;
-      align-items: center;
-      padding: 18px 4px 14px;
-    }
-    .avatar {
-      display: grid;
-      width: 58px; height: 58px;
-      place-items: center;
-      border-radius: 50%;
-      background: linear-gradient(135deg, var(--brand), var(--accent));
-      color: white;
-      font-size: 1.35rem; font-weight: 800;
-      box-shadow: var(--shadow);
-      overflow: hidden;
-    }
+    .profile-header { display: grid; grid-template-columns: 58px 1fr; gap: 14px; align-items: center; padding: 18px 4px 14px; }
+    .avatar { display: grid; width: 58px; height: 58px; place-items: center; border-radius: 50%; background: linear-gradient(135deg, var(--brand), var(--accent)); color: white; font-size: 1.35rem; font-weight: 800; box-shadow: var(--shadow); overflow: hidden; }
     .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
-    .eyebrow, .member-line, .section-heading p, .room-card p, #passText, .confirmation-card p {
-      margin: 0; color: var(--muted); font-size: 0.84rem;
-    }
-    .eyebrow { color: var(--brand-dark); font-weight: 800; text-transform: uppercase; }
-    h1, h2 { margin: 0; letter-spacing: 0; }
-    h1 { font-size: 1.55rem; line-height: 1.15; }
-    h2 { font-size: 1rem; line-height: 1.25; }
+    .eyebrow { margin: 0; color: var(--brand-dark); font-size: 0.84rem; font-weight: 800; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 1.55rem; line-height: 1.15; }
+    h2 { margin: 0; font-size: 1rem; line-height: 1.25; }
+    .member-line { margin: 0; color: var(--muted); font-size: 0.82rem; margin-top: 2px; }
 
     /* CARDS */
-    .section, .summary-panel, .room-card, .price-summary, .confirmation-card {
-      margin-top: 12px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.92);
-      box-shadow: 0 8px 22px rgba(26,42,31,0.06);
-    }
-    .section { padding: 14px; }
-    .section-heading {
-      display: flex; min-height: 28px;
-      align-items: center; justify-content: space-between;
-      gap: 12px; margin-bottom: 12px;
-    }
+    .card { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,0.92); box-shadow: 0 8px 22px rgba(26,42,31,0.06); padding: 14px; }
+    .section-heading { display: flex; min-height: 28px; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .section-heading p { margin: 0; color: var(--muted); font-size: 0.84rem; }
 
     /* BOOKING TYPE */
-    .segmented {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0,1fr));
-      gap: 8px;
-    }
-    .option, .date-button, .time-button {
-      cursor: pointer;
-      transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
-    }
+    .segmented { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
     .option {
-      min-height: 76px; padding: 10px 8px;
-      border: 1px solid var(--line); border-radius: 8px;
+      min-height: 76px; padding: 10px 8px; border: 1px solid var(--line); border-radius: 8px;
       background: var(--surface); color: var(--ink); text-align: left;
+      transition: border-color 160ms, background 160ms;
     }
-    .option span { display: block; font-size: 0.92rem; font-weight: 800; }
-    .option small { display: block; margin-top: 4px; color: var(--muted); font-size: 0.72rem; line-height: 1.25; }
-    .option.active, .date-button.active, .time-button.active {
-      border-color: var(--brand); background: #e8f9ee; color: var(--brand-dark);
-    }
+    .option span { display: block; font-size: 0.9rem; font-weight: 800; }
+    .option small { display: block; margin-top: 4px; color: var(--muted); font-size: 0.7rem; line-height: 1.3; }
+    .option.active { border-color: var(--brand); background: #e8f9ee; color: var(--brand-dark); }
+    .option:disabled { opacity: 0.45; cursor: not-allowed; background: #f5f5f5; }
+    .option:disabled span, .option:disabled small { color: var(--muted); }
 
     /* DATE STRIP */
-    .date-strip {
-      display: flex; gap: 8px;
-      overflow-x: auto; padding-bottom: 4px;
-      scroll-snap-type: x proximity;
-    }
+    .date-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+    .date-strip::-webkit-scrollbar { display: none; }
     .date-button {
-      flex: 0 0 72px; min-height: 70px;
-      border: 1px solid var(--line); border-radius: 8px;
+      flex: 0 0 68px; min-height: 68px; border: 1px solid var(--line); border-radius: 8px;
       background: var(--surface); color: var(--ink);
-      scroll-snap-align: start;
+      transition: border-color 160ms, background 160ms;
     }
-    .date-button strong, .date-button span { display: block; }
-    .date-button strong { font-size: 1.05rem; }
+    .date-button strong, .date-button span { display: block; text-align: center; }
+    .date-button strong { font-size: 1.1rem; }
     .date-button span { color: var(--muted); font-size: 0.72rem; }
+    .date-button.active { border-color: var(--brand); background: #e8f9ee; color: var(--brand-dark); }
 
     /* DURATION FIXED */
     .duration-fixed {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 12px 14px;
-      background: #e8f9ee; border: 1px solid var(--brand);
-      border-radius: 8px;
+      padding: 12px 14px; background: #e8f9ee; border: 1px solid var(--brand); border-radius: 8px;
     }
     .duration-fixed strong { font-size: 0.95rem; color: var(--brand-dark); font-weight: 800; }
     .duration-fixed span { font-size: 0.78rem; color: var(--muted); }
 
     /* TIME GRID */
-    .time-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0,1fr));
-      gap: 8px;
-    }
+    .time-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 7px; }
     .time-button {
-      min-height: 42px;
-      border: 1px solid var(--line); border-radius: 8px;
-      background: var(--surface); color: var(--ink); font-weight: 700;
+      min-height: 42px; border: 1px solid var(--line); border-radius: 8px;
+      background: var(--surface); color: var(--ink); font-weight: 700; font-size: 0.85rem;
+      transition: border-color 160ms, background 160ms;
     }
-    .time-button:disabled {
-      cursor: not-allowed; background: #f0f1ef; color: #a2aaa3; text-decoration: line-through;
-    }
-    .time-button.active:disabled { border-color: var(--line); background: #f0f1ef; color: #a2aaa3; }
+    .time-button.active { border-color: var(--brand); background: #e8f9ee; color: var(--brand-dark); }
+    .time-button:disabled { cursor: not-allowed; background: #f0f1ef; color: #b0b8b2; text-decoration: line-through; }
+    .time-grid-loading { text-align: center; padding: 24px; color: var(--muted); font-size: 0.85rem; grid-column: 1/-1; }
 
     /* SUMMARY PANEL */
-    .summary-panel, .price-summary {
-      display: flex; align-items: center; justify-content: space-between;
-      gap: 12px; padding: 14px;
-    }
-    .status-chip {
-      flex: 0 0 auto; max-width: 128px;
-      padding: 8px 10px; border-radius: 999px;
-      background: #eaf5f5; color: var(--accent);
-      font-size: 0.78rem; font-weight: 850; text-align: center;
-    }
+    .summary-panel { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .status-chip { flex: 0 0 auto; padding: 8px 10px; border-radius: 999px; background: #eaf5f5; color: var(--accent); font-size: 0.78rem; font-weight: 800; }
 
     /* ROOM CARD */
-    .room-card { display: grid; grid-template-columns: 112px 1fr; overflow: hidden; }
+    .room-card { display: grid; grid-template-columns: 110px 1fr; overflow: hidden; }
     .room-image {
-      min-height: 146px;
-      background:
-        linear-gradient(90deg, rgba(6,199,85,0.8), rgba(15,124,128,0.75)),
-        repeating-linear-gradient(90deg, transparent 0 32px, rgba(255,255,255,0.28) 32px 34px),
-        linear-gradient(135deg, #1f8c57, #74b85f);
+      min-height: 136px;
+      background: linear-gradient(90deg, rgba(6,199,85,0.8), rgba(15,124,128,0.75)), repeating-linear-gradient(90deg, transparent 0 32px, rgba(255,255,255,0.28) 32px 34px), linear-gradient(135deg, #1f8c57, #74b85f);
       position: relative;
     }
-    .room-image::after {
-      content: ""; position: absolute; inset: 28px 18px;
-      border: 2px solid rgba(255,255,255,0.82); border-radius: 4px;
-    }
+    .room-image::after { content: ""; position: absolute; inset: 24px 16px; border: 2px solid rgba(255,255,255,0.82); border-radius: 4px; }
     .room-content { padding: 14px; }
     .room-content h2 { margin-top: 2px; }
-    .room-content p:not(.eyebrow) { margin-top: 7px; line-height: 1.45; }
+    .room-content p { margin: 6px 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.45; }
     .room-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-    .room-meta span {
-      padding: 5px 8px; border-radius: 999px;
-      background: var(--surface-soft); color: #405044;
-      font-size: 0.72rem; font-weight: 750;
-    }
-
-    /* PASS INFO TABLE */
-    .pass-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 10px; }
-    .pass-table th {
-      text-align: left; padding: 6px 8px;
-      background: var(--surface-soft); color: var(--muted);
-      font-weight: 800; font-size: 0.72rem; text-transform: uppercase;
-    }
-    .pass-table td { padding: 7px 8px; border-top: 1px solid var(--line); vertical-align: middle; }
-    .pass-table tr.highlight td { background: #e8f9ee; color: var(--brand-dark); font-weight: 700; }
-    .save-badge {
-      display: inline-block; padding: 2px 7px; border-radius: 999px;
-      background: var(--brand); color: white; font-size: 0.68rem; font-weight: 800;
-    }
+    .room-meta span { padding: 4px 8px; border-radius: 999px; background: var(--surface-soft); color: #405044; font-size: 0.7rem; font-weight: 700; }
 
     /* FORM */
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .form-grid label { display: grid; gap: 6px; color: var(--muted); font-size: 0.78rem; font-weight: 800; }
+    .form-grid label { display: grid; gap: 5px; color: var(--muted); font-size: 0.78rem; font-weight: 800; }
     .form-grid .full { grid-column: 1 / -1; }
     input, textarea {
       width: 100%; border: 1px solid var(--line); border-radius: 8px;
-      background: var(--surface); color: var(--ink); font: inherit; font-size: 0.95rem;
+      background: var(--surface); color: var(--ink); font: inherit; font-size: 0.92rem;
     }
-    input.invalid { border-color: #d94f3d; box-shadow: 0 0 0 3px rgba(217,79,61,0.12); }
+    input.invalid { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(217,79,61,0.12); }
     input { min-height: 44px; padding: 0 11px; }
-    textarea { min-height: 82px; padding: 10px 11px; resize: vertical; }
+    textarea { min-height: 76px; padding: 10px 11px; resize: vertical; }
 
-    /* PRICE */
-    #priceText { margin-top: 2px; color: var(--accent); font-size: 1.3rem; }
-
-    /* CONFIRM */
+    /* PRICE + CONFIRM */
+    .price-confirm { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .price-confirm h2 { color: var(--accent); font-size: 1.3rem; margin-top: 3px; }
+    .price-confirm p { margin: 4px 0 0; color: var(--muted); font-size: 0.8rem; }
     .confirm-button {
-      min-height: 48px; min-width: 148px; padding: 0 16px;
-      border-radius: 8px; background: var(--brand); color: white;
-      font-weight: 900; box-shadow: 0 12px 22px rgba(6,199,85,0.24); cursor: pointer;
+      flex-shrink: 0; min-height: 48px; min-width: 140px; padding: 0 16px;
+      border-radius: 8px; background: var(--brand); color: white; font-weight: 900;
+      box-shadow: 0 12px 22px rgba(6,199,85,0.24);
     }
-    .confirm-button:disabled { cursor: not-allowed; background: #aeb8b0; box-shadow: none; }
+    .confirm-button:disabled { background: #aeb8b0; box-shadow: none; cursor: not-allowed; }
 
-    /* CONFIRMATION */
-    .confirmation-card { padding: 14px; }
-    .confirmation-card h2 { margin-top: 2px; color: var(--accent); font-size: 1.18rem; }
-    .confirmation-card p:last-child { margin-top: 8px; line-height: 1.45; }
+    /* PAYMENT PANEL */
+    .payment-panel { text-align: center; }
+    .payment-panel .booking-code-display {
+      font-size: 1.4rem; font-weight: 900; color: var(--accent); letter-spacing: 1px; margin: 4px 0 12px;
+    }
+    .payment-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+    .payment-meta-item { background: var(--surface-soft); border-radius: 8px; padding: 10px; text-align: center; }
+    .payment-meta-item .label { font-size: 0.72rem; color: var(--muted); font-weight: 800; text-transform: uppercase; }
+    .payment-meta-item .value { font-size: 1rem; font-weight: 800; color: var(--ink); margin-top: 2px; }
+    .payment-meta-item .value.danger { color: var(--danger); }
+    .qr-wrapper { margin: 0 auto 16px; width: 180px; height: 180px; border: 2px solid var(--line); border-radius: 12px; overflow: hidden; background: white; display: flex; align-items: center; justify-content: center; }
+    .qr-wrapper img { width: 100%; height: 100%; object-fit: contain; }
+    .qr-note { font-size: 0.8rem; color: var(--muted); margin-bottom: 16px; }
+
+    /* SLIP UPLOAD */
+    .slip-area { border: 2px dashed var(--line); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; transition: border-color 160ms, background 160ms; margin-bottom: 12px; }
+    .slip-area:hover { border-color: var(--brand); background: #f5fdf7; }
+    .slip-area.has-file { border-color: var(--brand); background: #e8f9ee; }
+    .slip-area p { margin: 0; color: var(--muted); font-size: 0.85rem; }
+    .slip-area strong { color: var(--brand-dark); }
+    #slipFileInput { display: none; }
+    .slip-preview { max-width: 100%; max-height: 160px; border-radius: 6px; margin-top: 10px; object-fit: contain; }
+    .submit-slip-btn {
+      width: 100%; min-height: 48px; border-radius: 8px; background: var(--brand); color: white;
+      font-weight: 900; font-size: 1rem; box-shadow: 0 8px 18px rgba(6,199,85,0.22);
+    }
+    .submit-slip-btn:disabled { background: #aeb8b0; box-shadow: none; cursor: not-allowed; }
+
+    /* CONFIRMED VIEW */
+    .confirmed-card { text-align: center; padding: 24px 16px; }
+    .confirmed-icon { font-size: 3rem; margin-bottom: 8px; }
+    .confirmed-card h2 { color: var(--brand-dark); font-size: 1.2rem; margin-bottom: 8px; }
+    .confirmed-card p { color: var(--muted); font-size: 0.88rem; line-height: 1.5; margin: 0; }
+    .confirmed-code { font-size: 1.1rem; font-weight: 900; color: var(--accent); margin: 10px 0; }
 
     /* TOAST */
     .toast {
-      position: fixed; left: 50%; bottom: 18px;
-      width: min(calc(100% - 32px), 420px);
-      padding: 12px 14px; border-radius: 8px;
-      background: #17231c; color: white; font-weight: 750; text-align: center;
-      transform: translate(-50%, 120px); opacity: 0;
-      transition: opacity 180ms ease, transform 180ms ease;
+      position: fixed; left: 50%; bottom: 18px; width: min(calc(100% - 32px), 420px);
+      padding: 12px 14px; border-radius: 8px; background: #17231c; color: white;
+      font-weight: 750; text-align: center; transform: translate(-50%, 120px); opacity: 0;
+      transition: opacity 180ms, transform 180ms; z-index: 500;
     }
     .toast.show { opacity: 1; transform: translate(-50%, 0); }
-
-    /* LOADING OVERLAY */
-    .loading-overlay {
-      position: fixed; inset: 0;
-      background: rgba(244,247,242,0.92);
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      gap: 14px; z-index: 999;
-    }
-    .loading-overlay .spinner {
-      width: 40px; height: 40px;
-      border: 3px solid var(--line);
-      border-top-color: var(--brand);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    .loading-overlay p { color: var(--muted); font-size: 0.9rem; margin: 0; }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .toast.error { background: var(--danger); }
 
     @media (max-width: 380px) {
       .app-shell { padding-inline: 10px; }
-      .segmented, .time-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .segmented { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .time-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
       .room-card { grid-template-columns: 1fr; }
-      .room-image { min-height: 120px; }
-      .price-summary { align-items: stretch; flex-direction: column; }
+      .price-confirm { flex-direction: column; align-items: stretch; }
       .form-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
 
-<!-- LOADING OVERLAY -->
 <div class="loading-overlay" id="loadingOverlay">
   <div class="spinner"></div>
-  <p>Connecting to LINE...</p>
+  <p id="loadingText">Loading...</p>
 </div>
 
 <main class="app-shell" id="appShell" style="display:none">
@@ -273,510 +208,644 @@
   <header class="profile-header">
     <div class="avatar" id="avatarEl">U</div>
     <div>
-      <p class="eyebrow">Ultra Tennis · LINE Booking</p>
+      <p class="eyebrow">Ultra Tennis · Booking</p>
       <h1 id="profileName">Loading...</h1>
-      <p class="member-line">Open daily 06:00–00:00 · Pay within 15 min</p>
+      <p class="member-line">Open daily 06:00–00:00 · Floor G, Omni Business Mall</p>
     </div>
   </header>
 
-  <!-- BOOKING TYPE -->
-  <section class="section">
-    <div class="section-heading"><h2>Booking Type</h2></div>
-    <div class="segmented" role="radiogroup" aria-label="Booking type">
-      <button class="option active" type="button" data-booking="single" role="radio" aria-checked="true">
-        <span>Single Use</span>
-        <small>฿350 / hr</small>
-      </button>
-      <button class="option" type="button" data-booking="ultra" role="radio" aria-checked="false">
-        <span>Ultra Pass</span>
-        <small>฿310–295 / hr avg</small>
-      </button>
-      <button class="option" type="button" data-booking="offpeak" role="radio" aria-checked="false">
-        <span>Off-Peak Pass</span>
-        <small>Mon–Fri 10:00–15:00</small>
-      </button>
-    </div>
-  </section>
+  <!-- ══ BOOKING VIEW ══ -->
+  <div id="bookingView">
 
-  <!-- DATE -->
-  <section class="section">
-    <div class="section-heading"><h2>Date</h2></div>
-    <div class="date-strip" id="dateStrip" aria-label="Available dates"></div>
-  </section>
-
-  <!-- DURATION FIXED -->
-  <section class="section">
-    <div class="section-heading"><h2>Duration</h2></div>
-    <div class="duration-fixed">
-      <strong>⏱ 1 Hour / Session</strong>
-      <span>Min 1 hr · Max 3 hrs per visit</span>
-    </div>
-  </section>
-
-  <!-- TIME GRID -->
-  <section class="section">
-    <div class="section-heading">
-      <h2>Available Times</h2>
-      <p id="availabilityText">0 slots available</p>
-    </div>
-    <div class="time-grid" id="timeGrid" aria-label="Available times"></div>
-  </section>
-
-  <!-- SUMMARY -->
-  <section class="summary-panel" aria-live="polite">
-    <div>
-      <p class="eyebrow">Selected Time</p>
-      <h2 id="selectedSummary">Pick a time above</h2>
-    </div>
-    <div class="status-chip" id="bookingChip">Single Use</div>
-  </section>
-
-  <!-- ROOM CARD -->
-  <section class="room-card">
-    <div class="room-image" aria-hidden="true"></div>
-    <div class="room-content">
-      <p class="eyebrow">Court</p>
-      <h2>Ultra Tennis Practice Room</h2>
-      <p>Private indoor court with LED lighting, air-conditioning, and camera system.</p>
-      <div class="room-meta">
-        <span>🏟 Indoor</span>
-        <span>💡 LED</span>
-        <span>❄️ AC</span>
-        <span>📷 Camera</span>
-        <span>📍 Floor G · Omni Business Mall</span>
+    <!-- Booking Type -->
+    <div class="card">
+      <div class="section-heading"><h2>Booking Type</h2></div>
+      <div class="segmented" role="radiogroup">
+        <button class="option active" type="button" data-booking="single" role="radio" aria-checked="true">
+          <span>Single Use</span>
+          <small>฿350 / hr</small>
+        </button>
+        <button class="option" type="button" data-booking="ultra" role="radio" aria-checked="false">
+          <span>Ultra Pass</span>
+          <small>฿310–295/hr avg</small>
+        </button>
+        <button class="option" type="button" data-booking="offpeak" role="radio" aria-checked="false">
+          <span>Off-Peak Pass</span>
+          <small>Mon–Fri 10:00–15:00</small>
+        </button>
       </div>
     </div>
-  </section>
 
-  <!-- PASS PRICING INFO -->
-  <section class="section" id="passPricingSection" style="display:none">
-    <div class="section-heading"><h2>Pass Pricing</h2></div>
-    <table class="pass-table" id="passTable"></table>
-  </section>
-
-  <!-- CUSTOMER INFO -->
-  <section class="section">
-    <div class="section-heading"><h2>Customer Info</h2></div>
-    <div class="form-grid">
-      <label>
-        <span>Name</span>
-        <input id="customerName" type="text" autocomplete="name" placeholder="Full name" required />
-      </label>
-      <label>
-        <span>Phone</span>
-        <input id="customerPhone" type="tel" autocomplete="tel" placeholder="Phone number" required />
-      </label>
-      <label class="full">
-        <span>Note (optional)</span>
-        <textarea id="customerNote" rows="3" placeholder="Any special requests..."></textarea>
-      </label>
+    <!-- Date -->
+    <div class="card">
+      <div class="section-heading"><h2>Date</h2></div>
+      <div class="date-strip" id="dateStrip"></div>
     </div>
-  </section>
 
-  <!-- PRICE + CONFIRM -->
-  <section class="price-summary">
-    <div>
-      <p class="eyebrow">Price / Pass Summary</p>
-      <h2 id="priceText">฿350</h2>
-      <p id="passText">Payment due within 15 minutes after booking.</p>
+    <!-- Duration -->
+    <div class="card">
+      <div class="section-heading"><h2>Duration</h2></div>
+      <div class="duration-fixed">
+        <strong>⏱ 1 Hour per Booking</strong>
+        <span>Book again for more time</span>
+      </div>
     </div>
-    <button class="confirm-button" type="button" id="confirmButton">Confirm Booking</button>
-  </section>
 
-  <!-- CONFIRMATION -->
-  <section class="confirmation-card" id="confirmationCard" aria-live="polite" hidden>
-    <p class="eyebrow">Booking Confirmed ✅</p>
-    <h2 id="confirmationCode">Booking Code UT-0000</h2>
-    <p id="confirmationDetails">Booking details will appear here.</p>
-  </section>
+    <!-- Time Grid -->
+    <div class="card">
+      <div class="section-heading">
+        <h2>Available Times</h2>
+        <p id="availabilityText">—</p>
+      </div>
+      <div class="time-grid" id="timeGrid">
+        <p class="time-grid-loading">Loading slots...</p>
+      </div>
+    </div>
+
+    <!-- Summary -->
+    <div class="card summary-panel">
+      <div>
+        <p class="eyebrow">Selected Time</p>
+        <h2 id="selectedSummary">Pick a time above</h2>
+      </div>
+      <div class="status-chip" id="bookingChip">Single Use</div>
+    </div>
+
+    <!-- Room Card -->
+    <div class="card room-card" style="padding:0">
+      <div class="room-image"></div>
+      <div class="room-content">
+        <p class="eyebrow">Court</p>
+        <h2>Ultra Tennis Practice Room</h2>
+        <p>Private indoor court with LED lighting, air-conditioning, and camera system.</p>
+        <div class="room-meta">
+          <span>🏟 Indoor</span>
+          <span>💡 LED</span>
+          <span>❄️ AC</span>
+          <span>📷 Camera</span>
+          <span>📍 Floor G · Omni Mall</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Customer Info -->
+    <div class="card">
+      <div class="section-heading"><h2>Your Info</h2></div>
+      <div class="form-grid">
+        <label>
+          <span>Name</span>
+          <input id="customerName" type="text" autocomplete="name" placeholder="Full name" required />
+        </label>
+        <label>
+          <span>Phone</span>
+          <input id="customerPhone" type="tel" autocomplete="tel" placeholder="Phone number" required />
+        </label>
+        <label class="full">
+          <span>Note (optional)</span>
+          <textarea id="customerNote" rows="2" placeholder="Any special requests..."></textarea>
+        </label>
+      </div>
+    </div>
+
+    <!-- Price + Confirm -->
+    <div class="card price-confirm">
+      <div>
+        <p class="eyebrow">Price Summary</p>
+        <h2 id="priceText">฿350</h2>
+        <p id="passText">Payment due within 15 minutes after booking.</p>
+      </div>
+      <button class="confirm-button" type="button" id="confirmButton" disabled>Confirm Booking</button>
+    </div>
+
+  </div><!-- /bookingView -->
+
+  <!-- ══ PAYMENT VIEW ══ -->
+  <div id="paymentView" style="display:none">
+    <div class="card payment-panel">
+      <p class="eyebrow">Payment Required</p>
+      <div class="booking-code-display" id="payBookingCode">UT-2026-0000</div>
+      <div class="payment-meta">
+        <div class="payment-meta-item">
+          <div class="label">Amount</div>
+          <div class="value" id="payAmount">฿350</div>
+        </div>
+        <div class="payment-meta-item">
+          <div class="label">Pay Before</div>
+          <div class="value danger" id="payDeadline">—</div>
+        </div>
+        <div class="payment-meta-item">
+          <div class="label">Date</div>
+          <div class="value" id="payDate">—</div>
+        </div>
+        <div class="payment-meta-item">
+          <div class="label">Time</div>
+          <div class="value" id="payTime">—</div>
+        </div>
+      </div>
+
+      <div class="qr-wrapper">
+        <img src="payment-qr.png" alt="PromptPay QR Code" />
+      </div>
+      <p class="qr-note">Scan with any banking app · Transfer exactly ฿350</p>
+
+      <div class="slip-area" id="slipArea" onclick="document.getElementById('slipFileInput').click()">
+        <p id="slipAreaText">📎 <strong>Tap to upload payment slip</strong></p>
+        <p style="margin-top:4px;font-size:0.75rem">JPG, PNG accepted</p>
+        <img id="slipPreview" class="slip-preview" style="display:none" alt="Slip preview" />
+      </div>
+      <input type="file" id="slipFileInput" accept="image/*" />
+
+      <button class="submit-slip-btn" id="submitSlipBtn" disabled>Submit Payment Slip</button>
+    </div>
+  </div><!-- /paymentView -->
+
+  <!-- ══ CONFIRMED VIEW ══ -->
+  <div id="confirmedView" style="display:none">
+    <div class="card confirmed-card">
+      <div class="confirmed-icon">✅</div>
+      <h2>Slip Received!</h2>
+      <p>Your booking is confirmed and pending admin review.</p>
+      <div class="confirmed-code" id="confirmedCode">UT-2026-0000</div>
+      <p id="confirmedDetails">—</p>
+    </div>
+  </div><!-- /confirmedView -->
 
 </main>
 
-<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="toast" id="toast"></div>
 
-<!-- FIREBASE -->
 <script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
-  import { getAnalytics, isSupported as isAnalyticsSupported } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
-  import { addDoc, collection, getFirestore, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
+import { initializeApp }          from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
+import { isSupported, getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
+import {
+  getFirestore, collection, doc, getDocs, runTransaction,
+  updateDoc, query, where, serverTimestamp, Timestamp
+} from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
+import {
+  getStorage, ref as storageRef, uploadBytes, getDownloadURL
+} from "https://www.gstatic.com/firebasejs/12.13.0/firebase-storage.js";
 
-  // ── FIREBASE CONFIG ──
-  const firebaseConfig = {
-    apiKey: "AIzaSyBhJSJszidFge4fKQqExLM2cB2Sx6z2lPY",
-    authDomain: "ultra-tennis-booking.firebaseapp.com",
-    projectId: "ultra-tennis-booking",
-    storageBucket: "ultra-tennis-booking.firebasestorage.app",
-    messagingSenderId: "646504579934",
-    appId: "1:646504579934:web:44768b8ae6b744be5d05cf",
-    measurementId: "G-M6RPC2CCTM",
-  };
+// ── FIREBASE ──────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyBhJSJszidFge4fKQqExLM2cB2Sx6z2lPY",
+  authDomain: "ultra-tennis-booking.firebaseapp.com",
+  projectId: "ultra-tennis-booking",
+  storageBucket: "ultra-tennis-booking.firebasestorage.app",
+  messagingSenderId: "646504579934",
+  appId: "1:646504579934:web:44768b8ae6b744be5d05cf",
+  measurementId: "G-M6RPC2CCTM",
+};
+const fbApp  = initializeApp(firebaseConfig);
+const db      = getFirestore(fbApp);
+const storage = getStorage(fbApp);
+isSupported().then(ok => { if (ok) getAnalytics(fbApp); }).catch(() => {});
 
-  const firebaseApp = initializeApp(firebaseConfig);
-  const db = getFirestore(firebaseApp);
-  isAnalyticsSupported().then(ok => { if (ok) getAnalytics(firebaseApp); }).catch(() => {});
+// ── CONSTANTS ────────────────────────────────────────────
+const LIFF_ID     = "2010034901-ClPr9N5v";
+const RESOURCE_ID = "room1";
+const BUSINESS = {
+  openHour: 6, closeHour: 24, duration: 1,
+  pricePerHour: 350, advanceDays: 30,
+  paymentMinutes: 15, offPeakStartHour: 10, offPeakEndHour: 15,
+};
 
-  // ── LIFF INIT ──
-  const LIFF_ID = "2010034901-ClPr9N5v";
-  let lineProfile = { displayName: "Guest", pictureUrl: null, userId: "guest" };
+// Mock eligibility — swap to real data when passes are live
+const customerEligibility = { hasUltraPass: false, hasOffPeakPass: false };
 
-  async function initLiff() {
-    try {
-      await liff.init({ liffId: LIFF_ID });
-      if (!liff.isLoggedIn()) {
-        liff.login();
-        return;
+// ── STATE ────────────────────────────────────────────────
+const state = {
+  booking: "single",
+  dateOffset: 0,
+  time: null,
+  blockedSlots: new Set(),
+  isLoadingSlots: false,
+  currentBookingCode: null,
+  currentBookingDocId: null,
+  currentBookingData: null,
+  lineProfile: { displayName: "Guest", pictureUrl: null, userId: "guest" },
+};
+
+// ── DOM REFS ─────────────────────────────────────────────
+const $      = id => document.getElementById(id);
+const loadingOverlay  = $("loadingOverlay");
+const loadingText     = $("loadingText");
+const appShell        = $("appShell");
+const bookingView     = $("bookingView");
+const paymentView     = $("paymentView");
+const confirmedView   = $("confirmedView");
+const avatarEl        = $("avatarEl");
+const profileName     = $("profileName");
+const dateStrip       = $("dateStrip");
+const timeGrid        = $("timeGrid");
+const availabilityText= $("availabilityText");
+const selectedSummary = $("selectedSummary");
+const bookingChip     = $("bookingChip");
+const priceText       = $("priceText");
+const passText        = $("passText");
+const confirmButton   = $("confirmButton");
+const customerName    = $("customerName");
+const customerPhone   = $("customerPhone");
+const customerNote    = $("customerNote");
+const slipArea        = $("slipArea");
+const slipAreaText    = $("slipAreaText");
+const slipFileInput   = $("slipFileInput");
+const slipPreview     = $("slipPreview");
+const submitSlipBtn   = $("submitSlipBtn");
+
+[customerName, customerPhone].forEach(el => {
+  el.addEventListener("input", () => el.classList.remove("invalid"));
+});
+
+// ── LIFF INIT ────────────────────────────────────────────
+async function initLiff() {
+  loadingText.textContent = "Connecting to LINE...";
+  try {
+    await liff.init({ liffId: LIFF_ID });
+    if (!liff.isLoggedIn()) { liff.login(); return; }
+    state.lineProfile = await liff.getProfile();
+  } catch (e) {
+    console.warn("LIFF init failed (browser mode):", e);
+  }
+
+  profileName.textContent = state.lineProfile.displayName;
+  if (state.lineProfile.pictureUrl) {
+    avatarEl.innerHTML = `<img src="${state.lineProfile.pictureUrl}" alt="Profile" />`;
+  } else {
+    avatarEl.textContent = state.lineProfile.displayName.charAt(0).toUpperCase();
+  }
+
+  const nameInput = customerName;
+  if (!nameInput.value) nameInput.value = state.lineProfile.displayName === "Guest" ? "" : state.lineProfile.displayName;
+
+  loadingText.textContent = "Loading court availability...";
+  await loadBlockedSlots(getSelectedDateISO());
+
+  loadingOverlay.style.display = "none";
+  appShell.style.display = "block";
+
+  applyPassEligibility();
+  buildDates();
+  renderTimes();
+  renderSummary();
+}
+
+// ── PASS ELIGIBILITY ─────────────────────────────────────
+function applyPassEligibility() {
+  const ultraBtn   = document.querySelector("[data-booking='ultra']");
+  const offpeakBtn = document.querySelector("[data-booking='offpeak']");
+
+  ultraBtn.disabled   = !customerEligibility.hasUltraPass;
+  offpeakBtn.disabled = !customerEligibility.hasOffPeakPass;
+
+  if (ultraBtn.disabled) {
+    ultraBtn.addEventListener("click", () => showToast("This pass is not active for this customer.", true), { capture: true });
+  }
+  if (offpeakBtn.disabled) {
+    offpeakBtn.addEventListener("click", () => showToast("This pass is not active for this customer.", true), { capture: true });
+  }
+}
+
+// ── LOAD BLOCKED SLOTS FROM FIRESTORE ───────────────────
+async function loadBlockedSlots(dateStr) {
+  state.isLoadingSlots = true;
+  state.blockedSlots = new Set();
+
+  try {
+    const now = new Date();
+    const q = query(
+      collection(db, "booking_slots"),
+      where("date",       "==", dateStr),
+      where("resourceId", "==", RESOURCE_ID)
+    );
+    const snap = await getDocs(q);
+    snap.forEach(d => {
+      const data = d.data();
+      if (data.bookingStatus === "confirmed") {
+        state.blockedSlots.add(data.hour);
+      } else if (data.bookingStatus === "pending_payment") {
+        const exp = data.expiresAt?.toDate?.();
+        if (exp && exp > now) state.blockedSlots.add(data.hour);
       }
-      lineProfile = await liff.getProfile();
-    } catch (e) {
-      console.warn("LIFF init failed (running outside LINE?):", e);
-    }
-
-    // Populate profile UI
-    document.getElementById("profileName").textContent = lineProfile.displayName;
-    const avatarEl = document.getElementById("avatarEl");
-    if (lineProfile.pictureUrl) {
-      avatarEl.innerHTML = `<img src="${lineProfile.pictureUrl}" alt="Profile" />`;
-    } else {
-      avatarEl.textContent = lineProfile.displayName.charAt(0).toUpperCase();
-    }
-
-    // Auto-fill name if empty
-    const nameInput = document.getElementById("customerName");
-    if (!nameInput.value) nameInput.value = lineProfile.displayName;
-
-    // Show app
-    document.getElementById("loadingOverlay").style.display = "none";
-    document.getElementById("appShell").style.display = "block";
-
-    // Boot app
-    buildDates();
-    ensureSelectableTime();
-    renderTimes();
-    renderSummary();
-  }
-
-  // ── BUSINESS RULES ──
-  const BUSINESS = {
-    openHour: 6,
-    closeHour: 24,
-    duration: 1,            // fixed 1hr
-    pricePerHour: 350,
-    advanceDays: 30,
-    paymentMinutes: 15,
-    cancellationHours: 24,
-    offPeakStartHour: 10,
-    offPeakEndHour: 15,
-    offPeakWeeklyLimitHours: 5,
-    offPeakMonthlyLimitHours: 20,
-    offPeakMockUsedThisWeekHours: 2,
-    offPeakMockUsedThisMonthHours: 8,
-    ultraRemainingMinutes: 600,
-  };
-
-  const PASS_TIERS = {
-    ultra10: { label: "Ultra Pass 10 hrs", total: 3100, hours: 10, avg: 310, save: 40 },
-    ultra20: { label: "Ultra Pass 20 hrs", total: 5900, hours: 20, avg: 295, save: 55 },
-    offpeak:  { label: "Off-Peak Pass",     total: 3500, hours: 20, avg: 175, save: 175 },
-  };
-
-  const holidays = [];
-  const mockUnavailableSlots = {
-    0: ["09:00","13:00","18:00"],
-    1: ["10:00","16:00"],
-    2: ["07:00","19:00"],
-  };
-
-  const times = Array.from(
-    { length: BUSINESS.closeHour - BUSINESS.openHour },
-    (_, i) => `${String(BUSINESS.openHour + i).padStart(2,"0")}:00`
-  );
-
-  const state = { booking: "single", dateOffset: 0, time: "10:00", ultraTier: "ultra10" };
-
-  // ── DOM REFS ──
-  const dateStrip       = document.getElementById("dateStrip");
-  const timeGrid        = document.getElementById("timeGrid");
-  const selectedSummary = document.getElementById("selectedSummary");
-  const bookingChip     = document.getElementById("bookingChip");
-  const priceText       = document.getElementById("priceText");
-  const passText        = document.getElementById("passText");
-  const availabilityText= document.getElementById("availabilityText");
-  const toast           = document.getElementById("toast");
-  const confirmButton   = document.getElementById("confirmButton");
-  const confirmationCard= document.getElementById("confirmationCard");
-  const confirmationCode= document.getElementById("confirmationCode");
-  const confirmationDetails = document.getElementById("confirmationDetails");
-  const customerName    = document.getElementById("customerName");
-  const customerPhone   = document.getElementById("customerPhone");
-  const customerNote    = document.getElementById("customerNote");
-  const passPricingSection = document.getElementById("passPricingSection");
-  const passTable       = document.getElementById("passTable");
-
-  [customerName, customerPhone].forEach(el => {
-    el.addEventListener("input", () => el.classList.remove("invalid"));
-  });
-
-  // ── DATE STRIP ──
-  function buildDates() {
-    const fmt = new Intl.DateTimeFormat("en-US", { weekday: "short" });
-    const today = new Date();
-    dateStrip.innerHTML = "";
-    for (let offset = 0; offset < BUSINESS.advanceDays; offset++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + offset);
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = `date-button${offset === state.dateOffset ? " active" : ""}`;
-      btn.dataset.offset = String(offset);
-      btn.innerHTML = `<span>${offset === 0 ? "Today" : fmt.format(d)}</span><strong>${d.getDate()}</strong>`;
-      btn.addEventListener("click", () => {
-        state.dateOffset = offset;
-        setActive(".date-button", btn);
-        ensureSelectableTime();
-        renderTimes();
-        renderSummary();
-      });
-      dateStrip.append(btn);
-    }
-  }
-
-  // ── TIME GRID ──
-  function renderTimes() {
-    timeGrid.innerHTML = "";
-    times.forEach(time => {
-      const reason = getDisabledReason(time);
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = `time-button${time === state.time ? " active" : ""}`;
-      btn.textContent = time;
-      btn.disabled = Boolean(reason);
-      btn.title = reason || "Available";
-      btn.dataset.time = time;
-      btn.addEventListener("click", () => {
-        state.time = time;
-        setActive(".time-button", btn);
-        renderSummary();
-      });
-      timeGrid.append(btn);
     });
-    const available = times.filter(t => !getDisabledReason(t)).length;
-    availabilityText.textContent = `${available} slots available`;
+  } catch (e) {
+    console.error("Failed to load slots:", e);
+  } finally {
+    state.isLoadingSlots = false;
   }
+}
 
-  function getDisabledReason(time) {
-    const startHour = getHour(time);
-    const endHour = startHour + BUSINESS.duration;
-    if (isMockUnavailable(time)) return "Unavailable";
-    if (endHour > BUSINESS.closeHour) return "Exceeds closing time";
-    if (state.booking === "offpeak") {
-      const d = getSelectedDate();
-      if (!isWeekday(d)) return "Off-Peak: Monday–Friday only";
-      if (isHoliday(d)) return "Holiday excluded";
-      if (startHour < BUSINESS.offPeakStartHour || endHour > BUSINESS.offPeakEndHour)
-        return "Off-Peak valid 10:00–15:00 only";
-      if (BUSINESS.offPeakMockUsedThisWeekHours + BUSINESS.duration > BUSINESS.offPeakWeeklyLimitHours)
-        return "Weekly Off-Peak limit reached";
-      if (BUSINESS.offPeakMockUsedThisMonthHours + BUSINESS.duration > BUSINESS.offPeakMonthlyLimitHours)
-        return "Monthly Off-Peak limit reached";
-    }
-    return "";
-  }
+// ── DATES ────────────────────────────────────────────────
+function buildDates() {
+  const fmt   = new Intl.DateTimeFormat("en-US", { weekday: "short" });
+  const today = new Date();
+  dateStrip.innerHTML = "";
 
-  function isMockUnavailable(time) {
-    const booked = mockUnavailableSlots[state.dateOffset] || [];
-    const h = getHour(time);
-    for (let i = 0; i < BUSINESS.duration; i++) {
-      if (booked.includes(`${String(h+i).padStart(2,"0")}:00`)) return true;
-    }
-    return false;
-  }
-
-  function ensureSelectableTime() {
-    if (state.time && !getDisabledReason(state.time)) return;
-    state.time = times.find(t => !getDisabledReason(t)) || "";
-  }
-
-  // ── SUMMARY + PRICE ──
-  function renderSummary() {
-    const labels = { single: "Single Use", ultra: "Ultra Pass", offpeak: "Off-Peak Pass" };
-    bookingChip.textContent = labels[state.booking];
-
-    if (!state.time) {
-      selectedSummary.textContent = "No available slot";
-      priceText.textContent = "Unavailable";
-      passText.textContent = "Try a different date or booking type.";
-      confirmButton.disabled = true;
-      return;
-    }
-
-    const dateLabel = getSelectedDateLabel();
-    selectedSummary.textContent = `${dateLabel}, ${state.time} – ${formatEndTime(state.time)}`;
-    confirmButton.disabled = false;
-
-    if (state.booking === "single") {
-      priceText.textContent = `฿${BUSINESS.pricePerHour.toLocaleString("en-US")}`;
-      passText.textContent = `Payment due within ${BUSINESS.paymentMinutes} minutes. Cancel >24 hrs before for credit.`;
-      passPricingSection.style.display = "none";
-      return;
-    }
-
-    if (state.booking === "ultra") {
-      const tier = PASS_TIERS[state.ultraTier];
-      priceText.textContent = `฿0 (Ultra Pass)`;
-      passText.textContent = `Avg ฿${tier.avg}/hr · Save ฿${tier.save}/hr vs walk-in`;
-      renderPassTable("ultra");
-      passPricingSection.style.display = "block";
-      return;
-    }
-
-    // offpeak
-    const tier = PASS_TIERS.offpeak;
-    const wAfter = BUSINESS.offPeakMockUsedThisWeekHours + BUSINESS.duration;
-    const mAfter = BUSINESS.offPeakMockUsedThisMonthHours + BUSINESS.duration;
-    priceText.textContent = `฿0 (Off-Peak Pass)`;
-    passText.textContent = `Avg ฿${tier.avg}/hr · Save ฿${tier.save}/hr · Usage: ${wAfter}/${BUSINESS.offPeakWeeklyLimitHours} hrs this week, ${mAfter}/${BUSINESS.offPeakMonthlyLimitHours} hrs this month`;
-    renderPassTable("offpeak");
-    passPricingSection.style.display = "block";
-  }
-
-  function renderPassTable(type) {
-    const rows = type === "ultra"
-      ? [
-          { key: "single",  label: "Walk-in",           total:"฿350/hr",  avg:350, save:"-",  highlight:false },
-          { key: "ultra10", label: "Ultra Pass 10 hrs", total:"฿3,100",   avg:310, save:40,   highlight: state.ultraTier==="ultra10" },
-          { key: "ultra20", label: "Ultra Pass 20 hrs", total:"฿5,900",   avg:295, save:55,   highlight: state.ultraTier==="ultra20" },
-        ]
-      : [
-          { key: "single",  label: "Walk-in",           total:"฿350/hr",  avg:350, save:"-",  highlight:false },
-          { key: "offpeak", label: "Off-Peak Pass",     total:"฿3,500/mo",avg:175, save:175,  highlight:true },
-        ];
-
-    passTable.innerHTML = `
-      <thead><tr>
-        <th>Type</th><th>Total</th><th>Avg/hr</th><th>Save</th>
-      </tr></thead>
-      <tbody>
-        ${rows.map(r => `
-          <tr class="${r.highlight?"highlight":""}" ${r.key!=="single"&&type==="ultra"?`style="cursor:pointer" data-tier="${r.key}"`:""}> 
-            <td>${r.label}</td>
-            <td>${r.total}</td>
-            <td>฿${r.avg}</td>
-            <td>${r.save==="-"?"–":`<span class="save-badge">-฿${r.save}</span>`}</td>
-          </tr>`).join("")}
-      </tbody>`;
-
-    // Tier click to switch
-    passTable.querySelectorAll("[data-tier]").forEach(row => {
-      row.addEventListener("click", () => {
-        state.ultraTier = row.dataset.tier;
-        renderSummary();
-      });
-    });
-  }
-
-  // ── HELPERS ──
-  function getSelectedDate() {
-    const d = new Date(); d.setDate(d.getDate() + state.dateOffset); d.setHours(0,0,0,0); return d;
-  }
-  function getSelectedDateISO() {
-    const d = getSelectedDate();
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-  }
-  function getSelectedDateLabel() {
-    if (state.dateOffset === 0) return "Today";
-    if (state.dateOffset === 1) return "Tomorrow";
-    return new Intl.DateTimeFormat("en-US",{weekday:"short",month:"short",day:"numeric"}).format(getSelectedDate());
-  }
-  function getHour(time) { return Number(time.split(":")[0]); }
-  function formatEndTime(start) {
-    const end = getHour(start) + BUSINESS.duration;
-    return `${String(end >= 24 ? end-24 : end).padStart(2,"0")}:00${end>=24?" (+1)":""}`;
-  }
-  function isWeekday(d) { return d.getDay()>=1 && d.getDay()<=5; }
-  function isHoliday(d) { return holidays.includes(d.toISOString().slice(0,10)); }
-  function setActive(sel, active) {
-    document.querySelectorAll(sel).forEach(b => {
-      b.classList.toggle("active", b===active);
-      b.setAttribute("aria-checked", String(b===active));
-    });
-  }
-  function showToast(msg) {
-    toast.textContent = msg; toast.classList.add("show");
-    setTimeout(() => toast.classList.remove("show"), 2400);
-  }
-  function createBookingCode() {
-    return `UT-${new Date().getFullYear()}-${Math.floor(1000+Math.random()*9000)}`;
-  }
-
-  // ── BOOKING TYPE SWITCH ──
-  document.querySelectorAll("[data-booking]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      state.booking = btn.dataset.booking;
-      setActive("[data-booking]", btn);
-      ensureSelectableTime();
+  for (let i = 0; i < BUSINESS.advanceDays; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `date-button${i === state.dateOffset ? " active" : ""}`;
+    btn.innerHTML = `<span>${i === 0 ? "Today" : fmt.format(d)}</span><strong>${d.getDate()}</strong>`;
+    btn.addEventListener("click", async () => {
+      state.dateOffset = i;
+      state.time = null;
+      setActive(".date-button", btn);
+      timeGrid.innerHTML = `<p class="time-grid-loading">Loading slots...</p>`;
+      await loadBlockedSlots(getSelectedDateISO());
       renderTimes();
       renderSummary();
     });
+    dateStrip.append(btn);
+  }
+}
+
+// ── TIMES ────────────────────────────────────────────────
+const allTimes = Array.from(
+  { length: BUSINESS.closeHour - BUSINESS.openHour },
+  (_, i) => `${String(BUSINESS.openHour + i).padStart(2, "0")}:00`
+);
+
+function renderTimes() {
+  timeGrid.innerHTML = "";
+
+  allTimes.forEach(time => {
+    const reason = getDisabledReason(time);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `time-button${time === state.time ? " active" : ""}`;
+    btn.textContent = time;
+    btn.disabled = Boolean(reason);
+    btn.title = reason || "Available";
+    btn.addEventListener("click", () => {
+      if (btn.disabled) return;
+      state.time = time;
+      setActive(".time-button", btn);
+      renderSummary();
+    });
+    timeGrid.append(btn);
   });
 
-  // ── CONFIRM ──
-  confirmButton.addEventListener("click", async () => {
-    if (!state.time) return;
+  const available = allTimes.filter(t => !getDisabledReason(t)).length;
+  availabilityText.textContent = `${available} slots available`;
+}
 
-    const name = customerName.value.trim();
-    const phone = customerPhone.value.trim();
-    customerName.classList.toggle("invalid", !name);
-    customerPhone.classList.toggle("invalid", !phone);
-    if (!name) { customerName.focus(); showToast("Name is required"); return; }
-    if (!phone) { customerPhone.focus(); showToast("Phone is required"); return; }
+function getDisabledReason(time) {
+  const h   = getHour(time);
+  const end = h + BUSINESS.duration;
+  if (state.blockedSlots.has(time)) return "Already booked";
+  if (end > BUSINESS.closeHour) return "Exceeds closing time";
+  if (state.booking === "offpeak") {
+    const d = getSelectedDate();
+    if (d.getDay() < 1 || d.getDay() > 5) return "Off-Peak: Mon–Fri only";
+    if (h < BUSINESS.offPeakStartHour || end > BUSINESS.offPeakEndHour) return "Off-Peak: 10:00–15:00 only";
+  }
+  return "";
+}
 
-    const code = createBookingCode();
-    const isPass = state.booking !== "single";
-    const tierLabel = state.booking === "ultra"
-      ? PASS_TIERS[state.ultraTier].label
-      : state.booking === "offpeak" ? PASS_TIERS.offpeak.label : "Single Use";
+// ── SUMMARY ──────────────────────────────────────────────
+function renderSummary() {
+  const labels = { single: "Single Use", ultra: "Ultra Pass", offpeak: "Off-Peak Pass" };
+  bookingChip.textContent = labels[state.booking];
 
-    const payload = {
-      bookingCode: code,
-      bookingType: tierLabel,
-      lineUserId: lineProfile.userId,
-      lineDisplayName: lineProfile.displayName,
-      customerName: name,
-      customerPhone: phone,
-      customerNote: customerNote.value.trim(),
-      date: getSelectedDateISO(),
-      startTime: state.time,
-      endTime: formatEndTime(state.time),
-      durationHours: BUSINESS.duration,
-      price: isPass ? 0 : BUSINESS.pricePerHour,
-      paymentStatus: isPass ? "package" : "unpaid",
-      bookingStatus: isPass ? "confirmed" : "pending_payment",
-      createdAt: serverTimestamp(),
-    };
-
-    const orig = confirmButton.textContent;
+  if (!state.time) {
+    selectedSummary.textContent = "Pick a time above";
     confirmButton.disabled = true;
-    confirmButton.textContent = "Saving...";
+    priceText.textContent = "฿350";
+    passText.textContent = "Payment due within 15 minutes after booking.";
+    return;
+  }
 
-    try {
-      await addDoc(collection(db, "bookings"), payload);
-      confirmationCard.hidden = false;
-      confirmationCode.textContent = `Booking Code: ${code}`;
-      confirmationDetails.textContent =
-        `${name} (${phone}) booked Ultra Tennis Practice Room on ${selectedSummary.textContent}. Type: ${tierLabel}. Status: ${payload.bookingStatus}.`;
-      showToast(`✅ Saved: ${code}`);
-      confirmationCard.scrollIntoView({ behavior: "smooth" });
-    } catch (err) {
-      console.error(err);
-      showToast("❌ Could not save. Check Firestore rules.");
-    } finally {
-      confirmButton.disabled = false;
-      confirmButton.textContent = orig;
+  selectedSummary.textContent = `${getSelectedDateLabel()}, ${state.time} – ${formatEndTime(state.time)}`;
+  confirmButton.disabled = false;
+
+  if (state.booking === "single") {
+    priceText.textContent = `฿${BUSINESS.pricePerHour}`;
+    passText.textContent = "Payment due within 15 minutes. Cancel >24 hrs for credit.";
+  } else if (state.booking === "ultra") {
+    priceText.textContent = "฿0 (Ultra Pass)";
+    passText.textContent = "1 hour will be deducted from your Ultra Pass balance.";
+  } else {
+    priceText.textContent = "฿0 (Off-Peak Pass)";
+    passText.textContent = "1 hour will be deducted from your Off-Peak Pass quota.";
+  }
+}
+
+// ── CREATE BOOKING (TRANSACTION) ─────────────────────────
+async function createBooking() {
+  const name  = customerName.value.trim();
+  const phone = customerPhone.value.trim();
+  customerName.classList.toggle("invalid", !name);
+  customerPhone.classList.toggle("invalid", !phone);
+  if (!name)  { customerName.focus();  showToast("Name is required", true); return; }
+  if (!phone) { customerPhone.focus(); showToast("Phone is required", true); return; }
+  if (!state.time) { showToast("Please select a time", true); return; }
+
+  const code      = `UT-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const dateISO   = getSelectedDateISO();
+  const slotDocId = `${RESOURCE_ID}_${dateISO}_${state.time.replace(":", "")}`;
+  const expiresAt = new Date(Date.now() + BUSINESS.paymentMinutes * 60 * 1000);
+  const expiresTS = Timestamp.fromDate(expiresAt);
+
+  const isPass = state.booking !== "single";
+  const bookingPayload = {
+    bookingCode:   code,
+    resourceId:    RESOURCE_ID,
+    bookingType:   state.booking === "single" ? "Single Use" : state.booking === "ultra" ? "Ultra Pass" : "Off-Peak Pass",
+    lineUserId:    state.lineProfile.userId,
+    lineDisplayName: state.lineProfile.displayName,
+    customerName:  name,
+    customerPhone: phone,
+    customerNote:  customerNote.value.trim(),
+    date:          dateISO,
+    startTime:     state.time,
+    endTime:       formatEndTime(state.time),
+    durationHours: BUSINESS.duration,
+    price:         isPass ? 0 : BUSINESS.pricePerHour,
+    bookingStatus: isPass ? "confirmed" : "pending_payment",
+    paymentStatus: isPass ? "package"   : "unpaid",
+    paymentExpiresAt: isPass ? null : expiresTS,
+    slipUrl:       null,
+    slipUploadedAt: null,
+    cancelReason:  null,
+  };
+
+  confirmButton.disabled = true;
+  confirmButton.textContent = "Saving...";
+
+  try {
+    const bookingRef = doc(collection(db, "bookings"));
+    const slotRef    = doc(db, "booking_slots", slotDocId);
+
+    await runTransaction(db, async t => {
+      // READ first
+      const slotSnap = await t.get(slotRef);
+      if (slotSnap.exists()) {
+        const sd = slotSnap.data();
+        if (sd.bookingStatus === "confirmed") throw new Error("Slot just got booked. Please pick another time.");
+        if (sd.bookingStatus === "pending_payment") {
+          const exp = sd.expiresAt?.toDate?.();
+          if (!exp || exp > new Date()) throw new Error("Slot is temporarily held. Try again in a moment.");
+        }
+      }
+
+      // WRITE
+      t.set(bookingRef, { ...bookingPayload, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      t.set(slotRef, {
+        bookingCode:   code,
+        resourceId:    RESOURCE_ID,
+        date:          dateISO,
+        hour:          state.time,
+        bookingStatus: bookingPayload.bookingStatus,
+        paymentStatus: bookingPayload.paymentStatus,
+        expiresAt:     isPass ? null : expiresTS,
+      });
+    });
+
+    state.currentBookingCode  = code;
+    state.currentBookingDocId = bookingRef.id;
+    state.currentBookingData  = { ...bookingPayload, expiresAt };
+
+    if (isPass) {
+      showConfirmedView(code, bookingPayload);
+    } else {
+      showPaymentView(code, bookingPayload, expiresAt);
     }
-  });
 
-  // ── BOOT ──
-  initLiff();
+  } catch (err) {
+    console.error(err);
+    showToast(err.message || "Could not save booking. Please try again.", true);
+  } finally {
+    confirmButton.disabled = false;
+    confirmButton.textContent = "Confirm Booking";
+  }
+}
+
+// ── PAYMENT VIEW ─────────────────────────────────────────
+function showPaymentView(code, data, expiresAt) {
+  bookingView.style.display  = "none";
+  paymentView.style.display  = "block";
+  confirmedView.style.display= "none";
+
+  $("payBookingCode").textContent = code;
+  $("payAmount").textContent      = `฿${data.price}`;
+  $("payDate").textContent        = data.date;
+  $("payTime").textContent        = `${data.startTime} – ${data.endTime}`;
+
+  const dl = expiresAt.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
+  $("payDeadline").textContent = dl;
+}
+
+// ── CONFIRMED VIEW ───────────────────────────────────────
+function showConfirmedView(code, data) {
+  bookingView.style.display  = "none";
+  paymentView.style.display  = "none";
+  confirmedView.style.display= "block";
+
+  $("confirmedCode").textContent   = code;
+  $("confirmedDetails").textContent = `${data.customerName} · ${data.date} · ${data.startTime}–${data.endTime} · ${data.bookingType}`;
+}
+
+// ── SLIP UPLOAD ──────────────────────────────────────────
+slipFileInput.addEventListener("change", () => {
+  const file = slipFileInput.files[0];
+  if (!file) return;
+  slipAreaText.innerHTML = `📎 <strong>${file.name}</strong>`;
+  slipArea.classList.add("has-file");
+  const url = URL.createObjectURL(file);
+  slipPreview.src = url;
+  slipPreview.style.display = "block";
+  submitSlipBtn.disabled = false;
+});
+
+submitSlipBtn.addEventListener("click", async () => {
+  const file = slipFileInput.files[0];
+  if (!file || !state.currentBookingCode || !state.currentBookingDocId) return;
+
+  submitSlipBtn.disabled = true;
+  submitSlipBtn.textContent = "Uploading...";
+
+  try {
+    const ts       = Date.now();
+    const path     = `payment_slips/${state.currentBookingCode}/${ts}_${file.name}`;
+    const sRef     = storageRef(storage, path);
+    await uploadBytes(sRef, file);
+    const downloadUrl = await getDownloadURL(sRef);
+
+    // Update booking doc
+    const bookingDocRef = doc(db, "bookings", state.currentBookingDocId);
+    await updateDoc(bookingDocRef, {
+      bookingStatus:   "confirmed",
+      paymentStatus:   "pending_review",
+      slipUrl:         downloadUrl,
+      slipUploadedAt:  serverTimestamp(),
+      updatedAt:       serverTimestamp(),
+    });
+
+    // Update slot doc
+    const slotDocId = `${RESOURCE_ID}_${state.currentBookingData.date}_${state.currentBookingData.startTime.replace(":", "")}`;
+    await updateDoc(doc(db, "booking_slots", slotDocId), {
+      bookingStatus: "confirmed",
+      paymentStatus: "pending_review",
+    });
+
+    showConfirmedView(state.currentBookingCode, state.currentBookingData);
+    showToast("Slip received. Booking confirmed — pending admin review.");
+
+  } catch (err) {
+    console.error(err);
+    showToast("Upload failed. Please try again.", true);
+    submitSlipBtn.disabled = false;
+    submitSlipBtn.textContent = "Submit Payment Slip";
+  }
+});
+
+// ── BOOKING TYPE SWITCH ───────────────────────────────────
+document.querySelectorAll("[data-booking]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    state.booking = btn.dataset.booking;
+    setActive("[data-booking]", btn);
+    renderTimes();
+    renderSummary();
+  });
+});
+
+confirmButton.addEventListener("click", createBooking);
+
+// ── HELPERS ──────────────────────────────────────────────
+function getSelectedDate() {
+  const d = new Date(); d.setDate(d.getDate() + state.dateOffset); d.setHours(0,0,0,0); return d;
+}
+function getSelectedDateISO() {
+  const d = getSelectedDate();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function getSelectedDateLabel() {
+  if (state.dateOffset === 0) return "Today";
+  if (state.dateOffset === 1) return "Tomorrow";
+  return new Intl.DateTimeFormat("en-US", { weekday:"short", month:"short", day:"numeric" }).format(getSelectedDate());
+}
+function getHour(t) { return Number(t.split(":")[0]); }
+function formatEndTime(t) {
+  const end = getHour(t) + BUSINESS.duration;
+  return `${String(end >= 24 ? end-24 : end).padStart(2,"0")}:00${end >= 24 ? " (+1)" : ""}`;
+}
+function setActive(sel, active) {
+  document.querySelectorAll(sel).forEach(b => {
+    b.classList.toggle("active", b === active);
+    if (b.getAttribute("role") === "radio") b.setAttribute("aria-checked", String(b === active));
+  });
+}
+function showToast(msg, isError = false) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = `toast show${isError ? " error" : ""}`;
+  setTimeout(() => t.classList.remove("show"), 3000);
+}
+
+// ── BOOT ─────────────────────────────────────────────────
+initLiff();
 </script>
 </body>
 </html>
