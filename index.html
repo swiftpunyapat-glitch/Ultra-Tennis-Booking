@@ -429,6 +429,7 @@ const state = {
   dateOffset: 0,
   time: null,
   blockedSlots: new Set(),
+  openSlots: new Set(),    // slots opened by admin in available_slots
   isLoadingSlots: false,
   currentBookingCode: null,
   currentBookingDocId: null,
@@ -519,17 +520,32 @@ function applyPassEligibility() {
 // ── LOAD BLOCKED SLOTS FROM FIRESTORE ───────────────────
 async function loadBlockedSlots(dateStr) {
   state.isLoadingSlots = true;
-  state.blockedSlots = new Set();
+  state.blockedSlots   = new Set();
+  state.openSlots      = new Set();
 
   try {
     const now = new Date();
-    const q = query(
+
+    // Load available_slots (admin-opened slots)
+    const availQ = query(
+      collection(db, "available_slots"),
+      where("date",       "==", dateStr),
+      where("resourceId", "==", RESOURCE_ID)
+    );
+    const availSnap = await getDocs(availQ);
+    availSnap.forEach(d => {
+      const data = d.data();
+      if (data.status === "open") state.openSlots.add(data.startTime);
+    });
+
+    // Load booking_slots (active bookings)
+    const bookQ = query(
       collection(db, "booking_slots"),
       where("date",       "==", dateStr),
       where("resourceId", "==", RESOURCE_ID)
     );
-    const snap = await getDocs(q);
-    snap.forEach(d => {
+    const bookSnap = await getDocs(bookQ);
+    bookSnap.forEach(d => {
       const data = d.data();
       if (data.bookingStatus === "confirmed") {
         state.blockedSlots.add(data.hour);
@@ -604,8 +620,21 @@ function renderTimes() {
 function getDisabledReason(time) {
   const h   = getHour(time);
   const end = h + BUSINESS.duration;
+
+  // Past time check for today
+  if (state.dateOffset === 0) {
+    const nowHour = new Date().getHours();
+    if (h <= nowHour) return "Time has passed";
+  }
+
+  // Must be opened by admin
+  if (!state.openSlots.has(time)) return "Not opened for booking yet";
+
+  // Actively booked
   if (state.blockedSlots.has(time)) return "Already booked";
+
   if (end > BUSINESS.closeHour) return "Exceeds closing time";
+
   if (state.booking === "offpeak") {
     const d = getSelectedDate();
     if (d.getDay() < 1 || d.getDay() > 5) return "Off-Peak: Mon–Fri only";
