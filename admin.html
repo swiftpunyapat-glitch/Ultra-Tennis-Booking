@@ -220,7 +220,7 @@
   <div class="tabbar">
     <button class="tab on" data-tab="bookings">📋 Bookings</button>
     <button class="tab" data-tab="slots">🗓 Slot Manager</button>
-    <button class="tab" data-tab="passes">🎫 Pass Purchases</button>
+    <button class="tab" data-tab="passes">🎫 Add Pass</button>
   </div>
 
   <!-- BOOKINGS TAB -->
@@ -284,24 +284,63 @@
     </div>
   </div>
 
-  <!-- PASS PURCHASES TAB -->
+  <!-- ADD PASS TAB -->
   <div id="tabPasses" style="display:none">
-    <div class="stats">
-      <div class="stat"><div class="sn" id="ppTotal">—</div><div class="sl">Total</div></div>
-      <div class="stat"><div class="sn cy" id="ppPending">—</div><div class="sl">Pending</div></div>
-      <div class="stat"><div class="sn ct" id="ppReview">—</div><div class="sl">Review</div></div>
-      <div class="stat"><div class="sn cg" id="ppActive">—</div><div class="sl">Active</div></div>
-      <div class="stat"><div class="sn cr" id="ppRejected">—</div><div class="sl">Rejected</div></div>
+    <div class="main">
+
+      <!-- Search Customer -->
+      <div class="smcard">
+        <h2>Add Pass for Customer</h2>
+        <div class="smrow" style="margin-bottom:12px">
+          <div class="smf"><label>Search by Phone Number</label><input type="tel" id="searchPhone" placeholder="Enter customer phone number"/></div>
+          <button class="smbtn smg" id="searchCustomerBtn">Search</button>
+        </div>
+
+        <!-- Search Result -->
+        <div id="searchResult" style="display:none;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:12px;margin-bottom:12px">
+          <div style="font-size:.7rem;color:var(--m);text-transform:uppercase;font-weight:800;margin-bottom:8px">Customer Found</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.82rem">
+            <div><div class="fl">Name</div><div class="fv" id="foundName">—</div></div>
+            <div><div class="fl">Phone</div><div class="fv" id="foundPhone">—</div></div>
+            <div><div class="fl">LINE User ID</div><div class="fv" id="foundLineId" style="font-size:.72rem;word-break:break-all">—</div></div>
+            <div><div class="fl">LINE Name</div><div class="fv" id="foundLineName">—</div></div>
+          </div>
+        </div>
+
+        <!-- Not Found -->
+        <div id="notFound" style="display:none;background:#3d101020;border:1px solid var(--dan);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:.8rem;color:var(--dan)">
+          ⚠️ No booking found for this phone. You can still add a pass — LINE User ID will be linked when customer books for the first time.
+        </div>
+
+        <!-- Add Pass Form -->
+        <div id="addPassForm">
+          <div class="smdiv"></div>
+          <div class="smrow" style="margin-bottom:10px">
+            <div class="smf">
+              <label>Package</label>
+              <select id="packageSelect" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%">
+                <option value="">Select package...</option>
+                <option value="ultra_10">⚡ Ultra Pass 10 Hours (600 min · 90 days)</option>
+                <option value="ultra_20">⚡ Ultra Pass 20 Hours (1,200 min · 180 days)</option>
+                <option value="offpeak">🌙 Off-Peak Pass (Mon–Fri 09:00–15:00 · 30 days)</option>
+              </select>
+            </div>
+          </div>
+          <div class="smrow" style="margin-bottom:12px">
+            <div class="smf"><label>Customer Name (if not found)</label><input type="text" id="manualName" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%" placeholder="Auto-filled from search"/></div>
+            <div class="smf"><label>Valid From</label><input type="date" id="validFromDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%"/></div>
+          </div>
+          <button class="smbtn smg" id="addPassBtn" style="width:100%;padding:12px;font-size:.88rem">✓ Add Pass for Customer</button>
+        </div>
+      </div>
+
+      <!-- Active Passes List -->
+      <div class="smcard">
+        <h2>Active Passes <button class="rfbtn" id="refreshPassesBtn" style="margin-left:8px;font-size:.68rem">↻ Refresh</button></h2>
+        <div id="activePassesList"><div class="smempty">Click Refresh to load active passes.</div></div>
+      </div>
+
     </div>
-    <div class="filters">
-      <button class="fbtn on" data-ppfilter="all">All</button>
-      <button class="fbtn" data-ppfilter="pending_payment">Pending Pay</button>
-      <button class="fbtn" data-ppfilter="pending_review">Under Review</button>
-      <button class="fbtn" data-ppfilter="active">Active</button>
-      <button class="fbtn" data-ppfilter="rejected">Rejected</button>
-      <button class="rfbtn" id="refreshPassBtn" style="margin-left:auto">↻ Refresh</button>
-    </div>
-    <div class="main"><div id="passList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
   </div>
 </div>
 
@@ -359,7 +398,7 @@ $("loginBtn").addEventListener("click",()=>{
   const n=$("adminSel").value,p=$("pinIn").value,err=$("loginErr");
   if(!n){err.textContent="Please select your name.";err.style.display="block";return;}
   if(p!==ADMIN_PIN){err.style.display="block";$("pinIn").value="";$("pinIn").focus();return;}
-  err.style.display="none";sessionStorage.setItem("adminName",n);showApp(n);loadBookings();loadPasses();
+  err.style.display="none";sessionStorage.setItem("adminName",n);showApp(n);loadBookings();
 });
 $("logoutBtn").addEventListener("click",()=>{
   sessionStorage.removeItem("adminName");$("mainApp").style.display="none";$("loginScreen").style.display="flex";
@@ -630,104 +669,126 @@ $("holSave").addEventListener("click",async()=>{
   }catch(e){console.error(e);showToast("Failed to save holiday.",true);}
 });
 
-// ── PASS PURCHASES ───────────────────────────────────────────────
-let allPasses=[],ppFilter="all";
+// ── ADD PASS ─────────────────────────────────────────────────────
+const PACKAGES = {
+  ultra_10:{ packageType:"ultra_10", packageName:"Ultra Pass 10 Hours",  totalMinutes:600,  validityDays:90,  weeklyLimitHours:null, monthlyLimitHours:null },
+  ultra_20:{ packageType:"ultra_20", packageName:"Ultra Pass 20 Hours",  totalMinutes:1200, validityDays:180, weeklyLimitHours:null, monthlyLimitHours:null },
+  offpeak: { packageType:"offpeak",  packageName:"Off-Peak Pass",         totalMinutes:null, validityDays:30,  weeklyLimitHours:5,    monthlyLimitHours:20   },
+};
 
-async function loadPasses(){
-  $("passList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading...</p></div>`;
+let foundCustomer = null;
+
+$("searchCustomerBtn").addEventListener("click", async()=>{
+  const phone=$("searchPhone").value.trim();
+  if(!phone){ showToast("Enter a phone number to search.",true); return; }
+  const btn=$("searchCustomerBtn"); btn.disabled=true; btn.textContent="Searching...";
+  $("searchResult").style.display="none"; $("notFound").style.display="none"; foundCustomer=null;
+
   try{
-    const snap=await getDocs(query(collection(db,"pass_purchases"),orderBy("createdAt","desc")));
-    allPasses=snap.docs.map(d=>({id:d.id,...d.data()}));
-    updatePassStats();renderPasses();
-  }catch(e){console.error(e);$("passList").innerHTML=`<div class="estate">❌ Failed to load.</div>`;}
-}
-
-function updatePassStats(){
-  $("ppTotal").textContent=allPasses.length;
-  $("ppPending").textContent=allPasses.filter(p=>p.status==="pending_payment").length;
-  $("ppReview").textContent=allPasses.filter(p=>p.status==="pending_review").length;
-  $("ppActive").textContent=allPasses.filter(p=>p.status==="active").length;
-  $("ppRejected").textContent=allPasses.filter(p=>p.status==="rejected").length;
-}
-
-function renderPasses(){
-  const list=ppFilter==="all"?allPasses:allPasses.filter(p=>p.status===ppFilter||p.paymentStatus===ppFilter);
-  if(!list.length){$("passList").innerHTML=`<div class="estate">📭 No pass purchases found.</div>`;return;}
-  $("passList").innerHTML=`<div class="ppgrid main">${list.map(ppCardHTML).join("")}</div>`;
-  list.forEach(p=>{
-    const ab=document.querySelector(`[data-activate="${p.id}"]`);
-    const rb=document.querySelector(`[data-rejectpp="${p.id}"]`);
-    if(ab) ab.addEventListener("click",()=>activatePass(p));
-    if(rb) rb.addEventListener("click",()=>rejectPass(p));
-  });
-}
-
-function ppCardHTML(p){
-  const bc=p.packageType?.includes("ultra")?"pp-ultra":"pp-off";
-  const canActivate=p.status==="pending_review";
-  const canReject=p.status!=="rejected"&&p.status!=="active"&&p.status!=="cancelled";
-  const slip=p.slipUrl
-    ?`<div class="slip-sec"><div class="slbl">Payment Slip</div><a href="${p.slipUrl}" target="_blank"><img class="simg" src="${p.slipUrl}" alt="Slip"/></a></div>`
-    :`<div class="slip-sec"><div class="slbl">Payment Slip</div><p class="noslip">No slip yet</p></div>`;
-  const created=p.createdAt?.toDate?p.createdAt.toDate().toLocaleString("en-US",{dateStyle:"short",timeStyle:"short"}):"—";
-  const acts=p.status==="active"
-    ?`<button class="bdone">✓ Active</button>`
-    :p.status==="rejected"
-    ?`<button class="bdone">✗ Rejected</button>`
-    :`${canActivate?`<button class="bp" data-activate="${p.id}">✓ Activate Pass</button>`:""}
-      ${canReject?`<button class="bc" data-rejectpp="${p.id}">✗ Reject</button>`:""}`;
-
-  return `<div class="ppcard">
-    <div class="ppcard-hdr"><span class="ppcode">${p.purchaseCode||"—"}</span><span class="ppbadge ${bc}">${p.packageName||"—"}</span></div>
-    <div class="ppcard-body">
-      <div class="bfields">
-        <div><div class="fl">Customer</div><div class="fv">${p.customerName||"—"}</div></div>
-        <div><div class="fl">Phone</div><div class="fv">${p.customerPhone||"—"}</div></div>
-        <div><div class="fl">Price</div><div class="fv">฿${p.price?.toLocaleString("en-US")||"—"}</div></div>
-        <div><div class="fl">Status</div><div class="fv"><span class="sp s-${p.status}">${p.status||"—"}</span></div></div>
-        <div><div class="fl">Payment</div><div class="fv"><span class="sp s-${p.paymentStatus}">${p.paymentStatus||"—"}</span></div></div>
-        <div><div class="fl">Created</div><div class="fv dim">${created}</div></div>
-      </div>
-      ${slip}
-      <div class="acts">${acts}</div>
-    </div></div>`;
-}
-
-async function activatePass(p){
-  const btn=document.querySelector(`[data-activate="${p.id}"]`);if(btn){btn.disabled=true;btn.textContent="Activating...";}
-  try{
-    const validFrom=new Date();
-    const validUntil=new Date(validFrom.getTime()+(p.validityDays||30)*24*60*60*1000);
-    const batch=writeBatch(db);
-    batch.update(doc(db,"pass_purchases",p.id),{status:"active",paymentStatus:"paid",adminReviewedAt:serverTimestamp(),updatedAt:serverTimestamp()});
-    const pkgRef=doc(collection(db,"customer_packages"));
-    batch.set(pkgRef,{
-      lineUserId:p.lineUserId,lineDisplayName:p.lineDisplayName||"",customerName:p.customerName,customerPhone:p.customerPhone,
-      packageType:p.packageType,packageName:p.packageName,
-      totalMinutes:p.totalMinutes||null,remainingMinutes:p.totalMinutes||null,
-      weeklyLimitHours:p.weeklyLimitHours||null,monthlyLimitHours:p.monthlyLimitHours||null,
-      validFrom:Timestamp.fromDate(validFrom),validUntil:Timestamp.fromDate(validUntil),
-      status:"active",createdFromPurchaseCode:p.purchaseCode,createdAt:serverTimestamp(),
-    });
-    await batch.commit();
-    showToast(`✓ ${p.purchaseCode} activated! customer_packages created.`);
-    await loadPasses();
-  }catch(e){console.error(e);showToast("Activation failed.",true);if(btn){btn.disabled=false;btn.textContent="✓ Activate Pass";}}
-}
-
-async function rejectPass(p){
-  if(!confirm(`Reject pass purchase ${p.purchaseCode}?\n${p.customerName} · ${p.packageName}`))return;
-  const btn=document.querySelector(`[data-rejectpp="${p.id}"]`);if(btn){btn.disabled=true;btn.textContent="Rejecting...";}
-  try{
-    await updateDoc(doc(db,"pass_purchases",p.id),{status:"rejected",paymentStatus:"rejected",rejectReason:"Payment slip rejected or payment not received",updatedAt:serverTimestamp()});
-    showToast(`✗ ${p.purchaseCode} rejected`);await loadPasses();
-  }catch(e){console.error(e);showToast("Failed.",true);if(btn){btn.disabled=false;btn.textContent="✗ Reject";}}
-}
-
-document.querySelectorAll(".fbtn[data-ppfilter]").forEach(btn=>{
-  btn.addEventListener("click",()=>{ppFilter=btn.dataset.ppfilter;document.querySelectorAll(".fbtn[data-ppfilter]").forEach(b=>b.classList.remove("on"));btn.classList.add("on");renderPasses();});
+    const snap=await getDocs(query(collection(db,"bookings"),where("customerPhone","==",phone)));
+    if(!snap.empty){
+      const docs=snap.docs.map(d=>d.data()).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+      foundCustomer=docs[0];
+      $("foundName").textContent=foundCustomer.customerName||"—";
+      $("foundPhone").textContent=foundCustomer.customerPhone||"—";
+      $("foundLineId").textContent=foundCustomer.lineUserId||"Not linked yet";
+      $("foundLineName").textContent=foundCustomer.lineDisplayName||"—";
+      $("manualName").value=foundCustomer.customerName||"";
+      $("searchResult").style.display="block";
+    } else {
+      $("notFound").style.display="block";
+      foundCustomer={ lineUserId:"", lineDisplayName:"", customerName:"", customerPhone:phone };
+      $("manualName").value="";
+    }
+  }catch(e){ console.error(e); showToast("Search failed.",true); }
+  finally{ btn.disabled=false; btn.textContent="Search"; }
 });
-$("refreshPassBtn").addEventListener("click",loadPasses);
+
+$("addPassBtn").addEventListener("click", async()=>{
+  const pkgType=$("packageSelect").value;
+  const name=$("manualName").value.trim();
+  const validFrom=$("validFromDate").value;
+  if(!pkgType){ showToast("Please select a package.",true); return; }
+  if(!name){ showToast("Customer name is required.",true); return; }
+  if(!validFrom){ showToast("Please select a valid from date.",true); return; }
+  if(!foundCustomer){ showToast("Please search for a customer first.",true); return; }
+
+  const btn=$("addPassBtn"); btn.disabled=true; btn.textContent="Adding...";
+  try{
+    const pkg=PACKAGES[pkgType];
+    const admin=sessionStorage.getItem("adminName")||"admin";
+    const vFrom=new Date(validFrom+"T00:00:00");
+    const vUntil=new Date(vFrom.getTime()+pkg.validityDays*24*60*60*1000);
+
+    await addDoc(collection(db,"customer_packages"),{
+      lineUserId:       foundCustomer.lineUserId||"",
+      lineDisplayName:  foundCustomer.lineDisplayName||"",
+      customerName:     name,
+      customerPhone:    foundCustomer.customerPhone||$("searchPhone").value.trim(),
+      packageType:      pkg.packageType,
+      packageName:      pkg.packageName,
+      totalMinutes:     pkg.totalMinutes,
+      remainingMinutes: pkg.totalMinutes,
+      weeklyLimitHours: pkg.weeklyLimitHours||null,
+      monthlyLimitHours:pkg.monthlyLimitHours||null,
+      validFrom:        Timestamp.fromDate(vFrom),
+      validUntil:       Timestamp.fromDate(vUntil),
+      status:           "active",
+      addedByAdmin:     admin,
+      createdFromPurchaseCode: null,
+      createdAt:        serverTimestamp(),
+    });
+
+    showToast(`✓ ${pkg.packageName} added for ${name}`);
+    // Reset form
+    $("searchPhone").value=""; $("packageSelect").value=""; $("manualName").value="";
+    $("searchResult").style.display="none"; $("notFound").style.display="none";
+    foundCustomer=null;
+    loadActivePasses();
+  }catch(e){ console.error(e); showToast("Failed to add pass.",true); }
+  finally{ btn.disabled=false; btn.textContent="✓ Add Pass for Customer"; }
+});
+
+async function loadActivePasses(){
+  $("activePassesList").innerHTML=`<div class="smload"><div class="spinner"></div><p>Loading...</p></div>`;
+  try{
+    const snap=await getDocs(query(collection(db,"customer_packages"),where("status","==","active")));
+    const passes=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+
+    if(!passes.length){ $("activePassesList").innerHTML=`<div class="smempty">No active passes.</div>`; return; }
+
+    $("activePassesList").innerHTML=passes.map(p=>{
+      const validUntil=p.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—";
+      const isUltra=p.packageType?.includes("ultra");
+      return `<div class="srow" style="grid-template-columns:1fr 1fr 1fr auto;padding:10px 12px;margin-bottom:5px">
+        <div><div class="fl">Customer</div><div class="fv">${p.customerName||"—"} · ${p.customerPhone||"—"}</div></div>
+        <div><div class="fl">Package</div><div class="fv">${p.packageName||"—"}</div></div>
+        <div><div class="fl">${isUltra?"Remaining":"Valid Until"}</div><div class="fv">${isUltra?`${p.remainingMinutes||0} min`:validUntil}</div></div>
+        <button class="stoggle st-close" data-deactivate="${p.id}" style="padding:5px 10px;font-size:.7rem">Deactivate</button>
+      </div>`;
+    }).join("");
+
+    $("activePassesList").querySelectorAll("[data-deactivate]").forEach(btn=>{
+      btn.addEventListener("click",async()=>{
+        if(!confirm("Deactivate this pass?")) return;
+        btn.disabled=true;
+        try{
+          await updateDoc(doc(db,"customer_packages",btn.dataset.deactivate),{status:"inactive",updatedAt:serverTimestamp()});
+          showToast("Pass deactivated.");loadActivePasses();
+        }catch(e){showToast("Failed.",true);btn.disabled=false;}
+      });
+    });
+  }catch(e){ console.error(e); $("activePassesList").innerHTML=`<div class="smempty">❌ Failed to load.</div>`; }
+}
+
+$("refreshPassesBtn").addEventListener("click",loadActivePasses);
+
+// Set valid from to today by default when tab opens
+document.querySelector("[data-tab='passes']").addEventListener("click",()=>{
+  if(!$("validFromDate").value) $("validFromDate").value=new Date().toISOString().slice(0,10);
+  loadActivePasses();
+});
 
 // ── RESCHEDULE ───────────────────────────────────────────────────
 function openResch(b){
@@ -819,7 +880,7 @@ function showToast(msg,isErr=false){
 // ── BOOT ─────────────────────────────────────────────────────────
 const todayISO=new Date().toISOString().slice(0,10);
 ["weekDate","dayDate","viewDate"].forEach(id=>{const el=$(id);if(el)el.value=todayISO;});
-if(!checkSession()){/* show login */}else{loadBookings();loadPasses();}
+if(!checkSession()){/* show login */}else{loadBookings();}
 </script>
 </body>
 </html>

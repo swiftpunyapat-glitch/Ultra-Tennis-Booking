@@ -211,26 +211,23 @@
 
   <!-- VIEW: HOME -->
   <div id="viewHome">
-    <div class="hgrid">
-      <button class="hcard" id="btnSingle">
-        <div class="hcard-icon">🎾</div>
-        <div class="hcard-label">Book Single Use</div>
-        <div class="hcard-sub">฿350 / hour</div>
+    <div style="padding:20px 16px 8px">
+      <p style="font-size:.82rem;color:var(--muted);text-align:center">Open daily 06:00–00:00 · Floor G, Omni Business Mall</p>
+    </div>
+    <div class="hgrid" style="grid-template-columns:1fr">
+      <button class="hcard" id="btnSingle" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
+        <div class="hcard-icon" style="font-size:2rem">🎾</div>
+        <div>
+          <div class="hcard-label" style="font-size:1rem">Book Single Use</div>
+          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px">฿350 / hour · Pay by QR slip</div>
+        </div>
       </button>
-      <button class="hcard" id="btnUltra">
-        <div class="hcard-icon">⚡</div>
-        <div class="hcard-label">Buy Ultra Pass</div>
-        <div class="hcard-sub">From ฿3,100</div>
-      </button>
-      <button class="hcard" id="btnOffpeak">
-        <div class="hcard-icon">🌙</div>
-        <div class="hcard-label">Buy Off-Peak Pass</div>
-        <div class="hcard-sub">฿3,500 / month</div>
-      </button>
-      <button class="hcard" id="btnMyBookings">
-        <div class="hcard-icon">📋</div>
-        <div class="hcard-label">My Booking</div>
-        <div class="hcard-sub">& My Pass</div>
+      <button class="hcard" id="btnMyBookings" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
+        <div class="hcard-icon" style="font-size:2rem">📋</div>
+        <div>
+          <div class="hcard-label" style="font-size:1rem">My Booking & My Pass</div>
+          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px">View bookings · Check pass balance</div>
+        </div>
       </button>
     </div>
   </div>
@@ -325,32 +322,6 @@
         </div>
         <input type="file" id="slipIn" accept="image/*" style="display:none"/>
         <button class="btn-slip" id="submitSlipBtn" disabled>Submit Payment Slip</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- VIEW: BUY PASS -->
-  <div id="viewBuyPass" style="display:none">
-    <div class="view">
-      <button class="back" id="buyPassBack">← Back</button>
-      <div class="ptitle" id="buyPassTitle">Buy Pass</div>
-      <div class="pkggrid" id="pkgGrid"></div>
-      <div class="card">
-        <div class="slabel">Your Info</div>
-        <div class="fgrid">
-          <label>Name<input type="text" id="passName" autocomplete="name" placeholder="Full name"/></label>
-          <label>Phone<input type="tel" id="passPhone" autocomplete="tel" placeholder="Phone number"/></label>
-        </div>
-      </div>
-      <div class="card">
-        <div class="crow">
-          <div>
-            <div class="eyebrow">Total</div>
-            <h2 id="passTotal">฿—</h2>
-            <p id="passTotalNote" style="font-size:.72rem;color:var(--muted)">Select a package above</p>
-          </div>
-          <button class="btn-go" id="purchaseBtn" disabled>Purchase Pass</button>
-        </div>
       </div>
     </div>
   </div>
@@ -451,7 +422,7 @@ const state = {
 
 // ── DOM ─────────────────────────────────────────────────────────
 const $     = id => document.getElementById(id);
-const VIEWS = ["viewHome","viewBooking","viewPayment","viewBuyPass","viewMyBookings","viewSuccess"];
+const VIEWS = ["viewHome","viewBooking","viewPayment","viewMyBookings","viewSuccess"];
 function showView(id) {
   VIEWS.forEach(v => { const el=$(v); if(el) el.style.display="none"; });
   const el=$(id); if(el) el.style.display="block";
@@ -522,11 +493,8 @@ async function checkEligibility() {
 // ── NAVIGATION ──────────────────────────────────────────────────
 function setupNav() {
   $("btnSingle").addEventListener("click", ()=>{ openBookingView(); });
-  $("btnUltra").addEventListener("click",  ()=>{ openBuyPassView("ultra"); });
-  $("btnOffpeak").addEventListener("click",()=>{ openBuyPassView("offpeak"); });
   $("btnMyBookings").addEventListener("click",()=>{ openMyBookings(); });
   $("bkBack").addEventListener("click",   ()=>showView("viewHome"));
-  $("buyPassBack").addEventListener("click",()=>showView("viewHome"));
   $("myBack").addEventListener("click",   ()=>showView("viewHome"));
   $("succHomeBtn").addEventListener("click",()=>showView("viewHome"));
 }
@@ -833,98 +801,6 @@ $("submitSlipBtn").addEventListener("click", async()=>{
   }
 });
 
-// ── BUY PASS VIEW ───────────────────────────────────────────────
-function openBuyPassView(mode) {
-  state.selectedPackageType=null;
-  $("buyPassTitle").textContent=mode==="ultra"?"Buy Ultra Pass":"Buy Off-Peak Pass";
-  renderPackages(mode);
-  $("passTotal").textContent="฿—";
-  $("passTotalNote").textContent="Select a package above";
-  $("purchaseBtn").disabled=true;
-
-  const nameInput=$("passName");
-  if(!nameInput.value && state.lineProfile.displayName!=="Guest") nameInput.value=state.lineProfile.displayName;
-
-  showView("viewBuyPass");
-}
-
-function renderPackages(mode) {
-  const grid=$("pkgGrid"); grid.innerHTML="";
-  const pkgs=mode==="ultra"
-    ?[PACKAGES.ultra_10, PACKAGES.ultra_20]
-    :[PACKAGES.offpeak];
-
-  pkgs.forEach(pkg=>{
-    const card=document.createElement("div");
-    card.className="pkgcard";
-    card.innerHTML=`
-      <div class="pkgcard-top">
-        <div class="pkg-name">${pkg.packageName}</div>
-        <div class="pkg-price">฿${pkg.price.toLocaleString("en-US")}</div>
-      </div>
-      <div class="pkg-desc">${pkg.desc}</div>
-      <div class="pkg-badge">Valid ${pkg.validityDays} days</div>`;
-    card.addEventListener("click",()=>{
-      grid.querySelectorAll(".pkgcard").forEach(c=>c.classList.remove("on"));
-      card.classList.add("on");
-      state.selectedPackageType=pkg.packageType;
-      $("passTotal").textContent=`฿${pkg.price.toLocaleString("en-US")}`;
-      $("passTotalNote").textContent=pkg.packageName;
-      $("purchaseBtn").disabled=false;
-    });
-    grid.append(card);
-  });
-}
-
-$("purchaseBtn").addEventListener("click", async()=>{
-  const name=$("passName").value.trim(), phone=$("passPhone").value.trim();
-  $("passName").classList.toggle("invalid",!name);
-  $("passPhone").classList.toggle("invalid",!phone);
-  if(!name){ $("passName").focus(); showToast("Name is required",true); return; }
-  if(!phone){ $("passPhone").focus(); showToast("Phone is required",true); return; }
-  if(!state.selectedPackageType){ showToast("Please select a package",true); return; }
-
-  const btn=$("purchaseBtn"); btn.disabled=true; btn.textContent="Saving...";
-  try {
-    const pkg=PACKAGES[state.selectedPackageType];
-    const code=generateCode("PP");
-    const expiresAt=new Date(Date.now()+PAY_MINS*60*1000);
-
-    const payload={
-      purchaseCode:     code,
-      lineUserId:       state.lineProfile.userId,
-      lineDisplayName:  state.lineProfile.displayName,
-      customerName:     name,
-      customerPhone:    phone,
-      packageType:      pkg.packageType,
-      packageName:      pkg.packageName,
-      price:            pkg.price,
-      totalMinutes:     pkg.totalMinutes,
-      validityDays:     pkg.validityDays,
-      weeklyLimitHours: pkg.weeklyLimitHours||null,
-      monthlyLimitHours:pkg.monthlyLimitHours||null,
-      status:           "pending_payment",
-      paymentStatus:    "unpaid",
-      paymentExpiresAt: Timestamp.fromDate(expiresAt),
-      slipUrl:null, slipUploadedAt:null,
-    };
-
-    const pRef=await addDoc(collection(db,"pass_purchases"),{ ...payload, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
-
-    state.paymentMode         ="pass";
-    state.currentPurchaseCode  =code;
-    state.currentPurchaseDocId =pRef.id;
-    state.currentPurchaseData  ={...payload,expiresAt};
-
-    showPaymentPanel(code, pkg.price, expiresAt, pkg.packageName, `${name} · ${phone}`);
-    showView("viewPayment");
-  } catch(e){
-    console.error(e); showToast("Failed to create purchase. Try again.",true);
-  } finally {
-    btn.disabled=false; btn.textContent="Purchase Pass";
-  }
-});
-
 // ── MY BOOKINGS ─────────────────────────────────────────────────
 async function openMyBookings() {
   showView("viewMyBookings");
@@ -962,9 +838,7 @@ function renderMyBookings(bookings, packages, purchases) {
       <div class="empty-icon">📭</div>
       <p>No active bookings or passes yet.</p>
       <div class="empty-btns">
-        <button class="btn-empty" onclick="openBookingView();showView('viewBooking')">🎾 Book Single Use</button>
-        <button class="btn-empty" onclick="openBuyPassView('ultra');showView('viewBuyPass')">⚡ Buy Ultra Pass</button>
-        <button class="btn-empty" onclick="openBuyPassView('offpeak');showView('viewBuyPass')">🌙 Buy Off-Peak Pass</button>
+        <button class="btn-empty" onclick="openBookingView()">🎾 Book Single Use</button>
       </div></div>`;
     return;
   }
