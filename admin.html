@@ -1,319 +1,322 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Ultra Tennis · Admin</title>
   <style>
-    :root {
-      --bg:#0f1710;--surface:#192219;--surface2:#1e2d20;--border:#263028;
-      --green:#06c755;--green-dim:#06c75520;--green-hover:#06c75535;
-      --text:#f0fdf4;--muted:#7a8f7d;--mid:#a0b8a3;
-      --danger:#f87171;--warning:#fbbf24;--accent:#34d399;--blue:#60a5fa;
-      --radius:10px;
-    }
+    :root{--bg:#0f1710;--s:#192219;--s2:#1e2d20;--bd:#263028;--g:#06c755;--gd:#06c75520;--gh:#06c75535;--t:#f0fdf4;--m:#7a8f7d;--mid:#a0b8a3;--dan:#f87171;--warn:#fbbf24;--ac:#34d399;--bl:#60a5fa;--r:10px;}
     *{box-sizing:border-box;margin:0;padding:0;}
-    body{background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,sans-serif;min-height:100vh;}
+    body{background:var(--bg);color:var(--t);font-family:Inter,ui-sans-serif,system-ui,sans-serif;min-height:100vh;}
     button{border:0;font:inherit;cursor:pointer;}
-    input,select{font:inherit;}
+    input,select,textarea{font:inherit;}
 
     /* LOGIN */
-    .login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
-    .login-card{width:100%;max-width:360px;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:32px 28px;text-align:center;}
-    .login-logo{font-size:2.5rem;margin-bottom:8px;}
-    .login-card h1{font-size:1.3rem;font-weight:900;}
-    .login-subtitle{color:var(--muted);font-size:0.82rem;margin-top:4px;}
-    .login-fields{display:flex;flex-direction:column;gap:12px;margin:24px 0 16px;text-align:left;}
-    .login-fields label{font-size:0.72rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px;}
-    .login-fields select,.login-fields input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px 12px;font-size:.9rem;}
-    .login-fields select:focus,.login-fields input:focus{outline:none;border-color:var(--green);}
-    .pin-wrap{position:relative;}
-    .pin-wrap input{padding-right:40px;}
-    .pin-eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;color:var(--muted);font-size:.82rem;}
-    .login-btn{width:100%;padding:12px;border-radius:8px;background:var(--green);color:#0a1a0c;font-weight:900;font-size:1rem;}
-    .login-btn:hover{background:#05b34a;}
-    .login-error{color:var(--danger);font-size:.82rem;margin-top:10px;display:none;}
+    .lwrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+    .lcard{width:100%;max-width:360px;background:var(--s);border:1px solid var(--bd);border-radius:16px;padding:32px 28px;text-align:center;}
+    .llogo{font-size:2.4rem;margin-bottom:8px;}
+    .lcard h1{font-size:1.25rem;font-weight:900;}
+    .lcard p{font-size:.8rem;color:var(--m);margin-top:3px;}
+    .lfields{display:flex;flex-direction:column;gap:12px;margin:22px 0 16px;text-align:left;}
+    .lfields label{font-size:.7rem;color:var(--m);font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:4px;}
+    .lfields select,.lfields input{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:8px;color:var(--t);padding:10px 12px;font-size:.88rem;}
+    .lfields select:focus,.lfields input:focus{outline:none;border-color:var(--g);}
+    .pinwrap{position:relative;}
+    .pinwrap input{padding-right:38px;}
+    .pineye{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;color:var(--m);font-size:.8rem;}
+    .lbtn{width:100%;padding:12px;border-radius:8px;background:var(--g);color:#0a1a0c;font-weight:900;font-size:.95rem;}
+    .lbtn:hover{background:#05b34a;}
+    .lerr{color:var(--dan);font-size:.8rem;margin-top:10px;display:none;}
 
     /* HEADER */
-    .admin-header{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;gap:12px;}
-    .header-left h1{font-size:1rem;font-weight:900;}
-    .header-left span{font-size:.72rem;color:var(--muted);display:block;margin-top:1px;}
-    .header-right{display:flex;align-items:center;gap:8px;}
-    .admin-badge{background:var(--green-dim);border:1px solid var(--green);color:var(--green);padding:4px 10px;border-radius:999px;font-size:.75rem;font-weight:700;}
-    .logout-btn{background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:6px 12px;border-radius:8px;font-size:.75rem;font-weight:700;}
-    .logout-btn:hover{border-color:var(--danger);color:var(--danger);}
+    .ahdr{background:var(--s);border-bottom:1px solid var(--bd);padding:13px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;gap:12px;}
+    .ahdr-l h1{font-size:.95rem;font-weight:900;}
+    .ahdr-l span{font-size:.68rem;color:var(--m);}
+    .ahdr-r{display:flex;align-items:center;gap:8px;}
+    .abadge{background:var(--gd);border:1px solid var(--g);color:var(--g);padding:3px 9px;border-radius:999px;font-size:.72rem;font-weight:700;}
+    .loutbtn{background:var(--s2);border:1px solid var(--bd);color:var(--m);padding:5px 11px;border-radius:8px;font-size:.72rem;font-weight:700;}
+    .loutbtn:hover{border-color:var(--dan);color:var(--dan);}
 
     /* TABS */
-    .tab-bar{display:flex;background:var(--surface);border-bottom:1px solid var(--border);}
-    .tab-btn{flex:1;padding:12px 8px;font-size:.85rem;font-weight:800;color:var(--muted);background:none;border-bottom:2px solid transparent;transition:all .15s;}
-    .tab-btn.active{color:var(--green);border-bottom-color:var(--green);}
+    .tabbar{display:flex;background:var(--s);border-bottom:1px solid var(--bd);}
+    .tab{flex:1;padding:11px 6px;font-size:.8rem;font-weight:800;color:var(--m);background:none;border-bottom:2px solid transparent;transition:all .15s;}
+    .tab.on{color:var(--g);border-bottom-color:var(--g);}
 
     /* STATS */
-    .stats-bar{display:flex;border-bottom:1px solid var(--border);}
-    .stat{flex:1;padding:11px 8px;background:var(--surface);text-align:center;border-right:1px solid var(--border);}
+    .stats{display:flex;border-bottom:1px solid var(--bd);}
+    .stat{flex:1;padding:10px 6px;background:var(--s);text-align:center;border-right:1px solid var(--bd);}
     .stat:last-child{border-right:0;}
-    .stat-num{font-size:1.2rem;font-weight:900;}
-    .stat-label{font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-top:1px;}
-    .c-green{color:var(--green);}.c-yellow{color:var(--warning);}.c-teal{color:var(--accent);}.c-red{color:var(--danger);}
+    .sn{font-size:1.15rem;font-weight:900;}
+    .sl{font-size:.6rem;color:var(--m);text-transform:uppercase;letter-spacing:.4px;margin-top:1px;}
+    .cg{color:var(--g);}.cy{color:var(--warn);}.ct{color:var(--ac);}.cr{color:var(--dan);}
 
     /* FILTERS */
-    .filters{padding:12px 20px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--border);background:var(--surface);}
-    .filter-btn{padding:5px 11px;border-radius:999px;border:1px solid var(--border);background:var(--surface2);color:var(--muted);font-size:.76rem;font-weight:700;}
-    .filter-btn.active{border-color:var(--green);background:var(--green-dim);color:var(--green);}
-    .refresh-btn{background:var(--green-dim);border:1px solid var(--green);color:var(--green);padding:5px 12px;border-radius:999px;font-size:.76rem;font-weight:700;}
+    .filters{padding:10px 18px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--bd);background:var(--s);}
+    .fbtn{padding:4px 10px;border-radius:999px;border:1px solid var(--bd);background:var(--s2);color:var(--m);font-size:.72rem;font-weight:700;}
+    .fbtn.on{border-color:var(--g);background:var(--gd);color:var(--g);}
+    .rfbtn{background:var(--gd);border:1px solid var(--g);color:var(--g);padding:4px 11px;border-radius:999px;font-size:.72rem;font-weight:700;}
 
     /* MAIN */
-    .main{padding:16px 20px;max-width:1100px;margin:0 auto;}
+    .main{padding:14px 18px;max-width:1100px;margin:0 auto;}
 
     /* BOOKING CARDS */
-    .bookings-grid{display:grid;gap:12px;}
-    .booking-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
-    .card-header{padding:11px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--border);background:var(--surface2);}
-    .booking-code{font-size:.95rem;font-weight:900;color:var(--accent);}
-    .type-badge{padding:3px 8px;border-radius:999px;font-size:.65rem;font-weight:800;text-transform:uppercase;}
-    .t-single{background:#1e3a5f;color:var(--blue);}
-    .t-ultra{background:#2d1e5f;color:#a78bfa;}
-    .t-off{background:#1e3d30;color:var(--accent);}
-    .card-body{padding:14px 16px;}
-    .booking-fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:12px;}
-    .fl{font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;font-weight:700;}
-    .fv{font-size:.86rem;font-weight:600;margin-top:2px;}
-    .fv.dim{color:var(--muted);}
-    .sp{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.7rem;font-weight:800;}
-    .s-pending_payment{background:#3d2e00;color:var(--warning);}
-    .s-confirmed{background:#0d3320;color:var(--green);}
-    .s-cancelled{background:#3d1010;color:var(--danger);}
-    .s-unpaid{background:#3d2e00;color:var(--warning);}
-    .s-pending_review{background:#0f2d3a;color:var(--blue);}
-    .s-paid{background:#0d3320;color:var(--green);}
-    .s-rejected{background:#3d1010;color:var(--danger);}
+    .bgrid{display:grid;gap:11px;}
+    .bcard{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;}
+    .bcard-hdr{padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid var(--bd);background:var(--s2);}
+    .bcode{font-size:.9rem;font-weight:900;color:var(--ac);}
+    .tbadge{padding:2px 7px;border-radius:999px;font-size:.62rem;font-weight:800;text-transform:uppercase;}
+    .ts{background:#1e3a5f;color:var(--bl);}.tu{background:#2d1e5f;color:#a78bfa;}.to{background:#1e3d30;color:var(--ac);}
+    .bcard-body{padding:13px 14px;}
+    .bfields{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:9px;margin-bottom:11px;}
+    .fl{font-size:.62rem;color:var(--m);text-transform:uppercase;letter-spacing:.4px;font-weight:700;}
+    .fv{font-size:.82rem;font-weight:600;margin-top:2px;}
+    .fv.dim{color:var(--m);}
+    .sp{display:inline-block;padding:2px 7px;border-radius:999px;font-size:.67rem;font-weight:800;}
+    .s-pending_payment{background:#3d2e00;color:var(--warn);}
+    .s-confirmed,.s-paid{background:#0d3320;color:var(--g);}
+    .s-cancelled{background:#3d1010;color:var(--dan);}
+    .s-unpaid{background:#3d2e00;color:var(--warn);}
+    .s-pending_review{background:#0f2d3a;color:var(--bl);}
+    .s-rejected{background:#3d1010;color:var(--dan);}
     .s-package{background:#1e1e3d;color:#a78bfa;}
     .s-rescheduled{background:#2d1e00;color:#fb923c;}
-    .slip-section{margin-bottom:12px;}
-    .slip-lbl{font-size:.65rem;color:var(--muted);text-transform:uppercase;font-weight:700;margin-bottom:5px;}
-    .slip-img{max-width:180px;max-height:130px;border-radius:6px;border:1px solid var(--border);object-fit:contain;display:block;cursor:pointer;}
-    .slip-img:hover{border-color:var(--green);}
-    .no-slip{font-size:.8rem;color:var(--muted);font-style:italic;}
-    .card-actions{display:flex;gap:8px;flex-wrap:wrap;}
-    .btn-paid{padding:7px 14px;border-radius:8px;background:var(--green-dim);border:1px solid var(--green);color:var(--green);font-size:.8rem;font-weight:800;}
-    .btn-paid:hover{background:var(--green-hover);}
-    .btn-cancel{padding:7px 14px;border-radius:8px;background:#3d101010;border:1px solid var(--danger);color:var(--danger);font-size:.8rem;font-weight:800;}
-    .btn-cancel:hover{background:#3d101030;}
-    .btn-resch{padding:7px 14px;border-radius:8px;background:#0f2d3a;border:1px solid var(--blue);color:var(--blue);font-size:.8rem;font-weight:800;}
-    .btn-resch:hover{background:#0f2d3a99;}
-    .btn-done{padding:7px 14px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);font-size:.8rem;font-weight:700;cursor:default;}
+    .s-active{background:#0d3320;color:var(--g);}
+    .slip-sec{margin-bottom:11px;}
+    .slbl{font-size:.62rem;color:var(--m);text-transform:uppercase;font-weight:700;margin-bottom:4px;}
+    .simg{max-width:170px;max-height:130px;border-radius:6px;border:1px solid var(--bd);object-fit:contain;cursor:pointer;display:block;}
+    .simg:hover{border-color:var(--g);}
+    .noslip{font-size:.78rem;color:var(--m);font-style:italic;}
+    .acts{display:flex;gap:7px;flex-wrap:wrap;}
+    .bp{padding:6px 13px;border-radius:7px;background:var(--gd);border:1px solid var(--g);color:var(--g);font-size:.77rem;font-weight:800;}
+    .bp:hover{background:var(--gh);}
+    .bc{padding:6px 13px;border-radius:7px;background:#3d101010;border:1px solid var(--dan);color:var(--dan);font-size:.77rem;font-weight:800;}
+    .bc:hover{background:#3d101030;}
+    .br{padding:6px 13px;border-radius:7px;background:#0f2d3a;border:1px solid var(--bl);color:var(--bl);font-size:.77rem;font-weight:800;}
+    .br:hover{background:#0f2d3a99;}
+    .bdone{padding:6px 13px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--m);font-size:.77rem;font-weight:700;cursor:default;}
     button:disabled{opacity:.5;cursor:not-allowed;}
 
     /* SLOT MANAGER */
-    .sm-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:14px;}
-    .sm-card h2{font-size:.82rem;font-weight:800;color:var(--mid);text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px;}
-    .sm-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;}
-    .sm-field{display:flex;flex-direction:column;gap:5px;flex:1;min-width:160px;}
-    .sm-field label{font-size:.72rem;color:var(--muted);font-weight:700;text-transform:uppercase;}
-    .sm-field input[type=date]{background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 11px;font-size:.88rem;width:100%;}
-    .sm-field input[type=date]:focus{outline:none;border-color:var(--green);}
-    .sm-btn{padding:9px 16px;border-radius:8px;font-size:.82rem;font-weight:800;white-space:nowrap;border:1px solid transparent;}
-    .sm-green{background:var(--green-dim);border-color:var(--green);color:var(--green);}
-    .sm-green:hover{background:var(--green-hover);}
-    .sm-gray{background:var(--surface2);border-color:var(--border);color:var(--muted);}
-    .sm-gray:hover{border-color:var(--mid);color:var(--text);}
-    .sm-divider{height:1px;background:var(--border);margin:14px 0;}
+    .smcard{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);padding:15px;margin-bottom:13px;}
+    .smcard h2{font-size:.78rem;font-weight:800;color:var(--mid);text-transform:uppercase;letter-spacing:.8px;margin-bottom:11px;}
+    .smrow{display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;}
+    .smf{display:flex;flex-direction:column;gap:4px;flex:1;min-width:150px;}
+    .smf label{font-size:.68rem;color:var(--m);font-weight:700;text-transform:uppercase;}
+    .smf input[type=date]{background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%;}
+    .smf input[type=date]:focus{outline:none;border-color:var(--g);}
+    .smbtn{padding:8px 14px;border-radius:7px;font-size:.78rem;font-weight:800;white-space:nowrap;border:1px solid transparent;}
+    .smg{background:var(--gd);border-color:var(--g);color:var(--g);}.smg:hover{background:var(--gh);}
+    .smgr{background:var(--s2);border-color:var(--bd);color:var(--mid);}.smgr:hover{border-color:var(--mid);color:var(--t);}
+    .smdiv{height:1px;background:var(--bd);margin:12px 0;}
+    .qbtns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
 
-    /* SLOT GRID */
-    .slot-grid{display:grid;gap:6px;}
-    .slot-row{display:grid;grid-template-columns:110px 1fr auto;align-items:center;gap:10px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;}
-    .slot-time{font-size:.82rem;font-weight:700;color:var(--mid);}
-    .slot-status{font-size:.7rem;font-weight:800;padding:2px 8px;border-radius:999px;}
-    .ss-open{background:#0d3320;color:var(--green);}
-    .ss-booked{background:#3d2e00;color:var(--warning);}
-    .ss-closed{background:var(--surface);color:var(--muted);border:1px solid var(--border);}
+    /* Slot grid */
+    .sgrid{display:grid;gap:5px;}
+    .srow{display:grid;grid-template-columns:108px 1fr auto;align-items:center;gap:9px;padding:7px 9px;background:var(--s2);border:1px solid var(--bd);border-radius:7px;}
+    .stime{font-size:.78rem;font-weight:700;color:var(--mid);}
+    .sstatus{font-size:.67rem;font-weight:800;padding:2px 7px;border-radius:999px;}
+    .ss-open{background:#0d3320;color:var(--g);}
+    .ss-booked{background:#3d2e00;color:var(--warn);}
+    .ss-closed{background:var(--s);color:var(--m);border:1px solid var(--bd);}
     .ss-none{background:#1a1a1a;color:#555;}
-    .slot-toggle{padding:5px 10px;border-radius:6px;font-size:.72rem;font-weight:800;border:1px solid transparent;}
-    .st-close{background:#3d101010;border-color:var(--danger);color:var(--danger);}
-    .st-close:hover{background:#3d101030;}
-    .st-open{background:var(--green-dim);border-color:var(--green);color:var(--green);}
-    .st-open:hover{background:var(--green-hover);}
-    .st-create{background:var(--surface);border-color:var(--border);color:var(--muted);}
-    .st-create:hover{border-color:var(--green);color:var(--green);}
-    .st-dis{background:var(--surface2);border-color:var(--border);color:#444;cursor:not-allowed;}
-    .sm-loading,.sm-empty{text-align:center;padding:32px;color:var(--muted);font-size:.85rem;}
+    .stoggle{padding:4px 9px;border-radius:6px;font-size:.68rem;font-weight:800;border:1px solid transparent;}
+    .st-close{background:#3d101010;border-color:var(--dan);color:var(--dan);}.st-close:hover{background:#3d101030;}
+    .st-open{background:var(--gd);border-color:var(--g);color:var(--g);}.st-open:hover{background:var(--gh);}
+    .st-create{background:var(--s);border-color:var(--bd);color:var(--m);}.st-create:hover{border-color:var(--g);color:var(--g);}
+    .st-dis{background:var(--s2);border-color:var(--bd);color:#444;cursor:not-allowed;}
+    .smload,.smempty{text-align:center;padding:28px;color:var(--m);font-size:.82rem;}
+
+    /* Holiday */
+    .holiday-box{background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:12px 14px;margin-top:12px;}
+    .holiday-box h3{font-size:.75rem;font-weight:800;color:var(--mid);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px;}
+    .holiday-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+    .holiday-row input[type=checkbox]{width:16px;height:16px;accent-color:var(--dan);cursor:pointer;}
+    .holiday-row label{font-size:.82rem;color:var(--t);font-weight:600;}
+    .holiday-row input[type=text]{background:var(--s);border:1px solid var(--bd);border-radius:6px;color:var(--t);padding:6px 9px;font-size:.8rem;flex:1;min-width:140px;}
+    .holiday-row input[type=text]:focus{outline:none;border-color:var(--dan);}
+    .holiday-save{padding:6px 12px;border-radius:6px;background:#3d101020;border:1px solid var(--dan);color:var(--dan);font-size:.75rem;font-weight:800;}
+    .holiday-save:hover{background:#3d101040;}
+    .holiday-active{font-size:.72rem;padding:2px 8px;border-radius:999px;background:#3d1010;color:var(--dan);font-weight:800;}
+
+    /* PASS PURCHASES */
+    .ppgrid{display:grid;gap:11px;}
+    .ppcard{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;}
+    .ppcard-hdr{padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid var(--bd);background:var(--s2);}
+    .ppcode{font-size:.88rem;font-weight:900;color:var(--ac);}
+    .ppbadge{padding:2px 7px;border-radius:999px;font-size:.62rem;font-weight:800;text-transform:uppercase;}
+    .pp-ultra{background:#2d1e5f;color:#a78bfa;}
+    .pp-off{background:#1e3d30;color:var(--ac);}
+    .ppcard-body{padding:13px 14px;}
 
     /* MODAL */
-    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;}
-    .modal-box{background:var(--surface);border:1px solid var(--border);border-radius:16px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;}
-    .modal-hdr{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
-    .modal-hdr h2{font-size:1rem;font-weight:900;}
-    .modal-close-x{background:var(--surface2);border:1px solid var(--border);color:var(--muted);width:30px;height:30px;border-radius:50%;font-size:.85rem;}
-    .modal-close-x:hover{border-color:var(--danger);color:var(--danger);}
-    .modal-body{padding:16px 20px;}
-    .modal-info{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:.82rem;color:var(--mid);}
-    .modal-info strong{color:var(--accent);display:block;font-size:.95rem;margin-bottom:2px;}
-    .modal-field{margin-bottom:14px;}
-    .modal-field label{font-size:.72rem;color:var(--muted);font-weight:700;text-transform:uppercase;display:block;margin-bottom:6px;}
-    .modal-field input[type=date]{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 11px;font-size:.9rem;}
-    .modal-field input[type=date]:focus{outline:none;border-color:var(--green);}
-    .load-slots-btn{width:100%;padding:9px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);color:var(--mid);font-size:.82rem;font-weight:800;margin-bottom:14px;}
-    .load-slots-btn:hover{border-color:var(--green);color:var(--green);}
-    .modal-tgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:6px;}
-    .mt-btn{padding:8px 4px;border-radius:7px;background:var(--surface2);border:1px solid var(--border);color:var(--mid);font-size:.78rem;font-weight:700;text-align:center;}
-    .mt-btn:hover:not(:disabled){border-color:var(--green);color:var(--green);}
-    .mt-btn.sel{background:var(--green-dim);border-color:var(--green);color:var(--green);}
-    .mt-btn:disabled{opacity:.35;cursor:not-allowed;text-decoration:line-through;}
-    .modal-ftr{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;}
-    .btn-cancel-m{padding:9px 18px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);font-size:.85rem;font-weight:800;}
-    .btn-confirm-m{padding:9px 18px;border-radius:8px;background:var(--green);color:#0a1a0c;font-size:.85rem;font-weight:900;}
-    .btn-confirm-m:disabled{background:#666;cursor:not-allowed;}
+    .moverlay{position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:200;display:flex;align-items:center;justify-content:center;padding:18px;}
+    .mbox{background:var(--s);border:1px solid var(--bd);border-radius:16px;width:100%;max-width:460px;max-height:90vh;overflow-y:auto;}
+    .mhdr{padding:14px 18px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;}
+    .mhdr h2{font-size:.95rem;font-weight:900;}
+    .mclose{background:var(--s2);border:1px solid var(--bd);color:var(--m);width:28px;height:28px;border-radius:50%;font-size:.8rem;}
+    .mclose:hover{border-color:var(--dan);color:var(--dan);}
+    .mbody{padding:14px 18px;}
+    .minfo{background:var(--s2);border:1px solid var(--bd);border-radius:7px;padding:9px 13px;margin-bottom:14px;font-size:.8rem;color:var(--mid);}
+    .minfo strong{color:var(--ac);display:block;font-size:.9rem;margin-bottom:2px;}
+    .mfield{margin-bottom:12px;}
+    .mfield label{font-size:.68rem;color:var(--m);font-weight:700;text-transform:uppercase;display:block;margin-bottom:5px;}
+    .mfield input[type=date]{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.88rem;}
+    .mfield input[type=date]:focus{outline:none;border-color:var(--g);}
+    .mload-slots{width:100%;padding:8px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--mid);font-size:.78rem;font-weight:800;margin-bottom:12px;}
+    .mload-slots:hover{border-color:var(--g);color:var(--g);}
+    .mtgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:6px;}
+    .mtbtn{padding:7px 3px;border-radius:6px;background:var(--s2);border:1px solid var(--bd);color:var(--mid);font-size:.73rem;font-weight:700;text-align:center;}
+    .mtbtn:hover:not(:disabled){border-color:var(--g);color:var(--g);}
+    .mtbtn.sel{background:var(--gd);border-color:var(--g);color:var(--g);}
+    .mtbtn:disabled{opacity:.35;cursor:not-allowed;text-decoration:line-through;}
+    .mftr{padding:13px 18px;border-top:1px solid var(--bd);display:flex;gap:9px;justify-content:flex-end;}
+    .mcancel{padding:8px 16px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--m);font-size:.82rem;font-weight:800;}
+    .mconfirm{padding:8px 16px;border-radius:7px;background:var(--g);color:#0a1a0c;font-size:.82rem;font-weight:900;}
+    .mconfirm:disabled{background:#666;cursor:not-allowed;}
 
     /* MISC */
-    .loading-state{text-align:center;padding:48px;color:var(--muted);font-size:.9rem;}
-    .empty-state{text-align:center;padding:48px 20px;color:var(--muted);font-size:.85rem;}
-    .spinner{width:30px;height:30px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px;}
+    .lstate{text-align:center;padding:44px;color:var(--m);font-size:.85rem;}
+    .estate{text-align:center;padding:44px 18px;color:var(--m);font-size:.82rem;}
+    .spinner{width:28px;height:28px;border:2px solid var(--bd);border-top-color:var(--g);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 10px;}
     @keyframes spin{to{transform:rotate(360deg);}}
-    .toast{position:fixed;left:50%;bottom:18px;width:min(calc(100% - 32px),400px);padding:11px 14px;border-radius:8px;background:#17231c;color:white;font-weight:750;text-align:center;transform:translate(-50%,120px);opacity:0;transition:opacity 180ms,transform 180ms;z-index:500;}
+    .toast{position:fixed;left:50%;bottom:18px;width:min(calc(100% - 32px),400px);padding:10px 13px;border-radius:8px;background:#17231c;color:#fff;font-weight:750;text-align:center;transform:translate(-50%,120px);opacity:0;transition:opacity 180ms,transform 180ms;z-index:500;}
     .toast.show{opacity:1;transform:translate(-50%,0);}
-    .toast.error{background:var(--danger);}
+    .toast.err{background:var(--dan);}
 
     @media(max-width:600px){
-      .main{padding:12px 14px;}
-      .booking-fields{grid-template-columns:1fr 1fr;}
-      .slot-row{grid-template-columns:90px 1fr auto;}
-      .modal-tgrid{grid-template-columns:repeat(3,1fr);}
-      .stats-bar{flex-wrap:wrap;}
-      .stat{min-width:33.33%;border-bottom:1px solid var(--border);}
+      .main{padding:12px 13px;}
+      .bfields{grid-template-columns:1fr 1fr;}
+      .srow{grid-template-columns:88px 1fr auto;}
+      .mtgrid{grid-template-columns:repeat(3,1fr);}
+      .stats{flex-wrap:wrap;}
+      .stat{min-width:33.33%;border-bottom:1px solid var(--bd);}
     }
   </style>
 </head>
 <body>
 
 <!-- LOGIN -->
-<div id="loginScreen" class="login-wrap">
-  <div class="login-card">
-    <div class="login-logo">🎾</div>
+<div id="loginScreen" class="lwrap">
+  <div class="lcard">
+    <div class="llogo">🎾</div>
     <h1>Ultra Tennis</h1>
-    <p class="login-subtitle">Admin Access</p>
-    <div class="login-fields">
-      <div>
-        <label>Your Name</label>
-        <select id="adminSelect"><option value="">Select name...</option></select>
-      </div>
-      <div>
-        <label>PIN</label>
-        <div class="pin-wrap">
-          <input type="password" id="pinInput" placeholder="Enter PIN" maxlength="8" />
-          <button class="pin-eye" id="pinToggle" type="button">👁</button>
-        </div>
-      </div>
+    <p>Admin Access</p>
+    <div class="lfields">
+      <div><label>Your Name</label><select id="adminSel"><option value="">Select name...</option></select></div>
+      <div><label>PIN</label><div class="pinwrap"><input type="password" id="pinIn" placeholder="Enter PIN" maxlength="8"/><button class="pineye" id="pinEye">👁</button></div></div>
     </div>
-    <button class="login-btn" id="loginBtn">Login</button>
-    <p class="login-error" id="loginError">Incorrect PIN. Please try again.</p>
+    <button class="lbtn" id="loginBtn">Login</button>
+    <p class="lerr" id="loginErr">Incorrect PIN. Please try again.</p>
   </div>
 </div>
 
 <!-- MAIN APP -->
 <div id="mainApp" style="display:none">
-  <header class="admin-header">
-    <div class="header-left">
-      <h1>🎾 Ultra Tennis · Admin</h1>
-      <span id="lastUpdated">—</span>
-    </div>
-    <div class="header-right">
-      <span class="admin-badge" id="adminBadge">—</span>
-      <button class="logout-btn" id="logoutBtn">Logout</button>
-    </div>
+  <header class="ahdr">
+    <div class="ahdr-l"><h1>🎾 Ultra Tennis · Admin</h1><span id="lastUpd">—</span></div>
+    <div class="ahdr-r"><span class="abadge" id="adminBadge">—</span><button class="loutbtn" id="logoutBtn">Logout</button></div>
   </header>
 
-  <div class="tab-bar">
-    <button class="tab-btn active" data-tab="bookings">📋 Bookings</button>
-    <button class="tab-btn" data-tab="slots">🗓 Slot Manager</button>
+  <div class="tabbar">
+    <button class="tab on" data-tab="bookings">📋 Bookings</button>
+    <button class="tab" data-tab="slots">🗓 Slot Manager</button>
+    <button class="tab" data-tab="passes">🎫 Pass Purchases</button>
   </div>
 
   <!-- BOOKINGS TAB -->
   <div id="tabBookings">
-    <div class="stats-bar">
-      <div class="stat"><div class="stat-num" id="statTotal">—</div><div class="stat-label">Total</div></div>
-      <div class="stat"><div class="stat-num c-yellow" id="statPending">—</div><div class="stat-label">Pending</div></div>
-      <div class="stat"><div class="stat-num c-teal" id="statReview">—</div><div class="stat-label">Review</div></div>
-      <div class="stat"><div class="stat-num c-green" id="statPaid">—</div><div class="stat-label">Paid</div></div>
-      <div class="stat"><div class="stat-num c-red" id="statCancelled">—</div><div class="stat-label">Cancelled</div></div>
+    <div class="stats">
+      <div class="stat"><div class="sn" id="stTotal">—</div><div class="sl">Total</div></div>
+      <div class="stat"><div class="sn cy" id="stPending">—</div><div class="sl">Pending</div></div>
+      <div class="stat"><div class="sn ct" id="stReview">—</div><div class="sl">Review</div></div>
+      <div class="stat"><div class="sn cg" id="stPaid">—</div><div class="sl">Paid</div></div>
+      <div class="stat"><div class="sn cr" id="stCancelled">—</div><div class="sl">Cancelled</div></div>
     </div>
     <div class="filters">
-      <button class="filter-btn active" data-filter="all">All</button>
-      <button class="filter-btn" data-filter="pending_payment">Pending Pay</button>
-      <button class="filter-btn" data-filter="pending_review">Under Review</button>
-      <button class="filter-btn" data-filter="confirmed">Confirmed</button>
-      <button class="filter-btn" data-filter="cancelled">Cancelled</button>
-      <button class="refresh-btn" id="refreshBtn" style="margin-left:auto">↻ Refresh</button>
+      <button class="fbtn on" data-filter="all">All</button>
+      <button class="fbtn" data-filter="pending_payment">Pending Pay</button>
+      <button class="fbtn" data-filter="pending_review">Under Review</button>
+      <button class="fbtn" data-filter="confirmed">Confirmed</button>
+      <button class="fbtn" data-filter="cancelled">Cancelled</button>
+      <button class="rfbtn" id="refreshBtn" style="margin-left:auto">↻ Refresh</button>
     </div>
-    <div class="main">
-      <div id="bookingsList"><div class="loading-state"><div class="spinner"></div><p>Loading bookings...</p></div></div>
-    </div>
+    <div class="main"><div id="bookingsList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
   </div>
 
   <!-- SLOT MANAGER TAB -->
   <div id="tabSlots" style="display:none">
     <div class="main">
-
-      <div class="sm-card">
+      <div class="smcard">
         <h2>Open Slots</h2>
-        <div class="sm-row" style="margin-bottom:12px">
-          <div class="sm-field">
-            <label>Week Start Date</label>
-            <input type="date" id="weekStartDate" />
-          </div>
-          <button class="sm-btn sm-green" id="openWeekBtn">⚡ Open Full Week (7 days)</button>
+        <div class="smrow" style="margin-bottom:10px">
+          <div class="smf"><label>Week Start Date</label><input type="date" id="weekDate"/></div>
+          <button class="smbtn smg" id="openWeekBtn">⚡ Open Full Week (7 days)</button>
         </div>
-        <div class="sm-divider"></div>
-        <div class="sm-row">
-          <div class="sm-field">
-            <label>Single Day</label>
-            <input type="date" id="singleDayDate" />
-          </div>
-          <button class="sm-btn sm-green" id="openDayBtn">+ Open This Day</button>
-          <button class="sm-btn sm-gray"  id="closeDayBtn">✕ Close This Day</button>
+        <div class="smdiv"></div>
+        <div class="smrow">
+          <div class="smf"><label>Single Day</label><input type="date" id="dayDate"/></div>
+          <button class="smbtn smg" id="openDayBtn">+ Open This Day</button>
+          <button class="smbtn smgr" id="closeDayBtn">✕ Close This Day</button>
         </div>
       </div>
 
-      <div class="sm-card">
-        <h2>Manage Slots by Day</h2>
-        <div class="sm-row" style="margin-bottom:14px">
-          <div class="sm-field">
-            <label>View Date</label>
-            <input type="date" id="viewSlotDate" />
-          </div>
-          <button class="sm-btn sm-gray" id="loadSlotsBtn">Load Slots</button>
+      <div class="smcard">
+        <h2>Manage Slots</h2>
+        <div class="smrow" style="margin-bottom:12px">
+          <div class="smf"><label>View Date</label><input type="date" id="viewDate"/></div>
+          <button class="smbtn smgr" id="loadSlotsBtn">Load Slots</button>
         </div>
-        <div id="slotGrid"><div class="sm-empty">Select a date and click Load Slots.</div></div>
+        <div class="qbtns">
+          <button class="smbtn smg" id="openAllBtn" style="font-size:.72rem">+ Open All Unset Slots</button>
+          <button class="smbtn smgr" id="closeUnbookedBtn" style="font-size:.72rem">✕ Close All Unbooked</button>
+        </div>
+        <div id="slotGrid" style="margin-top:12px"><div class="smempty">Select a date and click Load Slots.</div></div>
+        <div id="holidayBox" style="display:none" class="holiday-box">
+          <h3>Holiday Manager <span id="holActiveTag" style="display:none" class="holiday-active">Holiday</span></h3>
+          <div class="holiday-row">
+            <input type="checkbox" id="holCheck"/>
+            <label for="holCheck">Mark this date as holiday</label>
+            <input type="text" id="holName" placeholder="Holiday name (optional)"/>
+            <button class="holiday-save" id="holSave">Save</button>
+          </div>
+        </div>
       </div>
-
     </div>
+  </div>
+
+  <!-- PASS PURCHASES TAB -->
+  <div id="tabPasses" style="display:none">
+    <div class="stats">
+      <div class="stat"><div class="sn" id="ppTotal">—</div><div class="sl">Total</div></div>
+      <div class="stat"><div class="sn cy" id="ppPending">—</div><div class="sl">Pending</div></div>
+      <div class="stat"><div class="sn ct" id="ppReview">—</div><div class="sl">Review</div></div>
+      <div class="stat"><div class="sn cg" id="ppActive">—</div><div class="sl">Active</div></div>
+      <div class="stat"><div class="sn cr" id="ppRejected">—</div><div class="sl">Rejected</div></div>
+    </div>
+    <div class="filters">
+      <button class="fbtn on" data-ppfilter="all">All</button>
+      <button class="fbtn" data-ppfilter="pending_payment">Pending Pay</button>
+      <button class="fbtn" data-ppfilter="pending_review">Under Review</button>
+      <button class="fbtn" data-ppfilter="active">Active</button>
+      <button class="fbtn" data-ppfilter="rejected">Rejected</button>
+      <button class="rfbtn" id="refreshPassBtn" style="margin-left:auto">↻ Refresh</button>
+    </div>
+    <div class="main"><div id="passList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
   </div>
 </div>
 
 <!-- RESCHEDULE MODAL -->
-<div class="modal-overlay" id="rescheduleModal" style="display:none">
-  <div class="modal-box">
-    <div class="modal-hdr">
-      <h2>📅 Reschedule Booking</h2>
-      <button class="modal-close-x" id="modalClose">✕</button>
+<div class="moverlay" id="reschModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>📅 Reschedule Booking</h2><button class="mclose" id="mClose">✕</button></div>
+    <div class="mbody">
+      <div class="minfo"><strong id="rCode">—</strong><span id="rOldTime">Current: —</span><span id="rCust" style="display:block;margin-top:3px;font-size:.75rem">—</span></div>
+      <div class="mfield"><label>New Date</label><input type="date" id="rDate"/></div>
+      <button class="mload-slots" id="mLoadSlots">Load Available Slots →</button>
+      <div class="mtgrid" id="rTimeGrid"></div>
+      <p id="rHint" style="font-size:.72rem;color:var(--m);margin-top:4px"></p>
     </div>
-    <div class="modal-body">
-      <div class="modal-info">
-        <strong id="reschCode">UT-2026-XXXX</strong>
-        <span id="reschOldTime">Current: —</span>
-        <span id="reschCustomer" style="display:block;margin-top:3px;font-size:.78rem">—</span>
-      </div>
-      <div class="modal-field">
-        <label>New Date</label>
-        <input type="date" id="reschDate" />
-      </div>
-      <button class="load-slots-btn" id="loadReschSlotsBtn">Load Available Slots →</button>
-      <div class="modal-tgrid" id="reschTimeGrid"></div>
-      <p id="reschHint" style="font-size:.75rem;color:var(--muted);margin-top:4px"></p>
-    </div>
-    <div class="modal-ftr">
-      <button class="btn-cancel-m" id="cancelReschBtn">Cancel</button>
-      <button class="btn-confirm-m" id="confirmReschBtn" disabled>Confirm Reschedule</button>
-    </div>
+    <div class="mftr"><button class="mcancel" id="mCancel">Cancel</button><button class="mconfirm" id="mConfirm" disabled>Confirm Reschedule</button></div>
   </div>
 </div>
 
@@ -322,18 +325,17 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
 import {
-  getFirestore,collection,doc,getDocs,updateDoc,writeBatch,
+  getFirestore,collection,doc,getDocs,getDoc,updateDoc,writeBatch,addDoc,
   runTransaction,setDoc,query,where,orderBy,serverTimestamp,Timestamp
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 
 // ── CONFIG ── ⚠️ Change ADMIN_NAMES and ADMIN_PIN before going live!
-const ADMIN_NAMES = ["Art","Staff 2","Staff 3","Staff 4","Staff 5"];
-const ADMIN_PIN   = "1234"; // ← Change this!
-const RESOURCE_ID = "room1";
-const OPEN_HOUR   = 6;
-const CLOSE_HOUR  = 24;
+const ADMIN_NAMES=["Art","Staff 2","Staff 3","Staff 4","Staff 5"];
+const ADMIN_PIN="1234"; // ← Change this!
+const RESOURCE_ID="room1";
+const OPEN_HOUR=6,CLOSE_HOUR=24;
 
-const firebaseConfig = {
+const firebaseConfig={
   apiKey:"AIzaSyBhJSJszidFge4fKQqExLM2cB2Sx6z2lPY",
   authDomain:"ultra-tennis-booking.firebaseapp.com",
   projectId:"ultra-tennis-booking",
@@ -341,389 +343,483 @@ const firebaseConfig = {
   messagingSenderId:"646504579934",
   appId:"1:646504579934:web:44768b8ae6b744be5d05cf",
 };
-const fbApp = initializeApp(firebaseConfig);
-const db    = getFirestore(fbApp);
+const fbApp=initializeApp(firebaseConfig);
+const db=getFirestore(fbApp);
+const $=id=>document.getElementById(id);
 
-const $ = id => document.getElementById(id);
+// ── ADMIN NAMES ──────────────────────────────────────────────────
+ADMIN_NAMES.forEach(n=>{const o=document.createElement("option");o.value=o.textContent=n;$("adminSel").append(o);});
 
-// ── POPULATE ADMIN DROPDOWN ──────────────────────────────────
-ADMIN_NAMES.forEach(n => {
-  const o = document.createElement("option"); o.value=o.textContent=n;
-  $("adminSelect").append(o);
-});
-
-// ── AUTH ─────────────────────────────────────────────────────
-function checkSession() {
-  const n = sessionStorage.getItem("adminName");
-  if(n){ showApp(n); return true; } return false;
-}
-function showApp(name) {
-  $("loginScreen").style.display="none";
-  $("mainApp").style.display="block";
-  $("adminBadge").textContent=name;
-}
-$("pinToggle").addEventListener("click",()=>{ const p=$("pinInput"); p.type=p.type==="password"?"text":"password"; });
-$("pinInput").addEventListener("keydown",e=>{ if(e.key==="Enter") $("loginBtn").click(); });
+// ── AUTH ─────────────────────────────────────────────────────────
+function checkSession(){const n=sessionStorage.getItem("adminName");if(n){showApp(n);return true;}return false;}
+function showApp(n){$("loginScreen").style.display="none";$("mainApp").style.display="block";$("adminBadge").textContent=n;}
+$("pinEye").addEventListener("click",()=>{const p=$("pinIn");p.type=p.type==="password"?"text":"password";});
+$("pinIn").addEventListener("keydown",e=>{if(e.key==="Enter")$("loginBtn").click();});
 $("loginBtn").addEventListener("click",()=>{
-  const name=$("adminSelect").value, pin=$("pinInput").value;
-  const err=$("loginError");
-  if(!name){ err.textContent="Please select your name."; err.style.display="block"; return; }
-  if(pin!==ADMIN_PIN){ err.style.display="block"; $("pinInput").value=""; $("pinInput").focus(); return; }
-  err.style.display="none";
-  sessionStorage.setItem("adminName",name);
-  showApp(name); loadBookings();
+  const n=$("adminSel").value,p=$("pinIn").value,err=$("loginErr");
+  if(!n){err.textContent="Please select your name.";err.style.display="block";return;}
+  if(p!==ADMIN_PIN){err.style.display="block";$("pinIn").value="";$("pinIn").focus();return;}
+  err.style.display="none";sessionStorage.setItem("adminName",n);showApp(n);loadBookings();loadPasses();
 });
 $("logoutBtn").addEventListener("click",()=>{
-  sessionStorage.removeItem("adminName");
-  $("mainApp").style.display="none"; $("loginScreen").style.display="flex";
-  $("adminSelect").value=""; $("pinInput").value="";
+  sessionStorage.removeItem("adminName");$("mainApp").style.display="none";$("loginScreen").style.display="flex";
+  $("adminSel").value="";$("pinIn").value="";
 });
 
-// ── TABS ─────────────────────────────────────────────────────
-document.querySelectorAll(".tab-btn").forEach(btn=>{
+// ── TABS ─────────────────────────────────────────────────────────
+document.querySelectorAll(".tab").forEach(btn=>{
   btn.addEventListener("click",()=>{
-    document.querySelectorAll(".tab-btn").forEach(b=>b.classList.remove("active"));
-    btn.classList.add("active");
+    document.querySelectorAll(".tab").forEach(b=>b.classList.remove("on"));btn.classList.add("on");
     $("tabBookings").style.display=btn.dataset.tab==="bookings"?"block":"none";
-    $("tabSlots").style.display   =btn.dataset.tab==="slots"   ?"block":"none";
+    $("tabSlots").style.display=btn.dataset.tab==="slots"?"block":"none";
+    $("tabPasses").style.display=btn.dataset.tab==="passes"?"block":"none";
+    if(btn.dataset.tab==="passes") loadPasses();
   });
 });
 
-// ── BOOKINGS ─────────────────────────────────────────────────
-let allBookings=[],activeFilter="all",reschBooking=null,reschNewTime=null;
+// ── BOOKINGS ─────────────────────────────────────────────────────
+let allBookings=[],activeFilter="all",reschBooking=null,reschTime=null;
 
-async function loadBookings() {
-  $("bookingsList").innerHTML=`<div class="loading-state"><div class="spinner"></div><p>Loading...</p></div>`;
-  try {
+async function loadBookings(){
+  $("bookingsList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading...</p></div>`;
+  try{
     const snap=await getDocs(query(collection(db,"bookings"),orderBy("createdAt","desc")));
     allBookings=snap.docs.map(d=>({id:d.id,...d.data()}));
-    updateStats(); renderBookings();
-    $("lastUpdated").textContent=`Updated ${new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}`;
-  } catch(e){ console.error(e); $("bookingsList").innerHTML=`<div class="empty-state">❌ Failed to load. Check Firestore rules.</div>`; }
+    updateStats();renderBookings();
+    $("lastUpd").textContent=`Updated ${new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}`;
+  }catch(e){console.error(e);$("bookingsList").innerHTML=`<div class="estate">❌ Failed to load. Check Firestore rules.</div>`;}
 }
 
 function updateStats(){
-  $("statTotal").textContent    =allBookings.length;
-  $("statPending").textContent  =allBookings.filter(b=>b.bookingStatus==="pending_payment").length;
-  $("statReview").textContent   =allBookings.filter(b=>b.paymentStatus==="pending_review").length;
-  $("statPaid").textContent     =allBookings.filter(b=>b.paymentStatus==="paid").length;
-  $("statCancelled").textContent=allBookings.filter(b=>b.bookingStatus==="cancelled").length;
+  $("stTotal").textContent=allBookings.length;
+  $("stPending").textContent=allBookings.filter(b=>b.bookingStatus==="pending_payment").length;
+  $("stReview").textContent=allBookings.filter(b=>b.paymentStatus==="pending_review").length;
+  $("stPaid").textContent=allBookings.filter(b=>b.paymentStatus==="paid").length;
+  $("stCancelled").textContent=allBookings.filter(b=>b.bookingStatus==="cancelled").length;
 }
 
 function renderBookings(){
   const list=activeFilter==="all"?allBookings:allBookings.filter(b=>b.bookingStatus===activeFilter||b.paymentStatus===activeFilter);
-  if(!list.length){$("bookingsList").innerHTML=`<div class="empty-state">📭 No bookings found.</div>`;return;}
-  $("bookingsList").innerHTML=`<div class="bookings-grid">${list.map(cardHTML).join("")}</div>`;
+  if(!list.length){$("bookingsList").innerHTML=`<div class="estate">📭 No bookings found.</div>`;return;}
+  $("bookingsList").innerHTML=`<div class="bgrid">${list.map(cardHTML).join("")}</div>`;
   list.forEach(b=>{
     const p=document.querySelector(`[data-paid="${b.id}"]`);
     const c=document.querySelector(`[data-cancel="${b.id}"]`);
     const r=document.querySelector(`[data-resch="${b.id}"]`);
-    if(p) p.addEventListener("click",()=>markAsPaid(b));
+    if(p) p.addEventListener("click",()=>markPaid(b));
     if(c) c.addEventListener("click",()=>cancelBooking(b));
-    if(r) r.addEventListener("click",()=>openReschedule(b));
+    if(r) r.addEventListener("click",()=>openResch(b));
   });
 }
 
 function cardHTML(b){
-  const tc=b.bookingType?.includes("Ultra")?"t-ultra":b.bookingType?.includes("Off")?"t-off":"t-single";
-  const isDone=b.paymentStatus==="paid"||b.bookingStatus==="cancelled";
-  const canPaid=b.paymentStatus==="pending_review"&&b.bookingStatus!=="cancelled";
-  const canCancel=b.bookingStatus!=="cancelled"&&b.paymentStatus!=="paid";
-  const canResch=b.bookingStatus==="confirmed";
+  const tc=b.bookingType?.includes("Ultra")?"tu":b.bookingType?.includes("Off")?"to":"ts";
+  // FIXED: canReschedule = not cancelled/expired/completed/no_show (paid bookings CAN reschedule)
+  const canResch=!["cancelled","expired","completed","no_show"].includes(b.bookingStatus);
+  const isCancelled=b.bookingStatus==="cancelled";
+  const isPaid=b.paymentStatus==="paid";
+  const canMarkPaid=b.paymentStatus==="pending_review"&&!isCancelled;
+  const canCancel=!isCancelled&&!isPaid;
   const created=b.createdAt?.toDate?b.createdAt.toDate().toLocaleString("en-US",{dateStyle:"short",timeStyle:"short"}):"—";
-  const prevRow=b.previousDate?`<div class="field"><div class="fl">Previously</div><div class="fv dim">${b.previousDate} ${b.previousStartTime}–${b.previousEndTime}</div></div>`:"";
+  const prevRow=b.previousDate?`<div><div class="fl">Previously</div><div class="fv dim">${b.previousDate} ${b.previousStartTime}–${b.previousEndTime}</div></div>`:"";
   const slip=b.slipUrl
-    ?`<div class="slip-section"><div class="slip-lbl">Payment Slip</div><a href="${b.slipUrl}" target="_blank"><img class="slip-img" src="${b.slipUrl}" alt="Slip"/></a></div>`
-    :`<div class="slip-section"><div class="slip-lbl">Payment Slip</div><p class="no-slip">No slip yet</p></div>`;
-  const actions=isDone
-    ?`<button class="btn-done">${b.paymentStatus==="paid"?"✓ Paid":"✗ Cancelled"}</button>`
-    :`${canPaid?`<button class="btn-paid" data-paid="${b.id}">✓ Mark as Paid</button>`:""}
-      ${canResch?`<button class="btn-resch" data-resch="${b.id}">📅 Reschedule</button>`:""}
-      ${canCancel?`<button class="btn-cancel" data-cancel="${b.id}">✗ Cancel</button>`:""}`;
-  return `<div class="booking-card" id="card-${b.id}">
-    <div class="card-header"><span class="booking-code">${b.bookingCode||"—"}</span><span class="type-badge ${tc}">${b.bookingType||"—"}</span></div>
-    <div class="card-body">
-      <div class="booking-fields">
-        <div class="field"><div class="fl">Customer</div><div class="fv">${b.customerName||"—"}</div></div>
-        <div class="field"><div class="fl">Phone</div><div class="fv">${b.customerPhone||"—"}</div></div>
-        <div class="field"><div class="fl">Date</div><div class="fv">${b.date||"—"}</div></div>
-        <div class="field"><div class="fl">Time</div><div class="fv">${b.startTime||"—"} – ${b.endTime||"—"}</div></div>
-        <div class="field"><div class="fl">Price</div><div class="fv">฿${b.price??0}</div></div>
-        <div class="field"><div class="fl">Booking Status</div><div class="fv"><span class="sp s-${b.bookingStatus}">${b.bookingStatus||"—"}</span></div></div>
-        <div class="field"><div class="fl">Payment Status</div><div class="fv"><span class="sp s-${b.paymentStatus}">${b.paymentStatus||"—"}</span></div></div>
-        <div class="field"><div class="fl">Created</div><div class="fv dim">${created}</div></div>
+    ?`<div class="slip-sec"><div class="slbl">Payment Slip</div><a href="${b.slipUrl}" target="_blank"><img class="simg" src="${b.slipUrl}" alt="Slip"/></a></div>`
+    :`<div class="slip-sec"><div class="slbl">Payment Slip</div><p class="noslip">No slip yet</p></div>`;
+
+  // Show paid badge separately + reschedule button even when paid
+  const paidBadge=isPaid?`<span class="sp s-paid">✓ Paid</span>`:"";
+  const actions=isCancelled
+    ?`<button class="bdone">✗ Cancelled</button>`
+    :`${canMarkPaid?`<button class="bp" data-paid="${b.id}">✓ Mark as Paid</button>`:""}
+      ${canResch?`<button class="br" data-resch="${b.id}">📅 Reschedule</button>`:""}
+      ${canCancel?`<button class="bc" data-cancel="${b.id}">✗ Cancel</button>`:""}`;
+
+  return `<div class="bcard" id="card-${b.id}">
+    <div class="bcard-hdr"><span class="bcode">${b.bookingCode||"—"}</span><div style="display:flex;gap:5px;align-items:center">${paidBadge}<span class="tbadge ${tc}">${b.bookingType||"—"}</span></div></div>
+    <div class="bcard-body">
+      <div class="bfields">
+        <div><div class="fl">Customer</div><div class="fv">${b.customerName||"—"}</div></div>
+        <div><div class="fl">Phone</div><div class="fv">${b.customerPhone||"—"}</div></div>
+        <div><div class="fl">Date</div><div class="fv">${b.date||"—"}</div></div>
+        <div><div class="fl">Time</div><div class="fv">${b.startTime||"—"}–${b.endTime||"—"}</div></div>
+        <div><div class="fl">Price</div><div class="fv">฿${b.price??0}</div></div>
+        <div><div class="fl">Booking Status</div><div class="fv"><span class="sp s-${b.bookingStatus}">${b.bookingStatus||"—"}</span></div></div>
+        <div><div class="fl">Payment Status</div><div class="fv"><span class="sp s-${b.paymentStatus}">${b.paymentStatus||"—"}</span></div></div>
+        <div><div class="fl">Created</div><div class="fv dim">${created}</div></div>
         ${prevRow}
-        ${b.customerNote?`<div class="field" style="grid-column:1/-1"><div class="fl">Note</div><div class="fv dim">${b.customerNote}</div></div>`:""}
+        ${b.customerNote?`<div style="grid-column:1/-1"><div class="fl">Note</div><div class="fv dim">${b.customerNote}</div></div>`:""}
       </div>
       ${slip}
-      <div class="card-actions">${actions}</div>
+      <div class="acts">${actions}</div>
     </div></div>`;
 }
 
-async function markAsPaid(b){
-  const btn=document.querySelector(`[data-paid="${b.id}"]`);
-  if(btn){btn.disabled=true;btn.textContent="Saving...";}
+async function markPaid(b){
+  const btn=document.querySelector(`[data-paid="${b.id}"]`);if(btn){btn.disabled=true;btn.textContent="Saving...";}
   try{
     const batch=writeBatch(db);
     batch.update(doc(db,"bookings",b.id),{paymentStatus:"paid",bookingStatus:"confirmed",adminReviewedAt:serverTimestamp(),updatedAt:serverTimestamp()});
     batch.update(doc(db,"booking_slots",`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`),{paymentStatus:"paid",bookingStatus:"confirmed"});
-    await batch.commit();
-    showToast(`✓ ${b.bookingCode} marked as paid`);
-    await loadBookings();
+    await batch.commit();showToast(`✓ ${b.bookingCode} marked as paid`);await loadBookings();
   }catch(e){console.error(e);showToast("Failed.",true);if(btn){btn.disabled=false;btn.textContent="✓ Mark as Paid";}}
 }
 
 async function cancelBooking(b){
-  if(!confirm(`Cancel booking ${b.bookingCode}?\n${b.customerName} · ${b.date} · ${b.startTime}\n\nThis releases the slot.`))return;
-  const btn=document.querySelector(`[data-cancel="${b.id}"]`);
-  if(btn){btn.disabled=true;btn.textContent="Cancelling...";}
+  if(!confirm(`Cancel ${b.bookingCode}?\n${b.customerName} · ${b.date} · ${b.startTime}\n\nThis releases the slot.`))return;
+  const btn=document.querySelector(`[data-cancel="${b.id}"]`);if(btn){btn.disabled=true;btn.textContent="Cancelling...";}
   try{
     const batch=writeBatch(db);
     batch.update(doc(db,"bookings",b.id),{bookingStatus:"cancelled",paymentStatus:"rejected",cancelReason:"Slip rejected or payment not received",cancelledAt:serverTimestamp(),updatedAt:serverTimestamp()});
     batch.update(doc(db,"booking_slots",`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`),{bookingStatus:"cancelled",paymentStatus:"rejected"});
-    await batch.commit();
-    showToast(`✗ ${b.bookingCode} cancelled — slot released`);
-    await loadBookings();
+    await batch.commit();showToast(`✗ ${b.bookingCode} cancelled`);await loadBookings();
   }catch(e){console.error(e);showToast("Failed.",true);if(btn){btn.disabled=false;btn.textContent="✗ Cancel";}}
 }
 
-document.querySelectorAll(".filter-btn[data-filter]").forEach(btn=>{
-  btn.addEventListener("click",()=>{
-    activeFilter=btn.dataset.filter;
-    document.querySelectorAll(".filter-btn[data-filter]").forEach(b=>b.classList.remove("active"));
-    btn.classList.add("active"); renderBookings();
-  });
+document.querySelectorAll(".fbtn[data-filter]").forEach(btn=>{
+  btn.addEventListener("click",()=>{activeFilter=btn.dataset.filter;document.querySelectorAll(".fbtn[data-filter]").forEach(b=>b.classList.remove("on"));btn.classList.add("on");renderBookings();});
 });
 $("refreshBtn").addEventListener("click",loadBookings);
 
-// ── SLOT MANAGER ─────────────────────────────────────────────
-const allHours=()=>{const h=[];for(let i=OPEN_HOUR;i<CLOSE_HOUR;i++)h.push(i);return h;};
-const slotId=(date,h)=>`${RESOURCE_ID}_${date}_${String(h).padStart(2,"0")}00`;
-const fmtH=h=>`${String(h).padStart(2,"0")}:00`;
-const fmtEnd=h=>h+1>=24?"00:00 (+1)":`${String(h+1).padStart(2,"0")}:00`;
-function dateRange(startISO,days){
-  const dates=[],base=new Date(startISO+"T00:00:00");
-  for(let i=0;i<days;i++){const d=new Date(base);d.setDate(base.getDate()+i);dates.push(d.toISOString().slice(0,10));}
-  return dates;
-}
+// ── SLOT MANAGER ─────────────────────────────────────────────────
+const allH=()=>{const h=[];for(let i=OPEN_HOUR;i<CLOSE_HOUR;i++)h.push(i);return h;};
+const slId=(date,h)=>`${RESOURCE_ID}_${date}_${String(h).padStart(2,"0")}00`;
+const fH=h=>`${String(h).padStart(2,"0")}:00`;
+const fEnd=h=>h+1>=24?"00:00 (+1)":`${String(h+1).padStart(2,"0")}:00`;
+function dateRange(s,n){const d=[],b=new Date(s+"T00:00:00");for(let i=0;i<n;i++){const x=new Date(b);x.setDate(b.getDate()+i);d.push(x.toISOString().slice(0,10));}return d;}
 
-async function setSlots(dates,closeMode=false){
-  const admin=sessionStorage.getItem("adminName")||"admin";
-  const now=Timestamp.now(),batch=writeBatch(db);
+async function setSlots(dates,close=false){
+  const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now(),batch=writeBatch(db);
   dates.forEach(date=>{
-    allHours().forEach(h=>{
-      const ref=doc(db,"available_slots",slotId(date,h));
-      batch.set(ref,closeMode
-        ?{resourceId:RESOURCE_ID,date,startTime:fmtH(h),endTime:fmtEnd(h),status:"closed",closedAt:now,closedBy:admin,openedAt:null,openedBy:null}
-        :{resourceId:RESOURCE_ID,date,startTime:fmtH(h),endTime:fmtEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null}
+    allH().forEach(h=>{
+      const ref=doc(db,"available_slots",slId(date,h));
+      batch.set(ref,close
+        ?{resourceId:RESOURCE_ID,date,startTime:fH(h),endTime:fEnd(h),status:"closed",closedAt:now,closedBy:admin,openedAt:null,openedBy:null}
+        :{resourceId:RESOURCE_ID,date,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null}
       );
     });
   });
   await batch.commit();
 }
 
+function getViewDate(){return $("viewDate").value;}
+
 $("openWeekBtn").addEventListener("click",async()=>{
-  const start=$("weekStartDate").value;
-  if(!start){showToast("Pick a week start date.",true);return;}
+  const s=$("weekDate").value;if(!s){showToast("Pick a week start date.",true);return;}
   const btn=$("openWeekBtn");btn.disabled=true;btn.textContent="Opening...";
-  try{await setSlots(dateRange(start,7));showToast(`✓ Opened 7 days from ${start}`);}
+  try{await setSlots(dateRange(s,7));showToast(`✓ Opened 7 days from ${s}`);
+    if($("viewDate").value)await loadSlotGrid($("viewDate").value);}
   catch(e){console.error(e);showToast("Failed.",true);}
   finally{btn.disabled=false;btn.textContent="⚡ Open Full Week (7 days)";}
 });
 
 $("openDayBtn").addEventListener("click",async()=>{
-  const d=$("singleDayDate").value;
-  if(!d){showToast("Pick a date.",true);return;}
+  const d=$("dayDate").value;if(!d){showToast("Pick a date.",true);return;}
   const btn=$("openDayBtn");btn.disabled=true;btn.textContent="Opening...";
-  try{await setSlots([d]);showToast(`✓ Opened all slots for ${d}`);}
+  try{await setSlots([d]);showToast(`✓ Opened all slots for ${d}`);
+    if(getViewDate()===d)await loadSlotGrid(d);}
   catch(e){console.error(e);showToast("Failed.",true);}
   finally{btn.disabled=false;btn.textContent="+ Open This Day";}
 });
 
 $("closeDayBtn").addEventListener("click",async()=>{
-  const d=$("singleDayDate").value;
-  if(!d){showToast("Pick a date.",true);return;}
-  if(!confirm(`Close ALL slots for ${d}?\n\nExisting confirmed bookings are NOT cancelled.`))return;
+  const d=$("dayDate").value;if(!d){showToast("Pick a date.",true);return;}
+  if(!confirm(`Close ALL slots for ${d}?\nExisting confirmed bookings are NOT cancelled.`))return;
   const btn=$("closeDayBtn");btn.disabled=true;btn.textContent="Closing...";
-  try{await setSlots([d],true);showToast(`✓ Closed all slots for ${d}`);}
+  try{await setSlots([d],true);showToast(`✓ Closed all slots for ${d}`);
+    if(getViewDate()===d)await loadSlotGrid(d);}
   catch(e){console.error(e);showToast("Failed.",true);}
   finally{btn.disabled=false;btn.textContent="✕ Close This Day";}
 });
 
 $("loadSlotsBtn").addEventListener("click",()=>{
-  const d=$("viewSlotDate").value;
-  if(!d){showToast("Pick a date.",true);return;}
-  loadSlotGrid(d);
+  const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}loadSlotGrid(d);
+});
+
+$("openAllBtn").addEventListener("click",async()=>{
+  const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}
+  const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now(),batch=writeBatch(db);
+  // Load current to only create missing ones
+  const snap=await getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)));
+  const existing=new Set();snap.forEach(x=>existing.add(x.data().startTime));
+  let count=0;
+  allH().forEach(h=>{
+    if(!existing.has(fH(h))){
+      batch.set(doc(db,"available_slots",slId(d,h)),{resourceId:RESOURCE_ID,date:d,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null});
+      count++;
+    }
+  });
+  if(count===0){showToast("All slots already set.");return;}
+  await batch.commit();showToast(`✓ Opened ${count} new slots for ${d}`);await loadSlotGrid(d);
+});
+
+$("closeUnbookedBtn").addEventListener("click",async()=>{
+  const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}
+  if(!confirm(`Close all UNBOOKED open slots for ${d}?`))return;
+  const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now();
+
+  const[avSnap,bkSnap]=await Promise.all([
+    getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID),where("status","==","open"))),
+    getDocs(query(collection(db,"booking_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)))
+  ]);
+  const booked=new Set();const now2=new Date();
+  bkSnap.forEach(x=>{const bd=x.data();if(bd.bookingStatus==="confirmed")booked.add(bd.hour);if(bd.bookingStatus==="pending_payment"){const exp=bd.expiresAt?.toDate?.();if(exp&&exp>now2)booked.add(bd.hour);}});
+  const batch=writeBatch(db);let count=0;
+  avSnap.forEach(x=>{if(!booked.has(x.data().startTime)){batch.update(x.ref,{status:"closed",closedAt:now,closedBy:admin});count++;}});
+  if(!count){showToast("No unbooked open slots to close.");return;}
+  await batch.commit();showToast(`✓ Closed ${count} unbooked slots`);await loadSlotGrid(d);
 });
 
 async function loadSlotGrid(dateISO){
-  $("slotGrid").innerHTML=`<div class="sm-loading"><div class="spinner"></div><p>Loading...</p></div>`;
+  $("slotGrid").innerHTML=`<div class="smload"><div class="spinner"></div><p>Loading...</p></div>`;
+  $("holidayBox").style.display="none";
   try{
-    const[availSnap,bookSnap]=await Promise.all([
+    const[avSnap,bkSnap,holSnap]=await Promise.all([
       getDocs(query(collection(db,"available_slots"),where("date","==",dateISO),where("resourceId","==",RESOURCE_ID))),
-      getDocs(query(collection(db,"booking_slots"),where("date","==",dateISO),where("resourceId","==",RESOURCE_ID)))
+      getDocs(query(collection(db,"booking_slots"),where("date","==",dateISO),where("resourceId","==",RESOURCE_ID))),
+      getDoc(doc(db,"holidays",dateISO)),
     ]);
-    const availMap={};
-    availSnap.forEach(d=>{availMap[d.data().startTime]={id:d.id,...d.data()};});
-    const bookedSet=new Set(),now=new Date();
-    bookSnap.forEach(d=>{
-      const bd=d.data();
-      if(bd.bookingStatus==="confirmed")bookedSet.add(bd.hour);
-      if(bd.bookingStatus==="pending_payment"){const exp=bd.expiresAt?.toDate?.();if(exp&&exp>now)bookedSet.add(bd.hour);}
-    });
+    const avMap={};avSnap.forEach(d=>{avMap[d.data().startTime]={id:d.id,...d.data()};});
+    const booked=new Set();const now=new Date();
+    bkSnap.forEach(d=>{const bd=d.data();if(bd.bookingStatus==="confirmed")booked.add(bd.hour);if(bd.bookingStatus==="pending_payment"){const exp=bd.expiresAt?.toDate?.();if(exp&&exp>now)booked.add(bd.hour);}});
 
-    const rows=allHours().map(h=>{
-      const time=fmtH(h),avail=availMap[time],isBooked=bookedSet.has(time);
+    const rows=allH().map(h=>{
+      const time=fH(h),av=avMap[time],isB=booked.has(time);
       let sHtml,tHtml;
-      if(!avail){
-        sHtml=`<span class="slot-status ss-none">Not Set</span>`;
-        tHtml=`<button class="slot-toggle st-create" data-action="create" data-date="${dateISO}" data-hour="${h}">Open</button>`;
-      }else if(avail.status==="open"&&isBooked){
-        sHtml=`<span class="slot-status ss-booked">Booked</span>`;
-        tHtml=`<button class="slot-toggle st-dis" disabled>Can't Close</button>`;
-      }else if(avail.status==="open"){
-        sHtml=`<span class="slot-status ss-open">Open</span>`;
-        tHtml=`<button class="slot-toggle st-close" data-action="close" data-id="${avail.id}" data-date="${dateISO}" data-hour="${h}">Close</button>`;
-      }else{
-        sHtml=`<span class="slot-status ss-closed">Closed</span>`;
-        tHtml=`<button class="slot-toggle st-open" data-action="reopen" data-id="${avail.id}" data-date="${dateISO}" data-hour="${h}">Reopen</button>`;
-      }
-      return `<div class="slot-row"><span class="slot-time">${time} – ${fmtEnd(h)}</span>${sHtml}${tHtml}</div>`;
+      if(!av){sHtml=`<span class="sstatus ss-none">Not Set</span>`;tHtml=`<button class="stoggle st-create" data-act="create" data-date="${dateISO}" data-h="${h}">Open</button>`;}
+      else if(av.status==="open"&&isB){sHtml=`<span class="sstatus ss-booked">Booked</span>`;tHtml=`<button class="stoggle st-dis" disabled>Can't Close</button>`;}
+      else if(av.status==="open"){sHtml=`<span class="sstatus ss-open">Open</span>`;tHtml=`<button class="stoggle st-close" data-act="close" data-id="${av.id}" data-date="${dateISO}" data-h="${h}">Close</button>`;}
+      else{sHtml=`<span class="sstatus ss-closed">Closed</span>`;tHtml=`<button class="stoggle st-open" data-act="reopen" data-id="${av.id}" data-date="${dateISO}" data-h="${h}">Reopen</button>`;}
+      return `<div class="srow"><span class="stime">${time} – ${fEnd(h)}</span>${sHtml}${tHtml}</div>`;
     }).join("");
 
-    $("slotGrid").innerHTML=`<div class="slot-grid">${rows}</div>`;
-    $("slotGrid").querySelectorAll("[data-action]").forEach(btn=>{
-      btn.addEventListener("click",()=>handleToggle(btn,dateISO));
-    });
-  }catch(e){console.error(e);$("slotGrid").innerHTML=`<div class="sm-empty">❌ Failed to load.</div>`;}
+    $("slotGrid").innerHTML=`<div class="sgrid">${rows}</div>`;
+    $("slotGrid").querySelectorAll("[data-act]").forEach(btn=>btn.addEventListener("click",()=>toggleSlot(btn,dateISO)));
+
+    // Holiday section
+    $("holidayBox").style.display="block";
+    const holData=holSnap.exists()?holSnap.data():null;
+    $("holCheck").checked=holData?.isHoliday===true;
+    $("holName").value=holData?.name||"";
+    $("holActiveTag").style.display=holData?.isHoliday?"inline-block":"none";
+
+  }catch(e){console.error(e);$("slotGrid").innerHTML=`<div class="smempty">❌ Failed to load.</div>`;}
 }
 
-async function handleToggle(btn,dateISO){
-  const action=btn.dataset.action,h=Number(btn.dataset.hour),existId=btn.dataset.id;
+async function toggleSlot(btn,dateISO){
+  const act=btn.dataset.act,h=Number(btn.dataset.h),existId=btn.dataset.id;
   const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now();
   btn.disabled=true;
   try{
-    if(action==="create"||action==="reopen"){
-      const id=existId||slotId(dateISO,h);
-      await setDoc(doc(db,"available_slots",id),{resourceId:RESOURCE_ID,date:dateISO,startTime:fmtH(h),endTime:fmtEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null});
-    }else{
-      await updateDoc(doc(db,"available_slots",existId),{status:"closed",closedAt:now,closedBy:admin});
-    }
+    if(act==="create"||act==="reopen"){
+      const id=existId||slId(dateISO,h);
+      await setDoc(doc(db,"available_slots",id),{resourceId:RESOURCE_ID,date:dateISO,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null});
+    }else{await updateDoc(doc(db,"available_slots",existId),{status:"closed",closedAt:now,closedBy:admin});}
     loadSlotGrid(dateISO);
   }catch(e){console.error(e);showToast("Toggle failed.",true);btn.disabled=false;}
 }
 
-// ── RESCHEDULE ───────────────────────────────────────────────
-function openReschedule(b){
-  reschBooking=b; reschNewTime=null;
-  $("reschCode").textContent   =b.bookingCode;
-  $("reschOldTime").textContent=`Current: ${b.date} · ${b.startTime} – ${b.endTime}`;
-  $("reschCustomer").textContent=`${b.customerName} · ${b.customerPhone}`;
-  $("reschDate").value=""; $("reschTimeGrid").innerHTML=""; $("reschHint").textContent="";
-  $("confirmReschBtn").disabled=true;
-  $("rescheduleModal").style.display="flex";
+// Holiday save
+$("holSave").addEventListener("click",async()=>{
+  const d=getViewDate();if(!d){showToast("No date loaded.",true);return;}
+  const isHol=$("holCheck").checked,name=$("holName").value.trim();
+  const admin=sessionStorage.getItem("adminName")||"admin";
+  try{
+    await setDoc(doc(db,"holidays",d),{date:d,isHoliday:isHol,name,updatedBy:admin,updatedAt:serverTimestamp()});
+    $("holActiveTag").style.display=isHol?"inline-block":"none";
+    showToast(isHol?`✓ ${d} marked as holiday`:`✓ ${d} holiday removed`);
+  }catch(e){console.error(e);showToast("Failed to save holiday.",true);}
+});
+
+// ── PASS PURCHASES ───────────────────────────────────────────────
+let allPasses=[],ppFilter="all";
+
+async function loadPasses(){
+  $("passList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading...</p></div>`;
+  try{
+    const snap=await getDocs(query(collection(db,"pass_purchases"),orderBy("createdAt","desc")));
+    allPasses=snap.docs.map(d=>({id:d.id,...d.data()}));
+    updatePassStats();renderPasses();
+  }catch(e){console.error(e);$("passList").innerHTML=`<div class="estate">❌ Failed to load.</div>`;}
 }
 
-function closeModal(){$("rescheduleModal").style.display="none";reschBooking=null;reschNewTime=null;}
-$("modalClose").addEventListener("click",closeModal);
-$("cancelReschBtn").addEventListener("click",closeModal);
-$("rescheduleModal").addEventListener("click",e=>{if(e.target===$("rescheduleModal"))closeModal();});
+function updatePassStats(){
+  $("ppTotal").textContent=allPasses.length;
+  $("ppPending").textContent=allPasses.filter(p=>p.status==="pending_payment").length;
+  $("ppReview").textContent=allPasses.filter(p=>p.status==="pending_review").length;
+  $("ppActive").textContent=allPasses.filter(p=>p.status==="active").length;
+  $("ppRejected").textContent=allPasses.filter(p=>p.status==="rejected").length;
+}
 
-$("loadReschSlotsBtn").addEventListener("click",async()=>{
-  const dateISO=$("reschDate").value;
-  if(!dateISO){showToast("Pick a new date.",true);return;}
-  const btn=$("loadReschSlotsBtn");
-  btn.disabled=true;btn.textContent="Loading...";
-  $("reschTimeGrid").innerHTML="";$("reschHint").textContent="";
-  $("confirmReschBtn").disabled=true;reschNewTime=null;
+function renderPasses(){
+  const list=ppFilter==="all"?allPasses:allPasses.filter(p=>p.status===ppFilter||p.paymentStatus===ppFilter);
+  if(!list.length){$("passList").innerHTML=`<div class="estate">📭 No pass purchases found.</div>`;return;}
+  $("passList").innerHTML=`<div class="ppgrid main">${list.map(ppCardHTML).join("")}</div>`;
+  list.forEach(p=>{
+    const ab=document.querySelector(`[data-activate="${p.id}"]`);
+    const rb=document.querySelector(`[data-rejectpp="${p.id}"]`);
+    if(ab) ab.addEventListener("click",()=>activatePass(p));
+    if(rb) rb.addEventListener("click",()=>rejectPass(p));
+  });
+}
 
+function ppCardHTML(p){
+  const bc=p.packageType?.includes("ultra")?"pp-ultra":"pp-off";
+  const canActivate=p.status==="pending_review";
+  const canReject=p.status!=="rejected"&&p.status!=="active"&&p.status!=="cancelled";
+  const slip=p.slipUrl
+    ?`<div class="slip-sec"><div class="slbl">Payment Slip</div><a href="${p.slipUrl}" target="_blank"><img class="simg" src="${p.slipUrl}" alt="Slip"/></a></div>`
+    :`<div class="slip-sec"><div class="slbl">Payment Slip</div><p class="noslip">No slip yet</p></div>`;
+  const created=p.createdAt?.toDate?p.createdAt.toDate().toLocaleString("en-US",{dateStyle:"short",timeStyle:"short"}):"—";
+  const acts=p.status==="active"
+    ?`<button class="bdone">✓ Active</button>`
+    :p.status==="rejected"
+    ?`<button class="bdone">✗ Rejected</button>`
+    :`${canActivate?`<button class="bp" data-activate="${p.id}">✓ Activate Pass</button>`:""}
+      ${canReject?`<button class="bc" data-rejectpp="${p.id}">✗ Reject</button>`:""}`;
+
+  return `<div class="ppcard">
+    <div class="ppcard-hdr"><span class="ppcode">${p.purchaseCode||"—"}</span><span class="ppbadge ${bc}">${p.packageName||"—"}</span></div>
+    <div class="ppcard-body">
+      <div class="bfields">
+        <div><div class="fl">Customer</div><div class="fv">${p.customerName||"—"}</div></div>
+        <div><div class="fl">Phone</div><div class="fv">${p.customerPhone||"—"}</div></div>
+        <div><div class="fl">Price</div><div class="fv">฿${p.price?.toLocaleString("en-US")||"—"}</div></div>
+        <div><div class="fl">Status</div><div class="fv"><span class="sp s-${p.status}">${p.status||"—"}</span></div></div>
+        <div><div class="fl">Payment</div><div class="fv"><span class="sp s-${p.paymentStatus}">${p.paymentStatus||"—"}</span></div></div>
+        <div><div class="fl">Created</div><div class="fv dim">${created}</div></div>
+      </div>
+      ${slip}
+      <div class="acts">${acts}</div>
+    </div></div>`;
+}
+
+async function activatePass(p){
+  const btn=document.querySelector(`[data-activate="${p.id}"]`);if(btn){btn.disabled=true;btn.textContent="Activating...";}
   try{
-    const[availSnap,bookSnap]=await Promise.all([
-      getDocs(query(collection(db,"available_slots"),where("date","==",dateISO),where("resourceId","==",RESOURCE_ID),where("status","==","open"))),
-      getDocs(query(collection(db,"booking_slots"),where("date","==",dateISO),where("resourceId","==",RESOURCE_ID)))
-    ]);
-    const openSet=new Set();
-    availSnap.forEach(d=>openSet.add(d.data().startTime));
-
-    const blockedSet=new Set(),now=new Date();
-    bookSnap.forEach(d=>{
-      const bd=d.data();
-      if(bd.bookingCode===reschBooking?.bookingCode)return;
-      if(bd.bookingStatus==="confirmed")blockedSet.add(bd.hour);
-      if(bd.bookingStatus==="pending_payment"){const exp=bd.expiresAt?.toDate?.();if(exp&&exp>now)blockedSet.add(bd.hour);}
+    const validFrom=new Date();
+    const validUntil=new Date(validFrom.getTime()+(p.validityDays||30)*24*60*60*1000);
+    const batch=writeBatch(db);
+    batch.update(doc(db,"pass_purchases",p.id),{status:"active",paymentStatus:"paid",adminReviewedAt:serverTimestamp(),updatedAt:serverTimestamp()});
+    const pkgRef=doc(collection(db,"customer_packages"));
+    batch.set(pkgRef,{
+      lineUserId:p.lineUserId,lineDisplayName:p.lineDisplayName||"",customerName:p.customerName,customerPhone:p.customerPhone,
+      packageType:p.packageType,packageName:p.packageName,
+      totalMinutes:p.totalMinutes||null,remainingMinutes:p.totalMinutes||null,
+      weeklyLimitHours:p.weeklyLimitHours||null,monthlyLimitHours:p.monthlyLimitHours||null,
+      validFrom:Timestamp.fromDate(validFrom),validUntil:Timestamp.fromDate(validUntil),
+      status:"active",createdFromPurchaseCode:p.purchaseCode,createdAt:serverTimestamp(),
     });
+    await batch.commit();
+    showToast(`✓ ${p.purchaseCode} activated! customer_packages created.`);
+    await loadPasses();
+  }catch(e){console.error(e);showToast("Activation failed.",true);if(btn){btn.disabled=false;btn.textContent="✓ Activate Pass";}}
+}
 
-    if(!openSet.size){
-      $("reschTimeGrid").innerHTML=`<p style="color:var(--muted);font-size:.82rem;grid-column:1/-1">No open slots. Open them in Slot Manager first.</p>`;
-      return;
-    }
+async function rejectPass(p){
+  if(!confirm(`Reject pass purchase ${p.purchaseCode}?\n${p.customerName} · ${p.packageName}`))return;
+  const btn=document.querySelector(`[data-rejectpp="${p.id}"]`);if(btn){btn.disabled=true;btn.textContent="Rejecting...";}
+  try{
+    await updateDoc(doc(db,"pass_purchases",p.id),{status:"rejected",paymentStatus:"rejected",rejectReason:"Payment slip rejected or payment not received",updatedAt:serverTimestamp()});
+    showToast(`✗ ${p.purchaseCode} rejected`);await loadPasses();
+  }catch(e){console.error(e);showToast("Failed.",true);if(btn){btn.disabled=false;btn.textContent="✗ Reject";}}
+}
 
-    $("reschTimeGrid").innerHTML=allHours().map(h=>{
-      const time=fmtH(h);
-      const disabled=!openSet.has(time)||blockedSet.has(time)||(time===reschBooking?.startTime&&dateISO===reschBooking?.date);
-      const title=!openSet.has(time)?"Not opened":blockedSet.has(time)?"Already booked":"Available";
-      return `<button class="mt-btn${disabled?" disabled":""}" data-time="${time}" ${disabled?"disabled":""} title="${title}">${time}</button>`;
+document.querySelectorAll(".fbtn[data-ppfilter]").forEach(btn=>{
+  btn.addEventListener("click",()=>{ppFilter=btn.dataset.ppfilter;document.querySelectorAll(".fbtn[data-ppfilter]").forEach(b=>b.classList.remove("on"));btn.classList.add("on");renderPasses();});
+});
+$("refreshPassBtn").addEventListener("click",loadPasses);
+
+// ── RESCHEDULE ───────────────────────────────────────────────────
+function openResch(b){
+  reschBooking=b;reschTime=null;
+  $("rCode").textContent=b.bookingCode;
+  $("rOldTime").textContent=`Current: ${b.date} · ${b.startTime}–${b.endTime}`;
+  $("rCust").textContent=`${b.customerName} · ${b.customerPhone}`;
+  $("rDate").value="";$("rTimeGrid").innerHTML="";$("rHint").textContent="";
+  $("mConfirm").disabled=true;$("reschModal").style.display="flex";
+}
+function closeModal(){$("reschModal").style.display="none";reschBooking=null;reschTime=null;}
+$("mClose").addEventListener("click",closeModal);$("mCancel").addEventListener("click",closeModal);
+$("reschModal").addEventListener("click",e=>{if(e.target===$("reschModal"))closeModal();});
+
+$("mLoadSlots").addEventListener("click",async()=>{
+  const d=$("rDate").value;if(!d){showToast("Pick a new date.",true);return;}
+  const btn=$("mLoadSlots");btn.disabled=true;btn.textContent="Loading...";
+  $("rTimeGrid").innerHTML="";$("rHint").textContent="";$("mConfirm").disabled=true;reschTime=null;
+  try{
+    const[avSnap,bkSnap]=await Promise.all([
+      getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID),where("status","==","open"))),
+      getDocs(query(collection(db,"booking_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)))
+    ]);
+    const openSet=new Set();avSnap.forEach(x=>openSet.add(x.data().startTime));
+    const blocked=new Set();const now=new Date();
+    bkSnap.forEach(x=>{const bd=x.data();if(bd.bookingCode===reschBooking?.bookingCode)return;if(bd.bookingStatus==="confirmed")blocked.add(bd.hour);if(bd.bookingStatus==="pending_payment"){const exp=bd.expiresAt?.toDate?.();if(exp&&exp>now)blocked.add(bd.hour);}});
+
+    if(!openSet.size){$("rTimeGrid").innerHTML=`<p style="color:var(--m);font-size:.78rem;grid-column:1/-1">No open slots. Open them in Slot Manager first.</p>`;return;}
+
+    $("rTimeGrid").innerHTML=allH().map(h=>{
+      const time=fH(h);
+      const dis=!openSet.has(time)||blocked.has(time)||(time===reschBooking?.startTime&&d===reschBooking?.date);
+      return `<button class="mtbtn${dis?" disabled":""}" data-time="${time}" ${dis?"disabled":""} title="${!openSet.has(time)?"Not opened":blocked.has(time)?"Booked":"Available"}">${time}</button>`;
     }).join("");
 
-    $("reschTimeGrid").querySelectorAll(".mt-btn:not(:disabled)").forEach(btn=>{
+    $("rTimeGrid").querySelectorAll(".mtbtn:not(:disabled)").forEach(btn=>{
       btn.addEventListener("click",()=>{
-        $("reschTimeGrid").querySelectorAll(".mt-btn").forEach(b=>b.classList.remove("sel"));
-        btn.classList.add("sel"); reschNewTime=btn.dataset.time;
-        $("reschHint").textContent=`Selected: ${reschNewTime} – ${fmtEnd(Number(reschNewTime.split(":")[0]))}`;
-        $("confirmReschBtn").disabled=false;
+        $("rTimeGrid").querySelectorAll(".mtbtn").forEach(b=>b.classList.remove("sel"));
+        btn.classList.add("sel");reschTime=btn.dataset.time;
+        const endH=Number(reschTime.split(":")[0])+1;
+        $("rHint").textContent=`Selected: ${reschTime} – ${endH>=24?"00:00 (+1)":`${String(endH).padStart(2,"0")}:00`}`;
+        $("mConfirm").disabled=false;
       });
     });
   }catch(e){console.error(e);showToast("Failed to load slots.",true);}
   finally{btn.disabled=false;btn.textContent="Load Available Slots →";}
 });
 
-$("confirmReschBtn").addEventListener("click",async()=>{
-  if(!reschBooking||!reschNewTime)return;
-  const newDate=$("reschDate").value;
-  const endH=Number(reschNewTime.split(":")[0])+1;
+$("mConfirm").addEventListener("click",async()=>{
+  if(!reschBooking||!reschTime)return;
+  const newDate=$("rDate").value;
+  const endH=Number(reschTime.split(":")[0])+1;
   const newEnd=endH>=24?"00:00 (+1)":`${String(endH).padStart(2,"0")}:00`;
+  const oldSlId=`${RESOURCE_ID}_${reschBooking.date}_${reschBooking.startTime.replace(":","")}`; 
+  const newSlId=`${RESOURCE_ID}_${newDate}_${reschTime.replace(":","")}`; 
+  const avSlId =`${RESOURCE_ID}_${newDate}_${reschTime.replace(":","")}`; 
 
-  const oldSId=`${RESOURCE_ID}_${reschBooking.date}_${reschBooking.startTime.replace(":","")}`; 
-  const newSId=`${RESOURCE_ID}_${newDate}_${reschNewTime.replace(":","")}`; 
-  const avSId =`${RESOURCE_ID}_${newDate}_${reschNewTime.replace(":","")}`; 
-
-  const btn=$("confirmReschBtn");btn.disabled=true;btn.textContent="Rescheduling...";
-
+  const btn=$("mConfirm");btn.disabled=true;btn.textContent="Rescheduling...";
   try{
     await runTransaction(db,async t=>{
-      const[avSnap,newSnap]=await Promise.all([t.get(doc(db,"available_slots",avSId)),t.get(doc(db,"booking_slots",newSId))]);
-      if(!avSnap.exists()||avSnap.data().status!=="open")throw new Error("Selected slot is not open.");
+      const[avSnap,newSnap]=await Promise.all([t.get(doc(db,"available_slots",avSlId)),t.get(doc(db,"booking_slots",newSlId))]);
+      if(!avSnap.exists()||avSnap.data().status!=="open") throw new Error("Selected slot is not open.");
       if(newSnap.exists()){
         const nd=newSnap.data();
         if(nd.bookingCode!==reschBooking.bookingCode){
-          if(nd.bookingStatus==="confirmed")throw new Error("Slot is already booked.");
+          if(nd.bookingStatus==="confirmed") throw new Error("Slot is already booked.");
           if(nd.bookingStatus==="pending_payment"){const exp=nd.expiresAt?.toDate?.();if(!exp||exp>new Date())throw new Error("Slot is temporarily held.");}
         }
       }
       t.update(doc(db,"bookings",reschBooking.id),{
-        date:newDate,startTime:reschNewTime,endTime:newEnd,
+        date:newDate,startTime:reschTime,endTime:newEnd,
         previousDate:reschBooking.date,previousStartTime:reschBooking.startTime,previousEndTime:reschBooking.endTime,
         rescheduledAt:serverTimestamp(),updatedAt:serverTimestamp(),
       });
-      t.update(doc(db,"booking_slots",oldSId),{bookingStatus:"rescheduled",paymentStatus:reschBooking.paymentStatus});
-      t.set(doc(db,"booking_slots",newSId),{bookingCode:reschBooking.bookingCode,resourceId:RESOURCE_ID,date:newDate,hour:reschNewTime,bookingStatus:reschBooking.bookingStatus,paymentStatus:reschBooking.paymentStatus,expiresAt:null});
+      t.update(doc(db,"booking_slots",oldSlId),{bookingStatus:"rescheduled",paymentStatus:reschBooking.paymentStatus});
+      t.set(doc(db,"booking_slots",newSlId),{bookingCode:reschBooking.bookingCode,resourceId:RESOURCE_ID,date:newDate,hour:reschTime,bookingStatus:reschBooking.bookingStatus,paymentStatus:reschBooking.paymentStatus,expiresAt:null});
     });
-    showToast(`📅 ${reschBooking.bookingCode} → ${newDate} ${reschNewTime}`);
-    closeModal(); await loadBookings();
+    showToast(`📅 ${reschBooking.bookingCode} → ${newDate} ${reschTime}`);
+    closeModal();await loadBookings();
   }catch(e){console.error(e);showToast(e.message||"Reschedule failed.",true);btn.disabled=false;btn.textContent="Confirm Reschedule";}
 });
 
-// ── TOAST ────────────────────────────────────────────────────
-function showToast(msg,isError=false){
-  const t=$("toast");t.textContent=msg;
-  t.className=`toast show${isError?" error":""}`;
+// ── TOAST ────────────────────────────────────────────────────────
+function showToast(msg,isErr=false){
+  const t=$("toast");t.textContent=msg;t.className=`toast show${isErr?" err":""}`;
   setTimeout(()=>t.classList.remove("show"),3200);
 }
 
-// ── BOOT ─────────────────────────────────────────────────────
+// ── BOOT ─────────────────────────────────────────────────────────
 const todayISO=new Date().toISOString().slice(0,10);
-["weekStartDate","singleDayDate","viewSlotDate"].forEach(id=>{const el=$(id);if(el)el.value=todayISO;});
-if(!checkSession()){/* show login */}else{loadBookings();}
+["weekDate","dayDate","viewDate"].forEach(id=>{const el=$(id);if(el)el.value=todayISO;});
+if(!checkSession()){/* show login */}else{loadBookings();loadPasses();}
 </script>
 </body>
 </html>

@@ -1,924 +1,1094 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Ultra Tennis Booking</title>
   <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
-    :root {
-      --bg: #f4f7f2;
-      --surface: #ffffff;
-      --surface-soft: #eef5ea;
-      --ink: #18211c;
-      --muted: #68736a;
-      --line: #dbe5d8;
-      --brand: #06c755;
-      --brand-dark: #079944;
-      --accent: #0f7c80;
-      --danger: #d94f3d;
-      --warning: #e07d10;
-      --shadow: 0 16px 36px rgba(26,42,31,0.12);
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; min-height: 100vh;
-      background: linear-gradient(180deg, rgba(6,199,85,0.12), transparent 280px), var(--bg);
-      color: var(--ink);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
-    }
-    button { border: 0; font: inherit; cursor: pointer; }
+    :root{--bg:#f4f7f2;--surface:#fff;--soft:#eef5ea;--ink:#18211c;--muted:#68736a;--line:#dbe5d8;--brand:#06c755;--brand-dark:#079944;--accent:#0f7c80;--danger:#d94f3d;--warning:#e07d10;--r:8px;}
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:linear-gradient(180deg,rgba(6,199,85,.1),transparent 260px),var(--bg);color:var(--ink);min-height:100vh;}
+    button{border:0;font:inherit;cursor:pointer;}
+    input,select,textarea{font:inherit;}
 
-    .app-shell { width: min(100%, 520px); min-height: 100vh; margin: 0 auto; padding: 18px 14px 40px; }
+    /* Loading */
+    .loverlay{position:fixed;inset:0;background:rgba(244,247,242,.96);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:999;}
+    .spinner{width:36px;height:36px;border:3px solid var(--line);border-top-color:var(--brand);border-radius:50%;animation:spin .8s linear infinite;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+    .loverlay p{color:var(--muted);font-size:.88rem;}
 
-    /* LOADING */
-    .loading-overlay {
-      position: fixed; inset: 0; background: rgba(244,247,242,0.95);
-      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; z-index: 999;
-    }
-    .spinner { width: 38px; height: 38px; border: 3px solid var(--line); border-top-color: var(--brand); border-radius: 50%; animation: spin 0.8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .loading-overlay p { color: var(--muted); font-size: 0.9rem; margin: 0; }
+    /* Shell */
+    .shell{width:min(100%,520px);margin:0 auto;padding-bottom:40px;}
 
-    /* PROFILE HEADER */
-    .profile-header { display: grid; grid-template-columns: 58px 1fr; gap: 14px; align-items: center; padding: 18px 4px 14px; }
-    .avatar { display: grid; width: 58px; height: 58px; place-items: center; border-radius: 50%; background: linear-gradient(135deg, var(--brand), var(--accent)); color: white; font-size: 1.35rem; font-weight: 800; box-shadow: var(--shadow); overflow: hidden; }
-    .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
-    .eyebrow { margin: 0; color: var(--brand-dark); font-size: 0.84rem; font-weight: 800; text-transform: uppercase; }
-    h1 { margin: 0; font-size: 1.55rem; line-height: 1.15; }
-    h2 { margin: 0; font-size: 1rem; line-height: 1.25; }
-    .member-line { margin: 0; color: var(--muted); font-size: 0.82rem; margin-top: 2px; }
+    /* Profile header */
+    .pheader{display:grid;grid-template-columns:50px 1fr;gap:12px;align-items:center;padding:14px 16px;background:rgba(255,255,255,.7);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50;backdrop-filter:blur(8px);}
+    .avatar{width:50px;height:50px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--accent));display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.1rem;font-weight:800;overflow:hidden;flex-shrink:0;}
+    .avatar img{width:100%;height:100%;object-fit:cover;border-radius:50%;}
+    .pname{font-size:1rem;font-weight:700;}
+    .psub{font-size:.72rem;color:var(--muted);}
 
-    /* CARDS */
-    .card { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,0.92); box-shadow: 0 8px 22px rgba(26,42,31,0.06); padding: 14px; }
-    .section-heading { display: flex; min-height: 28px; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-    .section-heading p { margin: 0; color: var(--muted); font-size: 0.84rem; }
+    /* View */
+    .view{padding:16px;}
 
-    /* BOOKING TYPE */
-    .segmented { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; }
-    .option {
-      min-height: 76px; padding: 10px 8px; border: 1px solid var(--line); border-radius: 8px;
-      background: var(--surface); color: var(--ink); text-align: left;
-      transition: border-color 160ms, background 160ms;
-    }
-    .option span { display: block; font-size: 0.9rem; font-weight: 800; }
-    .option small { display: block; margin-top: 4px; color: var(--muted); font-size: 0.7rem; line-height: 1.3; }
-    .option.active { border-color: var(--brand); background: #e8f9ee; color: var(--brand-dark); }
-    .option:disabled { opacity: 0.45; cursor: not-allowed; background: #f5f5f5; }
-    .option:disabled span, .option:disabled small { color: var(--muted); }
+    /* Back btn */
+    .back{display:flex;align-items:center;gap:5px;background:none;color:var(--muted);font-size:.82rem;font-weight:700;padding:6px 0;margin-bottom:10px;}
+    .back:hover{color:var(--ink);}
 
-    /* DATE STRIP */
-    .date-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
-    .date-strip::-webkit-scrollbar { display: none; }
-    .date-button {
-      flex: 0 0 68px; min-height: 68px; border: 1px solid var(--line); border-radius: 8px;
-      background: var(--surface); color: var(--ink);
-      transition: border-color 160ms, background 160ms;
-    }
-    .date-button strong, .date-button span { display: block; text-align: center; }
-    .date-button strong { font-size: 1.1rem; }
-    .date-button span { color: var(--muted); font-size: 0.72rem; }
-    .date-button.active { border-color: var(--brand); background: #e8f9ee; color: var(--brand-dark); }
+    /* Page title */
+    .ptitle{font-size:1.05rem;font-weight:800;margin-bottom:14px;}
 
-    /* DURATION FIXED */
-    .duration-fixed {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 12px 14px; background: #e8f9ee; border: 1px solid var(--brand); border-radius: 8px;
-    }
-    .duration-fixed strong { font-size: 0.95rem; color: var(--brand-dark); font-weight: 800; }
-    .duration-fixed span { font-size: 0.78rem; color: var(--muted); }
+    /* Card */
+    .card{background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 6px 18px rgba(26,42,31,.06);padding:14px;margin-bottom:12px;}
+    .slabel{font-size:.68rem;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:9px;}
+    .eyebrow{font-size:.68rem;font-weight:800;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.5px;}
 
-    /* TIME GRID */
-    .time-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 7px; }
-    .time-button {
-      min-height: 42px; border: 1px solid var(--line); border-radius: 8px;
-      background: var(--surface); color: var(--ink); font-weight: 700; font-size: 0.85rem;
-      transition: border-color 160ms, background 160ms;
-    }
-    .time-button.active { border-color: var(--brand); background: #e8f9ee; color: var(--brand-dark); }
-    .time-button:disabled { cursor: not-allowed; background: #f0f1ef; color: #b0b8b2; text-decoration: line-through; }
-    .time-grid-loading { text-align: center; padding: 24px; color: var(--muted); font-size: 0.85rem; grid-column: 1/-1; }
+    /* Home grid */
+    .hgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:16px;}
+    .hcard{background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:18px 14px;text-align:left;display:flex;flex-direction:column;gap:5px;box-shadow:0 4px 12px rgba(26,42,31,.06);transition:all .18s;}
+    .hcard:hover{border-color:var(--brand);background:#e8f9ee;transform:translateY(-2px);}
+    .hcard-icon{font-size:1.5rem;}
+    .hcard-label{font-size:.88rem;font-weight:800;color:var(--ink);}
+    .hcard-sub{font-size:.7rem;color:var(--muted);}
+    .hcard:hover .hcard-label{color:var(--brand-dark);}
 
-    /* SUMMARY PANEL */
-    .summary-panel { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    .status-chip { flex: 0 0 auto; padding: 8px 10px; border-radius: 999px; background: #eaf5f5; color: var(--accent); font-size: 0.78rem; font-weight: 800; }
+    /* Date strip */
+    .dstrip{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none;}
+    .dstrip::-webkit-scrollbar{display:none;}
+    .dbtn{flex:0 0 60px;height:62px;border:1.5px solid var(--line);border-radius:var(--r);background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer;transition:all .15s;}
+    .dbtn span{font-size:.65rem;color:var(--muted);text-transform:uppercase;}
+    .dbtn strong{font-size:.95rem;font-weight:800;}
+    .dbtn.on{border-color:var(--brand);background:#e8f9ee;color:var(--brand-dark);}
+    .dbtn.on span,.dbtn.on strong{color:var(--brand-dark);}
 
-    /* ROOM CARD */
-    .room-card { display: grid; grid-template-columns: 110px 1fr; overflow: hidden; }
-    .room-image {
-      min-height: 136px;
-      background: linear-gradient(90deg, rgba(6,199,85,0.8), rgba(15,124,128,0.75)), repeating-linear-gradient(90deg, transparent 0 32px, rgba(255,255,255,0.28) 32px 34px), linear-gradient(135deg, #1f8c57, #74b85f);
-      position: relative;
-    }
-    .room-image::after { content: ""; position: absolute; inset: 24px 16px; border: 2px solid rgba(255,255,255,0.82); border-radius: 4px; }
-    .room-content { padding: 14px; }
-    .room-content h2 { margin-top: 2px; }
-    .room-content p { margin: 6px 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.45; }
-    .room-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-    .room-meta span { padding: 4px 8px; border-radius: 999px; background: var(--surface-soft); color: #405044; font-size: 0.7rem; font-weight: 700; }
+    /* Duration */
+    .dur-badge{background:#e8f9ee;border:1.5px solid var(--brand);border-radius:var(--r);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;}
+    .dur-badge strong{font-size:.88rem;color:var(--brand-dark);font-weight:800;}
+    .dur-badge span{font-size:.72rem;color:var(--muted);}
 
-    /* FORM */
-    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .form-grid label { display: grid; gap: 5px; color: var(--muted); font-size: 0.78rem; font-weight: 800; }
-    .form-grid .full { grid-column: 1 / -1; }
-    input, textarea {
-      width: 100%; border: 1px solid var(--line); border-radius: 8px;
-      background: var(--surface); color: var(--ink); font: inherit; font-size: 0.92rem;
-    }
-    input.invalid { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(217,79,61,0.12); }
-    input { min-height: 44px; padding: 0 11px; }
-    textarea { min-height: 76px; padding: 10px 11px; resize: vertical; }
+    /* Time grid */
+    .tgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;}
+    .tbtn{min-height:40px;border:1.5px solid var(--line);border-radius:6px;background:#fff;font-size:.78rem;font-weight:700;transition:all .12s;cursor:pointer;}
+    .tbtn.on{border-color:var(--brand);background:#e8f9ee;color:var(--brand-dark);font-weight:800;}
+    .tbtn:disabled{cursor:not-allowed;background:#f0f1ef;color:#b0b8b2;text-decoration:line-through;border-color:#e8e8e8;}
+    .tloading{text-align:center;padding:18px;color:var(--muted);font-size:.8rem;grid-column:1/-1;}
 
-    /* PRICE + CONFIRM */
-    .price-confirm { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    .price-confirm h2 { color: var(--accent); font-size: 1.3rem; margin-top: 3px; }
-    .price-confirm p { margin: 4px 0 0; color: var(--muted); font-size: 0.8rem; }
-    .confirm-button {
-      flex-shrink: 0; min-height: 48px; min-width: 140px; padding: 0 16px;
-      border-radius: 8px; background: var(--brand); color: white; font-weight: 900;
-      box-shadow: 0 12px 22px rgba(6,199,85,0.24);
-    }
-    .confirm-button:disabled { background: #aeb8b0; box-shadow: none; cursor: not-allowed; }
+    /* Payment type */
+    .ptgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+    .ptbtn{padding:10px 6px;border:1.5px solid var(--line);border-radius:var(--r);background:#fff;text-align:left;transition:all .15s;cursor:pointer;}
+    .ptbtn.on{border-color:var(--brand);background:#e8f9ee;}
+    .ptbtn:disabled{opacity:.4;cursor:not-allowed;}
+    .ptbtn .pt-name{display:block;font-size:.8rem;font-weight:800;}
+    .ptbtn.on .pt-name{color:var(--brand-dark);}
+    .ptbtn .pt-sub{display:block;font-size:.65rem;color:var(--muted);margin-top:2px;}
 
-    /* PAYMENT PANEL */
-    .payment-panel { text-align: center; }
-    .payment-panel .booking-code-display {
-      font-size: 1.4rem; font-weight: 900; color: var(--accent); letter-spacing: 1px; margin: 4px 0 12px;
-    }
-    .payment-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
-    .payment-meta-item { background: var(--surface-soft); border-radius: 8px; padding: 10px; text-align: center; }
-    .payment-meta-item .label { font-size: 0.72rem; color: var(--muted); font-weight: 800; text-transform: uppercase; }
-    .payment-meta-item .value { font-size: 1rem; font-weight: 800; color: var(--ink); margin-top: 2px; }
-    .payment-meta-item .value.danger { color: var(--danger); }
-    .qr-wrapper { margin: 0 auto 16px; width: 180px; height: 180px; border: 2px solid var(--line); border-radius: 12px; overflow: hidden; background: white; display: flex; align-items: center; justify-content: center; }
-    .qr-wrapper img { width: 100%; height: 100%; object-fit: contain; }
-    .qr-note { font-size: 0.8rem; color: var(--muted); margin-bottom: 16px; }
+    /* Room card */
+    .rcard{display:grid;grid-template-columns:96px 1fr;overflow:hidden;border:1px solid var(--line);border-radius:var(--r);}
+    .rimg{min-height:110px;background:linear-gradient(90deg,rgba(6,199,85,.8),rgba(15,124,128,.75)),repeating-linear-gradient(90deg,transparent 0 32px,rgba(255,255,255,.28) 32px 34px),linear-gradient(135deg,#1f8c57,#74b85f);position:relative;}
+    .rimg::after{content:"";position:absolute;inset:18px 12px;border:2px solid rgba(255,255,255,.82);border-radius:3px;}
+    .rinfo{padding:12px;}
+    .rinfo h3{font-size:.88rem;font-weight:800;}
+    .rtags{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px;}
+    .rtag{padding:2px 7px;border-radius:999px;background:var(--soft);color:#405044;font-size:.65rem;font-weight:700;}
 
-    /* SLIP UPLOAD */
-    .slip-area { border: 2px dashed var(--line); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; transition: border-color 160ms, background 160ms; margin-bottom: 12px; }
-    .slip-area:hover { border-color: var(--brand); background: #f5fdf7; }
-    .slip-area.has-file { border-color: var(--brand); background: #e8f9ee; }
-    .slip-area p { margin: 0; color: var(--muted); font-size: 0.85rem; }
-    .slip-area strong { color: var(--brand-dark); }
-    #slipFileInput { display: none; }
-    .slip-preview { max-width: 100%; max-height: 160px; border-radius: 6px; margin-top: 10px; object-fit: contain; }
-    .submit-slip-btn {
-      width: 100%; min-height: 48px; border-radius: 8px; background: var(--brand); color: white;
-      font-weight: 900; font-size: 1rem; box-shadow: 0 8px 18px rgba(6,199,85,0.22);
-    }
-    .submit-slip-btn:disabled { background: #aeb8b0; box-shadow: none; cursor: not-allowed; }
+    /* Form */
+    .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+    .fgrid .full{grid-column:1/-1;}
+    .fgrid label{display:grid;gap:4px;font-size:.68rem;color:var(--muted);font-weight:800;text-transform:uppercase;}
+    input[type=text],input[type=tel],textarea{width:100%;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink);padding:9px 10px;font-size:.88rem;}
+    input.invalid{border-color:var(--danger);box-shadow:0 0 0 3px rgba(217,79,61,.12);}
+    textarea{min-height:65px;resize:vertical;}
 
-    /* CONFIRMED VIEW */
-    .confirmed-card { text-align: center; padding: 24px 16px; }
-    .confirmed-icon { font-size: 3rem; margin-bottom: 8px; }
-    .confirmed-card h2 { color: var(--brand-dark); font-size: 1.2rem; margin-bottom: 8px; }
-    .confirmed-card p { color: var(--muted); font-size: 0.88rem; line-height: 1.5; margin: 0; }
-    .confirmed-code { font-size: 1.1rem; font-weight: 900; color: var(--accent); margin: 10px 0; }
+    /* Confirm row */
+    .crow{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+    .crow h2{font-size:1.15rem;color:var(--accent);font-weight:800;}
+    .crow p{font-size:.72rem;color:var(--muted);margin-top:2px;}
+    .btn-go{min-height:44px;min-width:126px;padding:0 14px;border-radius:var(--r);background:var(--brand);color:#fff;font-weight:900;font-size:.88rem;box-shadow:0 8px 18px rgba(6,199,85,.2);}
+    .btn-go:disabled{background:#aeb8b0;box-shadow:none;cursor:not-allowed;}
 
-    /* TOAST */
-    .toast {
-      position: fixed; left: 50%; bottom: 18px; width: min(calc(100% - 32px), 420px);
-      padding: 12px 14px; border-radius: 8px; background: #17231c; color: white;
-      font-weight: 750; text-align: center; transform: translate(-50%, 120px); opacity: 0;
-      transition: opacity 180ms, transform 180ms; z-index: 500;
-    }
-    .toast.show { opacity: 1; transform: translate(-50%, 0); }
-    .toast.error { background: var(--danger); }
+    /* Payment panel */
+    .ppanel{text-align:center;}
+    .pcode{font-size:1.25rem;font-weight:900;color:var(--accent);letter-spacing:1px;margin:4px 0 12px;}
+    .pmeta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;}
+    .pmeta-item{background:var(--soft);border-radius:6px;padding:9px;text-align:center;}
+    .pmeta-item .lbl{font-size:.62rem;color:var(--muted);font-weight:800;text-transform:uppercase;}
+    .pmeta-item .val{font-size:.9rem;font-weight:800;margin-top:2px;}
+    .pmeta-item .val.red{color:var(--danger);}
+    .qrwrap{width:168px;height:168px;margin:0 auto 10px;border:1.5px solid var(--line);border-radius:10px;overflow:hidden;background:#fff;display:flex;align-items:center;justify-content:center;}
+    .qrwrap img{width:100%;height:100%;object-fit:contain;}
+    .qrnote{font-size:.75rem;color:var(--muted);margin-bottom:10px;}
+    .tnote{background:#eef5ea;border:1px solid var(--line);border-radius:6px;padding:8px 12px;font-size:.78rem;color:#405044;text-align:center;margin-bottom:14px;}
 
-    @media (max-width: 380px) {
-      .app-shell { padding-inline: 10px; }
-      .segmented { grid-template-columns: repeat(2, minmax(0,1fr)); }
-      .time-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
-      .room-card { grid-template-columns: 1fr; }
-      .price-confirm { flex-direction: column; align-items: stretch; }
-      .form-grid { grid-template-columns: 1fr; }
+    /* Slip upload */
+    .sarea{border:2px dashed var(--line);border-radius:var(--r);padding:14px;text-align:center;cursor:pointer;transition:all .15s;margin-bottom:10px;}
+    .sarea:hover,.sarea.has{border-color:var(--brand);background:#f5fdf7;}
+    .sarea p{margin:0;color:var(--muted);font-size:.8rem;}
+    .spreview{max-width:100%;max-height:140px;border-radius:5px;margin-top:8px;object-fit:contain;}
+    .btn-slip{width:100%;min-height:44px;border-radius:var(--r);background:var(--brand);color:#fff;font-weight:900;font-size:.9rem;box-shadow:0 8px 16px rgba(6,199,85,.2);}
+    .btn-slip:disabled{background:#aeb8b0;box-shadow:none;cursor:not-allowed;}
+
+    /* Package cards */
+    .pkggrid{display:grid;gap:10px;margin-bottom:12px;}
+    .pkgcard{border:2px solid var(--line);border-radius:var(--r);padding:14px;background:#fff;cursor:pointer;transition:all .15s;}
+    .pkgcard.on{border-color:var(--brand);background:#e8f9ee;}
+    .pkgcard-top{display:flex;justify-content:space-between;align-items:flex-start;}
+    .pkg-name{font-size:.9rem;font-weight:800;}
+    .pkg-price{font-size:1.05rem;font-weight:900;color:var(--accent);}
+    .pkg-desc{font-size:.72rem;color:var(--muted);margin-top:5px;line-height:1.5;}
+    .pkg-badge{display:inline-block;padding:2px 7px;border-radius:999px;background:var(--brand);color:#fff;font-size:.62rem;font-weight:800;margin-top:5px;}
+
+    /* My bookings */
+    .mlist{padding:0 16px;}
+    .sec-title{font-size:.7rem;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin:14px 0 8px;}
+    .bitem{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:13px;margin-bottom:9px;box-shadow:0 3px 10px rgba(26,42,31,.05);}
+    .bitem-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+    .bitem-code{font-size:.88rem;font-weight:800;color:var(--accent);}
+    .bitem-type{font-size:.65rem;font-weight:800;padding:2px 7px;border-radius:999px;background:#eef5ea;color:var(--brand-dark);}
+    .bitem-details{display:grid;grid-template-columns:1fr 1fr;gap:5px;font-size:.75rem;}
+    .bf-lbl{color:var(--muted);font-size:.62rem;font-weight:700;text-transform:uppercase;}
+    .bf-val{font-weight:600;margin-top:1px;}
+    .bitem-footer{margin-top:9px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;}
+    .sp{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.68rem;font-weight:800;}
+    .s-pending_payment{background:#3d2e00;color:#fbbf24;}
+    .s-confirmed,.s-paid{background:#0d3320;color:#06c755;}
+    .s-pending_review{background:#0f2d3a;color:#60a5fa;}
+    .s-cancelled{background:#3d1010;color:#f87171;}
+    .s-package{background:#1e1e3d;color:#a78bfa;}
+    .btn-rpay{padding:6px 12px;border-radius:6px;background:#3d2e00;border:1px solid #fbbf24;color:#fbbf24;font-size:.75rem;font-weight:800;}
+    .passitem{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:13px;margin-bottom:9px;}
+    .passitem-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;}
+    .pass-name{font-size:.9rem;font-weight:800;}
+    .pass-active{padding:2px 8px;border-radius:999px;background:#0d3320;color:#06c755;font-size:.65rem;font-weight:800;}
+    .pass-info{font-size:.75rem;color:var(--muted);display:grid;gap:3px;}
+    .pass-mins{font-size:1.05rem;font-weight:900;color:var(--accent);margin-bottom:4px;}
+
+    /* Empty state */
+    .empty{text-align:center;padding:40px 24px;}
+    .empty-icon{font-size:2.4rem;margin-bottom:10px;}
+    .empty p{color:var(--muted);font-size:.85rem;line-height:1.5;margin-bottom:18px;}
+    .empty-btns{display:flex;flex-direction:column;gap:8px;max-width:220px;margin:0 auto;}
+    .btn-empty{padding:10px 14px;border-radius:var(--r);background:#fff;border:1.5px solid var(--brand);color:var(--brand-dark);font-weight:800;font-size:.82rem;}
+
+    /* Success */
+    .scard{text-align:center;padding:28px 18px;}
+    .scard-icon{font-size:2.8rem;margin-bottom:8px;}
+    .scard h2{font-size:1.05rem;font-weight:800;color:var(--brand-dark);margin-bottom:6px;}
+    .scard p{color:var(--muted);font-size:.82rem;line-height:1.5;}
+    .scode{font-size:.95rem;font-weight:900;color:var(--accent);margin:8px 0;}
+    .btn-home{margin-top:18px;padding:11px 22px;border-radius:var(--r);background:var(--brand);color:#fff;font-weight:900;font-size:.88rem;}
+
+    /* Toast */
+    .toast{position:fixed;left:50%;bottom:18px;width:min(calc(100% - 32px),420px);padding:10px 14px;border-radius:var(--r);background:#17231c;color:#fff;font-weight:750;text-align:center;transform:translate(-50%,120px);opacity:0;transition:opacity 180ms,transform 180ms;z-index:500;}
+    .toast.show{opacity:1;transform:translate(-50%,0);}
+    .toast.err{background:var(--danger);}
+
+    @media(max-width:380px){
+      .hgrid{grid-template-columns:1fr;}
+      .tgrid{grid-template-columns:repeat(3,1fr);}
+      .ptgrid,.fgrid{grid-template-columns:1fr;}
+      .crow{flex-direction:column;align-items:stretch;}
+      .rcard{grid-template-columns:1fr;}
     }
   </style>
 </head>
 <body>
 
-<div class="loading-overlay" id="loadingOverlay">
+<div class="loverlay" id="loverlay">
   <div class="spinner"></div>
-  <p id="loadingText">Loading...</p>
+  <p id="ltext">Loading...</p>
 </div>
 
-<main class="app-shell" id="appShell" style="display:none">
+<div class="shell" id="shell" style="display:none">
 
-  <!-- PROFILE HEADER -->
-  <header class="profile-header">
+  <!-- Profile header -->
+  <header class="pheader">
     <div class="avatar" id="avatarEl">U</div>
     <div>
-      <p class="eyebrow">Ultra Tennis · Booking</p>
-      <h1 id="profileName">Loading...</h1>
-      <p class="member-line">Open daily 06:00–00:00 · Floor G, Omni Business Mall</p>
+      <div class="pname" id="pname">Loading...</div>
+      <div class="psub">Ultra Tennis · Floor G, Omni Business Mall</div>
     </div>
   </header>
 
-  <!-- ══ BOOKING VIEW ══ -->
-  <div id="bookingView">
-
-    <!-- Booking Type -->
-    <div class="card">
-      <div class="section-heading"><h2>Booking Type</h2></div>
-      <div class="segmented" role="radiogroup">
-        <button class="option active" type="button" data-booking="single" role="radio" aria-checked="true">
-          <span>Single Use</span>
-          <small>฿350 / hr</small>
-        </button>
-        <button class="option" type="button" data-booking="ultra" role="radio" aria-checked="false">
-          <span>Ultra Pass</span>
-          <small>฿310–295/hr avg</small>
-        </button>
-        <button class="option" type="button" data-booking="offpeak" role="radio" aria-checked="false">
-          <span>Off-Peak Pass</span>
-          <small>Mon–Fri 10:00–15:00</small>
-        </button>
-      </div>
+  <!-- VIEW: HOME -->
+  <div id="viewHome">
+    <div class="hgrid">
+      <button class="hcard" id="btnSingle">
+        <div class="hcard-icon">🎾</div>
+        <div class="hcard-label">Book Single Use</div>
+        <div class="hcard-sub">฿350 / hour</div>
+      </button>
+      <button class="hcard" id="btnUltra">
+        <div class="hcard-icon">⚡</div>
+        <div class="hcard-label">Buy Ultra Pass</div>
+        <div class="hcard-sub">From ฿3,100</div>
+      </button>
+      <button class="hcard" id="btnOffpeak">
+        <div class="hcard-icon">🌙</div>
+        <div class="hcard-label">Buy Off-Peak Pass</div>
+        <div class="hcard-sub">฿3,500 / month</div>
+      </button>
+      <button class="hcard" id="btnMyBookings">
+        <div class="hcard-icon">📋</div>
+        <div class="hcard-label">My Booking</div>
+        <div class="hcard-sub">& My Pass</div>
+      </button>
     </div>
+  </div>
 
-    <!-- Date -->
-    <div class="card">
-      <div class="section-heading"><h2>Date</h2></div>
-      <div class="date-strip" id="dateStrip"></div>
-    </div>
+  <!-- VIEW: BOOKING -->
+  <div id="viewBooking" style="display:none">
+    <div class="view">
+      <button class="back" id="bkBack">← Back</button>
+      <div class="ptitle">Book Practice Room</div>
 
-    <!-- Duration -->
-    <div class="card">
-      <div class="section-heading"><h2>Duration</h2></div>
-      <div class="duration-fixed">
-        <strong>⏱ 1 Hour per Booking</strong>
-        <span>Book again for more time</span>
+      <div class="card">
+        <div class="slabel">Select Date</div>
+        <div class="dstrip" id="dateStrip"></div>
       </div>
-    </div>
 
-    <!-- Time Grid -->
-    <div class="card">
-      <div class="section-heading">
-        <h2>Available Times</h2>
-        <p id="availabilityText">—</p>
+      <div class="card">
+        <div class="slabel">Duration</div>
+        <div class="dur-badge"><strong>⏱ 1 Hour per Booking</strong><span>Book again for more time</span></div>
       </div>
-      <div class="time-grid" id="timeGrid">
-        <p class="time-grid-loading">Loading slots...</p>
-      </div>
-    </div>
 
-    <!-- Summary -->
-    <div class="card summary-panel">
-      <div>
-        <p class="eyebrow">Selected Time</p>
-        <h2 id="selectedSummary">Pick a time above</h2>
-      </div>
-      <div class="status-chip" id="bookingChip">Single Use</div>
-    </div>
-
-    <!-- Room Card -->
-    <div class="card room-card" style="padding:0">
-      <div class="room-image"></div>
-      <div class="room-content">
-        <p class="eyebrow">Court</p>
-        <h2>Ultra Tennis Practice Room</h2>
-        <p>Private indoor court with LED lighting, air-conditioning, and camera system.</p>
-        <div class="room-meta">
-          <span>🏟 Indoor</span>
-          <span>💡 LED</span>
-          <span>❄️ AC</span>
-          <span>📷 Camera</span>
-          <span>📍 Floor G · Omni Mall</span>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px">
+          <div class="slabel" style="margin:0">Available Times</div>
+          <div id="slotsText" style="font-size:.72rem;color:var(--muted)">—</div>
         </div>
+        <div class="tgrid" id="timeGrid"><p class="tloading">Loading slots...</p></div>
       </div>
-    </div>
 
-    <!-- Customer Info -->
-    <div class="card">
-      <div class="section-heading"><h2>Your Info</h2></div>
-      <div class="form-grid">
-        <label>
-          <span>Name</span>
-          <input id="customerName" type="text" autocomplete="name" placeholder="Full name" required />
-        </label>
-        <label>
-          <span>Phone</span>
-          <input id="customerPhone" type="tel" autocomplete="tel" placeholder="Phone number" required />
-        </label>
-        <label class="full">
-          <span>Note (optional)</span>
-          <textarea id="customerNote" rows="2" placeholder="Any special requests..."></textarea>
-        </label>
-      </div>
-    </div>
-
-    <!-- Price + Confirm -->
-    <div class="card price-confirm">
-      <div>
-        <p class="eyebrow">Price Summary</p>
-        <h2 id="priceText">฿350</h2>
-        <p id="passText">Payment due within 15 minutes after booking.</p>
-      </div>
-      <button class="confirm-button" type="button" id="confirmButton" disabled>Confirm Booking</button>
-    </div>
-
-  </div><!-- /bookingView -->
-
-  <!-- ══ PAYMENT VIEW ══ -->
-  <div id="paymentView" style="display:none">
-    <div class="card payment-panel">
-      <p class="eyebrow">Payment Required</p>
-      <div class="booking-code-display" id="payBookingCode">UT-2026-0000</div>
-      <div class="payment-meta">
-        <div class="payment-meta-item">
-          <div class="label">Amount</div>
-          <div class="value" id="payAmount">฿350</div>
-        </div>
-        <div class="payment-meta-item">
-          <div class="label">Pay Before</div>
-          <div class="value danger" id="payDeadline">—</div>
-        </div>
-        <div class="payment-meta-item">
-          <div class="label">Date</div>
-          <div class="value" id="payDate">—</div>
-        </div>
-        <div class="payment-meta-item">
-          <div class="label">Time</div>
-          <div class="value" id="payTime">—</div>
+      <div class="card" id="ptCard">
+        <div class="slabel">Payment Type</div>
+        <div class="ptgrid">
+          <button class="ptbtn on" data-pt="single"><span class="pt-name">Single Use</span><small class="pt-sub">฿350</small></button>
+          <button class="ptbtn" data-pt="ultra" id="ptUltra" disabled><span class="pt-name">Ultra Pass</span><small class="pt-sub" id="ptUltraSub">No active pass</small></button>
+          <button class="ptbtn" data-pt="offpeak" id="ptOffpeak" disabled><span class="pt-name">Off-Peak</span><small class="pt-sub" id="ptOffpeakSub">No active pass</small></button>
         </div>
       </div>
 
-      <div class="qr-wrapper" id="qrWrapper">
-        <img
-          src="/payment-qr.png"
-          alt="PromptPay QR Code"
-          id="qrImg"
-          onerror="
-            document.getElementById('qrWrapper').innerHTML =
-              '<p style=\'color:#d94f3d;font-size:0.82rem;padding:12px;text-align:center\'>⚠️ QR code could not load.<br>Please contact staff.</p>';
-          "
-        />
-      </div>
-      <p class="qr-note">Scan with any banking app · Transfer exactly ฿<span id="qrAmount">350</span></p>
-      <div style="background:#eef5ea;border:1px solid #dbe5d8;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:0.82rem;color:#405044;text-align:center">
-        💳 Please transfer <strong>฿<span id="qrAmount2">350</span></strong> and upload your slip below.
+      <div class="rcard" style="margin-bottom:12px">
+        <div class="rimg"></div>
+        <div class="rinfo">
+          <div class="eyebrow">Court</div>
+          <h3>Ultra Tennis Practice Room</h3>
+          <p style="font-size:.72rem;color:var(--muted);margin-top:3px">Indoor · LED · AC · Camera</p>
+          <div class="rtags"><span class="rtag">📍 Floor G · Omni Mall</span></div>
+        </div>
       </div>
 
-      <div class="slip-area" id="slipArea" onclick="document.getElementById('slipFileInput').click()">
-        <p id="slipAreaText">📎 <strong>Tap to upload payment slip</strong></p>
-        <p style="margin-top:4px;font-size:0.75rem">JPG, PNG accepted</p>
-        <img id="slipPreview" class="slip-preview" style="display:none" alt="Slip preview" />
+      <div class="card">
+        <div class="slabel">Your Info</div>
+        <div class="fgrid">
+          <label>Name<input type="text" id="bkName" autocomplete="name" placeholder="Full name"/></label>
+          <label>Phone<input type="tel" id="bkPhone" autocomplete="tel" placeholder="Phone number"/></label>
+          <label class="full">Note (optional)<textarea id="bkNote" rows="2" placeholder="Special requests..."></textarea></label>
+        </div>
       </div>
-      <input type="file" id="slipFileInput" accept="image/*" />
 
-      <button class="submit-slip-btn" id="submitSlipBtn" disabled>Submit Payment Slip</button>
+      <div class="card">
+        <div class="crow">
+          <div>
+            <div class="eyebrow">Total</div>
+            <h2 id="bkPrice">฿350</h2>
+            <p id="bkNote2">Payment due within 15 minutes.</p>
+          </div>
+          <button class="btn-go" id="confirmBkBtn" disabled>Confirm Booking</button>
+        </div>
+      </div>
     </div>
-  </div><!-- /paymentView -->
+  </div>
 
-  <!-- ══ CONFIRMED VIEW ══ -->
-  <div id="confirmedView" style="display:none">
-    <div class="card confirmed-card">
-      <div class="confirmed-icon">✅</div>
-      <h2>Slip Received!</h2>
-      <p>Your booking is confirmed and pending admin review.</p>
-      <div class="confirmed-code" id="confirmedCode">UT-2026-0000</div>
-      <p id="confirmedDetails">—</p>
+  <!-- VIEW: PAYMENT (booking + pass shared) -->
+  <div id="viewPayment" style="display:none">
+    <div class="view">
+      <div class="card ppanel">
+        <div class="eyebrow" id="payEyebrow">Payment Required</div>
+        <div class="pcode" id="payCode">—</div>
+        <div class="pmeta">
+          <div class="pmeta-item"><div class="lbl">Amount</div><div class="val" id="payAmt">฿350</div></div>
+          <div class="pmeta-item"><div class="lbl">Pay Before</div><div class="val red" id="payDl">—</div></div>
+          <div class="pmeta-item"><div class="lbl">Date / Item</div><div class="val" id="payDate" style="font-size:.78rem">—</div></div>
+          <div class="pmeta-item"><div class="lbl">Details</div><div class="val" id="payDets" style="font-size:.75rem">—</div></div>
+        </div>
+        <div class="qrwrap">
+          <img src="/payment-qr.png" alt="QR"
+            onerror="this.parentElement.innerHTML='<p style=\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\'>⚠️ QR not found.<br>Please contact staff.</p>'"/>
+        </div>
+        <p class="qrnote">Scan with any banking app</p>
+        <div class="tnote">💳 Transfer <strong>฿<span id="payAmtText">350</span></strong> and upload slip below</div>
+        <div class="sarea" id="slipArea" onclick="document.getElementById('slipIn').click()">
+          <p id="slipAreaTxt">📎 <strong>Tap to upload payment slip</strong></p>
+          <p style="font-size:.7rem;margin-top:2px">JPG, PNG · Max 5MB</p>
+          <img id="slipPrev" class="spreview" style="display:none" alt="Slip preview"/>
+        </div>
+        <input type="file" id="slipIn" accept="image/*" style="display:none"/>
+        <button class="btn-slip" id="submitSlipBtn" disabled>Submit Payment Slip</button>
+      </div>
     </div>
-  </div><!-- /confirmedView -->
+  </div>
 
-</main>
+  <!-- VIEW: BUY PASS -->
+  <div id="viewBuyPass" style="display:none">
+    <div class="view">
+      <button class="back" id="buyPassBack">← Back</button>
+      <div class="ptitle" id="buyPassTitle">Buy Pass</div>
+      <div class="pkggrid" id="pkgGrid"></div>
+      <div class="card">
+        <div class="slabel">Your Info</div>
+        <div class="fgrid">
+          <label>Name<input type="text" id="passName" autocomplete="name" placeholder="Full name"/></label>
+          <label>Phone<input type="tel" id="passPhone" autocomplete="tel" placeholder="Phone number"/></label>
+        </div>
+      </div>
+      <div class="card">
+        <div class="crow">
+          <div>
+            <div class="eyebrow">Total</div>
+            <h2 id="passTotal">฿—</h2>
+            <p id="passTotalNote" style="font-size:.72rem;color:var(--muted)">Select a package above</p>
+          </div>
+          <button class="btn-go" id="purchaseBtn" disabled>Purchase Pass</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW: MY BOOKINGS -->
+  <div id="viewMyBookings" style="display:none">
+    <div class="view" style="padding:16px 16px 0">
+      <button class="back" id="myBack">← Back</button>
+      <div class="ptitle">My Booking & My Pass</div>
+    </div>
+    <div id="myContent" class="mlist">
+      <div style="text-align:center;padding:32px">
+        <div class="spinner" style="margin:0 auto 10px"></div>
+        <p style="color:var(--muted);font-size:.82rem">Loading...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW: SUCCESS -->
+  <div id="viewSuccess" style="display:none">
+    <div class="view">
+      <div class="card scard">
+        <div class="scard-icon" id="succIcon">✅</div>
+        <h2 id="succTitle">Done!</h2>
+        <div class="scode" id="succCode">—</div>
+        <p id="succMsg">—</p>
+        <button class="btn-home" id="succHomeBtn">Back to Home</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /shell -->
 
 <div class="toast" id="toast"></div>
 
 <script type="module">
-import { initializeApp }          from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
+import { initializeApp }             from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
 import { isSupported, getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
 import {
-  getFirestore, collection, doc, getDocs, runTransaction,
-  updateDoc, query, where, serverTimestamp, Timestamp
+  getFirestore, collection, doc, getDoc, getDocs, addDoc, updateDoc,
+  runTransaction, setDoc, query, where, serverTimestamp, Timestamp
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 import {
-  getStorage, ref as storageRef, uploadBytes, getDownloadURL
+  getStorage, ref as sRef, uploadBytes, getDownloadURL
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-storage.js";
 
-// ── FIREBASE ──────────────────────────────────────────────
+// ── FIREBASE ────────────────────────────────────────────────────
 const firebaseConfig = {
-  apiKey: "AIzaSyBhJSJszidFge4fKQqExLM2cB2Sx6z2lPY",
-  authDomain: "ultra-tennis-booking.firebaseapp.com",
-  projectId: "ultra-tennis-booking",
-  storageBucket: "ultra-tennis-booking.firebasestorage.app",
-  messagingSenderId: "646504579934",
-  appId: "1:646504579934:web:44768b8ae6b744be5d05cf",
-  measurementId: "G-M6RPC2CCTM",
+  apiKey:"AIzaSyBhJSJszidFge4fKQqExLM2cB2Sx6z2lPY",
+  authDomain:"ultra-tennis-booking.firebaseapp.com",
+  projectId:"ultra-tennis-booking",
+  storageBucket:"ultra-tennis-booking.firebasestorage.app",
+  messagingSenderId:"646504579934",
+  appId:"1:646504579934:web:44768b8ae6b744be5d05cf",
+  measurementId:"G-M6RPC2CCTM",
 };
 const fbApp  = initializeApp(firebaseConfig);
-const db      = getFirestore(fbApp);
-const storage = getStorage(fbApp);
-isSupported().then(ok => { if (ok) getAnalytics(fbApp); }).catch(() => {});
+const db     = getFirestore(fbApp);
+const storage= getStorage(fbApp);
+isSupported().then(ok=>{ if(ok) getAnalytics(fbApp); }).catch(()=>{});
 
-// ── CONSTANTS ────────────────────────────────────────────
+// ── CONSTANTS ───────────────────────────────────────────────────
 const LIFF_ID     = "2010034901-ClPr9N5v";
 const RESOURCE_ID = "room1";
-const BUSINESS = {
-  openHour: 6, closeHour: 24, duration: 1,
-  pricePerHour: 350, advanceDays: 30,
-  paymentMinutes: 15, offPeakStartHour: 10, offPeakEndHour: 15,
+const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
+const PAY_MINS    = 15;
+const OFFPEAK     = { startHour:9, endHour:15 }; // 09:00–15:00
+
+const PACKAGES = {
+  ultra_10:{ packageType:"ultra_10", packageName:"Ultra Pass 10 Hours",  price:3100, totalMinutes:600,  validityDays:90,  weeklyLimitHours:null, monthlyLimitHours:null, desc:"600 minutes · Valid 90 days · avg ฿310/hr · Save ฿40/hr" },
+  ultra_20:{ packageType:"ultra_20", packageName:"Ultra Pass 20 Hours",  price:5900, totalMinutes:1200, validityDays:180, weeklyLimitHours:null, monthlyLimitHours:null, desc:"1,200 minutes · Valid 180 days · avg ฿295/hr · Save ฿55/hr" },
+  offpeak: { packageType:"offpeak",  packageName:"Off-Peak Pass",         price:3500, totalMinutes:null, validityDays:30,  weeklyLimitHours:5,    monthlyLimitHours:20,   desc:"Mon–Fri · 09:00–15:00 · Up to 20 hrs/month · Valid 30 days" },
 };
 
-// Mock eligibility — swap to real data when passes are live
-const customerEligibility = { hasUltraPass: false, hasOffPeakPass: false };
-
-// ── STATE ────────────────────────────────────────────────
+// ── STATE ───────────────────────────────────────────────────────
 const state = {
-  booking: "single",
+  lineProfile: { displayName:"Guest", pictureUrl:null, userId:"guest" },
+  // Booking flow
   dateOffset: 0,
   time: null,
+  openSlots: new Set(),
   blockedSlots: new Set(),
-  openSlots: new Set(),    // slots opened by admin in available_slots
-  isLoadingSlots: false,
+  currentDateIsHoliday: false,
+  bookingPaymentType: "single",
+  // Eligibility
+  eligibility: { hasUltra:false, ultraPkg:null, hasOffpeak:false, offpeakPkg:null },
+  // Current booking/purchase (for payment panel)
+  paymentMode: null, // "booking" | "pass"
   currentBookingCode: null,
   currentBookingDocId: null,
   currentBookingData: null,
-  lineProfile: { displayName: "Guest", pictureUrl: null, userId: "guest" },
+  currentPurchaseCode: null,
+  currentPurchaseDocId: null,
+  currentPurchaseData: null,
+  // Pass purchase flow
+  selectedPackageType: null,
 };
 
-// ── DOM REFS ─────────────────────────────────────────────
-const $      = id => document.getElementById(id);
-const loadingOverlay  = $("loadingOverlay");
-const loadingText     = $("loadingText");
-const appShell        = $("appShell");
-const bookingView     = $("bookingView");
-const paymentView     = $("paymentView");
-const confirmedView   = $("confirmedView");
-const avatarEl        = $("avatarEl");
-const profileName     = $("profileName");
-const dateStrip       = $("dateStrip");
-const timeGrid        = $("timeGrid");
-const availabilityText= $("availabilityText");
-const selectedSummary = $("selectedSummary");
-const bookingChip     = $("bookingChip");
-const priceText       = $("priceText");
-const passText        = $("passText");
-const confirmButton   = $("confirmButton");
-const customerName    = $("customerName");
-const customerPhone   = $("customerPhone");
-const customerNote    = $("customerNote");
-const slipArea        = $("slipArea");
-const slipAreaText    = $("slipAreaText");
-const slipFileInput   = $("slipFileInput");
-const slipPreview     = $("slipPreview");
-const submitSlipBtn   = $("submitSlipBtn");
+// ── DOM ─────────────────────────────────────────────────────────
+const $     = id => document.getElementById(id);
+const VIEWS = ["viewHome","viewBooking","viewPayment","viewBuyPass","viewMyBookings","viewSuccess"];
+function showView(id) {
+  VIEWS.forEach(v => { const el=$(v); if(el) el.style.display="none"; });
+  const el=$(id); if(el) el.style.display="block";
+  window.scrollTo(0,0);
+}
 
-[customerName, customerPhone].forEach(el => {
-  el.addEventListener("input", () => el.classList.remove("invalid"));
-});
+function showToast(msg, isErr=false) {
+  const t=$("toast"); t.textContent=msg;
+  t.className=`toast show${isErr?" err":""}`;
+  setTimeout(()=>t.classList.remove("show"),3200);
+}
 
-// ── LIFF INIT ────────────────────────────────────────────
+function generateCode(prefix) {
+  return `${prefix}-${new Date().getFullYear()}-${Math.floor(1000+Math.random()*9000)}`;
+}
+
+// ── LIFF INIT ───────────────────────────────────────────────────
 async function initLiff() {
-  loadingText.textContent = "Connecting to LINE...";
+  $("ltext").textContent="Connecting to LINE...";
   try {
-    await liff.init({ liffId: LIFF_ID });
-    if (!liff.isLoggedIn()) { liff.login(); return; }
+    await liff.init({ liffId:LIFF_ID });
+    if(!liff.isLoggedIn()){ liff.login(); return; }
     state.lineProfile = await liff.getProfile();
-  } catch (e) {
-    console.warn("LIFF init failed (browser mode):", e);
-  }
+  } catch(e) { console.warn("LIFF init failed (browser mode):",e); }
 
-  profileName.textContent = state.lineProfile.displayName;
-  if (state.lineProfile.pictureUrl) {
-    avatarEl.innerHTML = `<img src="${state.lineProfile.pictureUrl}" alt="Profile" />`;
-  } else {
-    avatarEl.textContent = state.lineProfile.displayName.charAt(0).toUpperCase();
-  }
+  $("pname").textContent = state.lineProfile.displayName;
+  const av = $("avatarEl");
+  if(state.lineProfile.pictureUrl) av.innerHTML=`<img src="${state.lineProfile.pictureUrl}" alt="Avatar"/>`;
+  else av.textContent = state.lineProfile.displayName.charAt(0).toUpperCase();
 
-  const nameInput = customerName;
-  if (!nameInput.value) nameInput.value = state.lineProfile.displayName === "Guest" ? "" : state.lineProfile.displayName;
+  $("ltext").textContent="Loading your pass info...";
+  await checkEligibility();
 
-  loadingText.textContent = "Loading court availability...";
-  await loadBlockedSlots(getSelectedDateISO());
-
-  loadingOverlay.style.display = "none";
-  appShell.style.display = "block";
-
-  applyPassEligibility();
-  buildDates();
-  renderTimes();
-  renderSummary();
+  $("loverlay").style.display="none";
+  $("shell").style.display="block";
+  showView("viewHome");
+  setupNav();
 }
 
-// ── PASS ELIGIBILITY ─────────────────────────────────────
-function applyPassEligibility() {
-  const ultraBtn   = document.querySelector("[data-booking='ultra']");
-  const offpeakBtn = document.querySelector("[data-booking='offpeak']");
-
-  ultraBtn.disabled   = !customerEligibility.hasUltraPass;
-  offpeakBtn.disabled = !customerEligibility.hasOffPeakPass;
-
-  if (ultraBtn.disabled) {
-    ultraBtn.addEventListener("click", () => showToast("This pass is not active for this customer.", true), { capture: true });
-  }
-  if (offpeakBtn.disabled) {
-    offpeakBtn.addEventListener("click", () => showToast("This pass is not active for this customer.", true), { capture: true });
-  }
-}
-
-// ── LOAD BLOCKED SLOTS FROM FIRESTORE ───────────────────
-async function loadBlockedSlots(dateStr) {
-  state.isLoadingSlots = true;
-  state.blockedSlots   = new Set();
-  state.openSlots      = new Set();
-
+// ── ELIGIBILITY ─────────────────────────────────────────────────
+async function checkEligibility() {
+  if(state.lineProfile.userId === "guest") return;
   try {
+    const snap = await getDocs(query(
+      collection(db,"customer_packages"),
+      where("lineUserId","==",state.lineProfile.userId),
+      where("status","==","active")
+    ));
     const now = new Date();
-
-    // Load available_slots (admin-opened slots)
-    const availQ = query(
-      collection(db, "available_slots"),
-      where("date",       "==", dateStr),
-      where("resourceId", "==", RESOURCE_ID)
-    );
-    const availSnap = await getDocs(availQ);
-    availSnap.forEach(d => {
-      const data = d.data();
-      if (data.status === "open") state.openSlots.add(data.startTime);
-    });
-
-    // Load booking_slots (active bookings)
-    const bookQ = query(
-      collection(db, "booking_slots"),
-      where("date",       "==", dateStr),
-      where("resourceId", "==", RESOURCE_ID)
-    );
-    const bookSnap = await getDocs(bookQ);
-    bookSnap.forEach(d => {
-      const data = d.data();
-      if (data.bookingStatus === "confirmed") {
-        state.blockedSlots.add(data.hour);
-      } else if (data.bookingStatus === "pending_payment") {
-        const exp = data.expiresAt?.toDate?.();
-        if (exp && exp > now) state.blockedSlots.add(data.hour);
+    snap.forEach(d => {
+      const p = { id:d.id, ...d.data() };
+      const validUntil = p.validUntil?.toDate?.();
+      if(!validUntil || validUntil < now) return; // expired
+      if(p.packageType==="ultra_10"||p.packageType==="ultra_20") {
+        if((p.remainingMinutes||0)>=60 && !state.eligibility.hasUltra) {
+          state.eligibility.hasUltra=true;
+          state.eligibility.ultraPkg=p;
+        }
+      }
+      if(p.packageType==="offpeak" && !state.eligibility.hasOffpeak) {
+        state.eligibility.hasOffpeak=true;
+        state.eligibility.offpeakPkg=p;
       }
     });
-  } catch (e) {
-    console.error("Failed to load slots:", e);
-  } finally {
-    state.isLoadingSlots = false;
-  }
+  } catch(e) { console.error("Eligibility check failed:",e); }
 }
 
-// ── DATES ────────────────────────────────────────────────
+// ── NAVIGATION ──────────────────────────────────────────────────
+function setupNav() {
+  $("btnSingle").addEventListener("click", ()=>{ openBookingView(); });
+  $("btnUltra").addEventListener("click",  ()=>{ openBuyPassView("ultra"); });
+  $("btnOffpeak").addEventListener("click",()=>{ openBuyPassView("offpeak"); });
+  $("btnMyBookings").addEventListener("click",()=>{ openMyBookings(); });
+  $("bkBack").addEventListener("click",   ()=>showView("viewHome"));
+  $("buyPassBack").addEventListener("click",()=>showView("viewHome"));
+  $("myBack").addEventListener("click",   ()=>showView("viewHome"));
+  $("succHomeBtn").addEventListener("click",()=>showView("viewHome"));
+}
+
+// ── BOOKING VIEW ────────────────────────────────────────────────
+function openBookingView() {
+  state.time=null;
+  state.bookingPaymentType="single";
+  state.dateOffset=0;
+  showView("viewBooking");
+  buildDates();
+  loadSlotsAndRender(getSelectedDateISO());
+  updatePaymentTypeButtons();
+  updateBookingConfirmBtn();
+
+  // Pre-fill name
+  const nameInput=$("bkName");
+  if(!nameInput.value && state.lineProfile.displayName !== "Guest")
+    nameInput.value = state.lineProfile.displayName;
+}
+
 function buildDates() {
-  const fmt   = new Intl.DateTimeFormat("en-US", { weekday: "short" });
-  const today = new Date();
-  dateStrip.innerHTML = "";
-
-  for (let i = 0; i < BUSINESS.advanceDays; i++) {
-    const d = new Date(today);
-    d.setDate(today.getDate() + i);
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = `date-button${i === state.dateOffset ? " active" : ""}`;
-    btn.innerHTML = `<span>${i === 0 ? "Today" : fmt.format(d)}</span><strong>${d.getDate()}</strong>`;
-    btn.addEventListener("click", async () => {
-      state.dateOffset = i;
-      state.time = null;
-      setActive(".date-button", btn);
-      timeGrid.innerHTML = `<p class="time-grid-loading">Loading slots...</p>`;
-      await loadBlockedSlots(getSelectedDateISO());
-      renderTimes();
-      renderSummary();
+  const strip=$("dateStrip"), fmt=new Intl.DateTimeFormat("en-US",{weekday:"short"});
+  const today=new Date(); strip.innerHTML="";
+  for(let i=0;i<30;i++){
+    const d=new Date(today); d.setDate(today.getDate()+i);
+    const btn=document.createElement("button");
+    btn.className=`dbtn${i===state.dateOffset?" on":""}`;
+    btn.innerHTML=`<span>${i===0?"Today":fmt.format(d)}</span><strong>${d.getDate()}</strong>`;
+    btn.addEventListener("click", async()=>{
+      state.dateOffset=i; state.time=null;
+      strip.querySelectorAll(".dbtn").forEach(b=>b.classList.remove("on"));
+      btn.classList.add("on");
+      $("timeGrid").innerHTML=`<p class="tloading">Loading...</p>`;
+      await loadSlotsAndRender(getSelectedDateISO());
+      updateBookingConfirmBtn();
     });
-    dateStrip.append(btn);
+    strip.append(btn);
   }
 }
 
-// ── TIMES ────────────────────────────────────────────────
-const allTimes = Array.from(
-  { length: BUSINESS.closeHour - BUSINESS.openHour },
-  (_, i) => `${String(BUSINESS.openHour + i).padStart(2, "0")}:00`
-);
+async function loadSlotsAndRender(dateStr) {
+  state.openSlots=new Set(); state.blockedSlots=new Set(); state.currentDateIsHoliday=false;
+  try {
+    const [availSnap, bookSnap, holSnap] = await Promise.all([
+      getDocs(query(collection(db,"available_slots"),where("date","==",dateStr),where("resourceId","==",RESOURCE_ID))),
+      getDocs(query(collection(db,"booking_slots"),where("date","==",dateStr),where("resourceId","==",RESOURCE_ID))),
+      getDoc(doc(db,"holidays",dateStr)),
+    ]);
+    availSnap.forEach(d=>{ if(d.data().status==="open") state.openSlots.add(d.data().startTime); });
+    const now=new Date();
+    bookSnap.forEach(d=>{
+      const bd=d.data();
+      if(bd.bookingStatus==="confirmed") state.blockedSlots.add(bd.hour);
+      if(bd.bookingStatus==="pending_payment"){ const exp=bd.expiresAt?.toDate?.(); if(exp&&exp>now) state.blockedSlots.add(bd.hour); }
+    });
+    if(holSnap.exists()) state.currentDateIsHoliday = holSnap.data().isHoliday===true;
+  } catch(e) { console.error("Load slots error:",e); }
+  renderTimes();
+}
 
 function renderTimes() {
-  timeGrid.innerHTML = "";
-
-  allTimes.forEach(time => {
-    const reason = getDisabledReason(time);
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = `time-button${time === state.time ? " active" : ""}`;
-    btn.textContent = time;
-    btn.disabled = Boolean(reason);
-    btn.title = reason || "Available";
-    btn.addEventListener("click", () => {
-      if (btn.disabled) return;
-      state.time = time;
-      setActive(".time-button", btn);
-      renderSummary();
+  const grid=$("timeGrid"); grid.innerHTML="";
+  let avail=0;
+  for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
+    const time=`${String(h).padStart(2,"0")}:00`;
+    const reason=getDisabledReason(time,h);
+    const btn=document.createElement("button");
+    btn.className=`tbtn${time===state.time?" on":""}`;
+    btn.textContent=time; btn.title=reason||"Available";
+    btn.disabled=Boolean(reason);
+    btn.addEventListener("click",()=>{
+      state.time=time;
+      grid.querySelectorAll(".tbtn").forEach(b=>b.classList.remove("on"));
+      btn.classList.add("on");
+      updateBookingConfirmBtn();
     });
-    timeGrid.append(btn);
-  });
-
-  const available = allTimes.filter(t => !getDisabledReason(t)).length;
-  availabilityText.textContent = `${available} slots available`;
+    grid.append(btn);
+    if(!reason) avail++;
+  }
+  $("slotsText").textContent=`${avail} slots available`;
 }
 
-function getDisabledReason(time) {
-  const h   = getHour(time);
-  const end = h + BUSINESS.duration;
-
-  // Past time check for today
-  if (state.dateOffset === 0) {
-    const nowHour = new Date().getHours();
-    if (h <= nowHour) return "Time has passed";
-  }
-
-  // Must be opened by admin
-  if (!state.openSlots.has(time)) return "Not opened for booking yet";
-
+function getDisabledReason(time, h) {
+  // Past time check
+  if(state.dateOffset===0 && h<=new Date().getHours()) return "Time has passed";
+  // Admin must open slot
+  if(!state.openSlots.has(time)) return "Not opened for booking yet";
   // Actively booked
-  if (state.blockedSlots.has(time)) return "Already booked";
-
-  if (end > BUSINESS.closeHour) return "Exceeds closing time";
-
-  if (state.booking === "offpeak") {
-    const d = getSelectedDate();
-    if (d.getDay() < 1 || d.getDay() > 5) return "Off-Peak: Mon–Fri only";
-    if (h < BUSINESS.offPeakStartHour || end > BUSINESS.offPeakEndHour) return "Off-Peak: 10:00–15:00 only";
+  if(state.blockedSlots.has(time)) return "Already booked";
+  // Off-Peak restrictions
+  if(state.bookingPaymentType==="offpeak"){
+    const day=getSelectedDate().getDay();
+    if(day<1||day>5) return "Off-Peak: Mon–Fri only";
+    if(state.currentDateIsHoliday) return "Off-Peak: Holiday excluded";
+    if(h<OFFPEAK.startHour||h+1>OFFPEAK.endHour) return "Off-Peak: 09:00–15:00 only";
   }
   return "";
 }
 
-// ── SUMMARY ──────────────────────────────────────────────
-function renderSummary() {
-  const labels = { single: "Single Use", ultra: "Ultra Pass", offpeak: "Off-Peak Pass" };
-  bookingChip.textContent = labels[state.booking];
+function updatePaymentTypeButtons() {
+  const el=state.eligibility;
+  const uBtn=$("ptUltra"), oBtn=$("ptOffpeak");
+  uBtn.disabled = !el.hasUltra;
+  oBtn.disabled = !el.hasOffpeak;
+  $("ptUltraSub").textContent = el.hasUltra
+    ? `${el.ultraPkg.remainingMinutes} min left`
+    : "No active pass";
+  $("ptOffpeakSub").textContent = el.hasOffpeak
+    ? `Valid until ${el.offpeakPkg.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—"}`
+    : "No active pass";
 
-  if (!state.time) {
-    selectedSummary.textContent = "Pick a time above";
-    confirmButton.disabled = true;
-    priceText.textContent = "฿350";
-    passText.textContent = "Payment due within 15 minutes after booking.";
-    return;
-  }
-
-  selectedSummary.textContent = `${getSelectedDateLabel()}, ${state.time} – ${formatEndTime(state.time)}`;
-  confirmButton.disabled = false;
-
-  if (state.booking === "single") {
-    priceText.textContent = `฿${BUSINESS.pricePerHour}`;
-    passText.textContent = "Payment due within 15 minutes. Cancel >24 hrs for credit.";
-  } else if (state.booking === "ultra") {
-    priceText.textContent = "฿0 (Ultra Pass)";
-    passText.textContent = "1 hour will be deducted from your Ultra Pass balance.";
-  } else {
-    priceText.textContent = "฿0 (Off-Peak Pass)";
-    passText.textContent = "1 hour will be deducted from your Off-Peak Pass quota.";
-  }
+  document.querySelectorAll(".ptbtn").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      if(btn.disabled){ showToast("No active pass for this option.",true); return; }
+      document.querySelectorAll(".ptbtn").forEach(b=>b.classList.remove("on"));
+      btn.classList.add("on");
+      state.bookingPaymentType=btn.dataset.pt;
+      // Re-validate times for off-peak restrictions
+      renderTimes();
+      if(state.time && getDisabledReason(state.time, parseInt(state.time))) state.time=null;
+      updateBookingConfirmBtn();
+      // Update price display
+      if(state.bookingPaymentType==="single"){
+        $("bkPrice").textContent="฿350";
+        $("bkNote2").textContent="Payment due within 15 minutes.";
+      } else {
+        $("bkPrice").textContent="฿0 (Pass)";
+        $("bkNote2").textContent=state.bookingPaymentType==="ultra"
+          ? `60 min deducted from Ultra Pass`
+          : "1 session deducted from Off-Peak Pass";
+      }
+    });
+  });
 }
 
-// ── CREATE BOOKING (TRANSACTION) ─────────────────────────
-async function createBooking() {
-  const name  = customerName.value.trim();
-  const phone = customerPhone.value.trim();
-  customerName.classList.toggle("invalid", !name);
-  customerPhone.classList.toggle("invalid", !phone);
-  if (!name)  { customerName.focus();  showToast("Name is required", true); return; }
-  if (!phone) { customerPhone.focus(); showToast("Phone is required", true); return; }
-  if (!state.time) { showToast("Please select a time", true); return; }
+function updateBookingConfirmBtn() {
+  $("confirmBkBtn").disabled = !state.time;
+}
 
-  const code      = `UT-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-  const dateISO   = getSelectedDateISO();
-  const slotDocId = `${RESOURCE_ID}_${dateISO}_${state.time.replace(":", "")}`;
-  const expiresAt = new Date(Date.now() + BUSINESS.paymentMinutes * 60 * 1000);
-  const expiresTS = Timestamp.fromDate(expiresAt);
+// ── CONFIRM BOOKING ─────────────────────────────────────────────
+$("confirmBkBtn").addEventListener("click", async()=>{
+  const name=$("bkName").value.trim(), phone=$("bkPhone").value.trim();
+  $("bkName").classList.toggle("invalid",!name);
+  $("bkPhone").classList.toggle("invalid",!phone);
+  if(!name){ $("bkName").focus(); showToast("Name is required",true); return; }
+  if(!phone){ $("bkPhone").focus(); showToast("Phone is required",true); return; }
+  if(!state.time){ showToast("Please select a time",true); return; }
 
-  const isPass = state.booking !== "single";
-  const bookingPayload = {
-    bookingCode:   code,
-    resourceId:    RESOURCE_ID,
-    bookingType:   state.booking === "single" ? "Single Use" : state.booking === "ultra" ? "Ultra Pass" : "Off-Peak Pass",
-    lineUserId:    state.lineProfile.userId,
-    lineDisplayName: state.lineProfile.displayName,
-    customerName:  name,
-    customerPhone: phone,
-    customerNote:  customerNote.value.trim(),
-    date:          dateISO,
-    startTime:     state.time,
-    endTime:       formatEndTime(state.time),
-    durationHours: BUSINESS.duration,
-    price:         isPass ? 0 : BUSINESS.pricePerHour,
-    bookingStatus: isPass ? "confirmed" : "pending_payment",
-    paymentStatus: isPass ? "package"   : "unpaid",
-    paymentExpiresAt: isPass ? null : expiresTS,
-    slipUrl:       null,
-    slipUploadedAt: null,
-    cancelReason:  null,
-  };
-
-  confirmButton.disabled = true;
-  confirmButton.textContent = "Saving...";
-
+  const btn=$("confirmBkBtn"); btn.disabled=true; btn.textContent="Saving...";
   try {
-    const bookingRef = doc(collection(db, "bookings"));
-    const slotRef    = doc(db, "booking_slots", slotDocId);
+    const code      = generateCode("UT");
+    const dateISO   = getSelectedDateISO();
+    const endTime   = formatEndTime(state.time);
+    const slotDocId = `${RESOURCE_ID}_${dateISO}_${state.time.replace(":","")}`; 
+    const isSingle  = state.bookingPaymentType==="single";
+    const expiresAt = isSingle ? new Date(Date.now()+PAY_MINS*60*1000) : null;
+    const expiresTS = isSingle ? Timestamp.fromDate(expiresAt) : null;
 
-    await runTransaction(db, async t => {
-      // READ first
-      const slotSnap = await t.get(slotRef);
-      if (slotSnap.exists()) {
-        const sd = slotSnap.data();
-        if (sd.bookingStatus === "confirmed") throw new Error("Slot just got booked. Please pick another time.");
-        if (sd.bookingStatus === "pending_payment") {
-          const exp = sd.expiresAt?.toDate?.();
-          if (!exp || exp > new Date()) throw new Error("Slot is temporarily held. Try again in a moment.");
-        }
+    const bookingPayload = {
+      bookingCode:    code,
+      resourceId:     RESOURCE_ID,
+      bookingType:    isSingle?"Single Use":state.bookingPaymentType==="ultra"?"Ultra Pass":"Off-Peak Pass",
+      lineUserId:     state.lineProfile.userId,
+      lineDisplayName:state.lineProfile.displayName,
+      customerName:   name,
+      customerPhone:  phone,
+      customerNote:   $("bkNote").value.trim(),
+      date:           dateISO,
+      startTime:      state.time,
+      endTime,
+      durationHours:  1,
+      price:          isSingle?350:0,
+      bookingStatus:  isSingle?"pending_payment":"confirmed",
+      paymentStatus:  isSingle?"unpaid":"package",
+      paymentExpiresAt: expiresTS,
+      slipUrl:        null, slipUploadedAt:null, cancelReason:null,
+    };
+
+    const bookingRef = doc(collection(db,"bookings"));
+    const slotRef    = doc(db,"booking_slots",slotDocId);
+    const availRef   = doc(db,"available_slots",slotDocId);
+
+    await runTransaction(db, async t=>{
+      const [slotSnap, availSnap] = await Promise.all([t.get(slotRef), t.get(availRef)]);
+      if(!availSnap.exists()||availSnap.data().status!=="open") throw new Error("This slot is no longer open. Please pick another time.");
+      if(slotSnap.exists()){
+        const sd=slotSnap.data();
+        if(sd.bookingStatus==="confirmed") throw new Error("This slot was just booked. Please pick another time.");
+        if(sd.bookingStatus==="pending_payment"){const exp=sd.expiresAt?.toDate?.();if(!exp||exp>new Date()) throw new Error("Slot is temporarily held. Try again shortly.");}
       }
 
-      // WRITE
-      t.set(bookingRef, { ...bookingPayload, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-      t.set(slotRef, {
-        bookingCode:   code,
-        resourceId:    RESOURCE_ID,
-        date:          dateISO,
-        hour:          state.time,
-        bookingStatus: bookingPayload.bookingStatus,
-        paymentStatus: bookingPayload.paymentStatus,
-        expiresAt:     isPass ? null : expiresTS,
+      // If using Ultra Pass: deduct minutes
+      if(state.bookingPaymentType==="ultra" && state.eligibility.ultraPkg){
+        const pkgRef=doc(db,"customer_packages",state.eligibility.ultraPkg.id);
+        t.update(pkgRef,{ remainingMinutes:state.eligibility.ultraPkg.remainingMinutes-60, updatedAt:serverTimestamp() });
+      }
+      // TODO: Off-Peak quota deduction — wire up real weekly/monthly tracking here
+
+      t.set(bookingRef,{ ...bookingPayload, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
+      t.set(slotRef,{
+        bookingCode:code, resourceId:RESOURCE_ID, date:dateISO, hour:state.time,
+        bookingStatus:bookingPayload.bookingStatus, paymentStatus:bookingPayload.paymentStatus,
+        expiresAt:expiresTS,
       });
     });
 
-    state.currentBookingCode  = code;
-    state.currentBookingDocId = bookingRef.id;
-    state.currentBookingData  = { ...bookingPayload, expiresAt };
+    state.currentBookingCode   = code;
+    state.currentBookingDocId  = bookingRef.id;
+    state.currentBookingData   = { ...bookingPayload, expiresAt };
 
-    if (isPass) {
-      showConfirmedView(code, bookingPayload);
+    if(isSingle){
+      state.paymentMode="booking";
+      showPaymentPanel(code, 350, expiresAt, dateISO, `${state.time} – ${endTime}`);
+      showView("viewPayment");
     } else {
-      showPaymentView(code, bookingPayload, expiresAt);
+      showSuccess("✅","Booking Confirmed!",code,`${name} · ${dateISO} · ${state.time}–${endTime} · ${bookingPayload.bookingType}`);
     }
-
-  } catch (err) {
-    console.error(err);
-    showToast(err.message || "Could not save booking. Please try again.", true);
+  } catch(e){
+    console.error(e); showToast(e.message||"Failed to book. Try again.",true);
   } finally {
-    confirmButton.disabled = false;
-    confirmButton.textContent = "Confirm Booking";
+    btn.disabled=false; btn.textContent="Confirm Booking";
   }
-}
-
-// ── PAYMENT VIEW ─────────────────────────────────────────
-function showPaymentView(code, data, expiresAt) {
-  bookingView.style.display  = "none";
-  paymentView.style.display  = "block";
-  confirmedView.style.display= "none";
-
-  $("payBookingCode").textContent = code;
-  $("payAmount").textContent      = `฿${data.price}`;
-  $("payDate").textContent        = data.date;
-  $("payTime").textContent        = `${data.startTime} – ${data.endTime}`;
-
-  // Populate QR amount spans
-  const amt = data.price ?? BUSINESS.pricePerHour;
-  const q1 = $("qrAmount");  if (q1) q1.textContent = amt;
-  const q2 = $("qrAmount2"); if (q2) q2.textContent = amt;
-
-  const dl = expiresAt.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
-  $("payDeadline").textContent = dl;
-}
-
-// ── CONFIRMED VIEW ───────────────────────────────────────
-function showConfirmedView(code, data) {
-  bookingView.style.display  = "none";
-  paymentView.style.display  = "none";
-  confirmedView.style.display= "block";
-
-  $("confirmedCode").textContent   = code;
-  $("confirmedDetails").textContent = `${data.customerName} · ${data.date} · ${data.startTime}–${data.endTime} · ${data.bookingType}`;
-}
-
-// ── SLIP UPLOAD ──────────────────────────────────────────
-slipFileInput.addEventListener("change", () => {
-  const file = slipFileInput.files[0];
-  if (!file) return;
-  slipAreaText.innerHTML = `📎 <strong>${file.name}</strong>`;
-  slipArea.classList.add("has-file");
-  const url = URL.createObjectURL(file);
-  slipPreview.src = url;
-  slipPreview.style.display = "block";
-  submitSlipBtn.disabled = false;
 });
 
-submitSlipBtn.addEventListener("click", async () => {
-  const file = slipFileInput.files[0];
+// ── PAYMENT PANEL ───────────────────────────────────────────────
+function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel) {
+  $("payCode").textContent   = code;
+  $("payAmt").textContent    = `฿${amount.toLocaleString("en-US")}`;
+  $("payAmtText").textContent= amount.toLocaleString("en-US");
+  $("payDate").textContent   = dateLabel;
+  $("payDets").textContent   = detailsLabel;
+  $("payDl").textContent     = expiresAt instanceof Date
+    ? expiresAt.toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"})
+    : "—";
+  $("payEyebrow").textContent= state.paymentMode==="pass"?"Pass Payment Required":"Payment Required";
+  // Reset slip area
+  $("slipAreaTxt").innerHTML='📎 <strong>Tap to upload payment slip</strong>';
+  $("slipPrev").style.display="none";
+  $("slipIn").value="";
+  $("slipArea").classList.remove("has");
+  $("submitSlipBtn").disabled=true;
+}
 
-  // ── Validation ──────────────────────────────────────────
-  if (!file) { showToast("Please select a file first.", true); return; }
-  if (!file.type.startsWith("image/")) { showToast("Invalid file type. Please upload an image (JPG, PNG).", true); return; }
-  if (file.size > 5 * 1024 * 1024) { showToast("File too large. Maximum size is 5MB.", true); return; }
-  if (!state.currentBookingCode || !state.currentBookingDocId) { showToast("Booking data missing. Please restart.", true); return; }
+// Slip file change
+$("slipIn").addEventListener("change",()=>{
+  const f=$("slipIn").files[0]; if(!f) return;
+  $("slipAreaTxt").innerHTML=`📎 <strong>${f.name}</strong>`;
+  $("slipArea").classList.add("has");
+  $("slipPrev").src=URL.createObjectURL(f); $("slipPrev").style.display="block";
+  $("submitSlipBtn").disabled=false;
+});
 
-  submitSlipBtn.disabled  = true;
-  submitSlipBtn.textContent = "Uploading...";
+// Submit slip
+$("submitSlipBtn").addEventListener("click", async()=>{
+  const file=$("slipIn").files[0];
+  if(!file){ showToast("Please select a file",true); return; }
+  if(!file.type.startsWith("image/")){ showToast("Please upload an image (JPG, PNG)",true); return; }
+  if(file.size>5*1024*1024){ showToast("File too large. Max 5MB.",true); return; }
 
-  // ── 20-second timeout ────────────────────────────────────
-  let didTimeout = false;
-  const timeoutId = setTimeout(() => {
-    didTimeout = true;
-    console.error("Slip upload timed out after 20s");
-    showToast("Upload timed out. Please check your connection and try again.", true);
-    submitSlipBtn.disabled  = false;
-    submitSlipBtn.textContent = "Submit Payment Slip";
-  }, 20000);
+  const btn=$("submitSlipBtn"); btn.disabled=true; btn.textContent="Uploading...";
+  let didTimeout=false;
+  const tid=setTimeout(()=>{ didTimeout=true; showToast("Upload timed out. Check connection.",true); btn.disabled=false; btn.textContent="Submit Payment Slip"; },20000);
 
   try {
-    console.log("Starting slip upload", { bookingCode: state.currentBookingCode, fileName: file.name, size: file.size });
+    const ts=Date.now();
+    const isPass=state.paymentMode==="pass";
+    const code=isPass?state.currentPurchaseCode:state.currentBookingCode;
+    const folder=isPass?"pass_slips":"payment_slips";
+    const path=`${folder}/${code}/${ts}_${file.name}`;
+    console.log("Starting slip upload", path);
 
-    const ts   = Date.now();
-    const path = `payment_slips/${state.currentBookingCode}/${ts}_${file.name}`;
-    const sRef = storageRef(storage, path);
+    const ref=sRef(storage,path);
+    await uploadBytes(ref,file);
+    if(didTimeout) return;
+    console.log("Upload complete");
 
-    await uploadBytes(sRef, file);
-    if (didTimeout) return;
-    console.log("Upload complete", path);
+    const url=await getDownloadURL(ref);
+    if(didTimeout) return;
+    console.log("Download URL received");
 
-    const downloadUrl = await getDownloadURL(sRef);
-    if (didTimeout) return;
-    console.log("Download URL received", downloadUrl);
+    clearTimeout(tid);
 
-    // Update booking doc
-    const bookingDocRef = doc(db, "bookings", state.currentBookingDocId);
-    await updateDoc(bookingDocRef, {
-      bookingStatus:  "confirmed",
-      paymentStatus:  "pending_review",
-      slipUrl:        downloadUrl,
-      slipUploadedAt: serverTimestamp(),
-      updatedAt:      serverTimestamp(),
-    });
-    if (didTimeout) return;
-    console.log("Booking updated", state.currentBookingDocId);
+    if(isPass){
+      const pRef=doc(db,"pass_purchases",state.currentPurchaseDocId);
+      await updateDoc(pRef,{ status:"pending_review", paymentStatus:"pending_review", slipUrl:url, slipUploadedAt:serverTimestamp(), updatedAt:serverTimestamp() });
+      console.log("Pass purchase updated");
+      showSuccess("📨","Slip Received!",code,"Your pass purchase is pending admin review. It will be activated shortly after confirmation.");
+    } else {
+      const bRef=doc(db,"bookings",state.currentBookingDocId);
+      await updateDoc(bRef,{ bookingStatus:"confirmed", paymentStatus:"pending_review", slipUrl:url, slipUploadedAt:serverTimestamp(), updatedAt:serverTimestamp() });
+      const slotId=`${RESOURCE_ID}_${state.currentBookingData.date}_${state.currentBookingData.startTime.replace(":","")}`; 
+      await updateDoc(doc(db,"booking_slots",slotId),{ bookingStatus:"confirmed", paymentStatus:"pending_review" });
+      console.log("Booking + slot updated");
+      showSuccess("✅","Slip Received!",code,`${state.currentBookingData.customerName} · ${state.currentBookingData.date} · ${state.currentBookingData.startTime}–${state.currentBookingData.endTime} · Pending admin review.`);
+    }
+    showView("viewSuccess");
 
-    // Update slot doc
-    const slotDocId = `${RESOURCE_ID}_${state.currentBookingData.date}_${state.currentBookingData.startTime.replace(":", "")}`;
-    await updateDoc(doc(db, "booking_slots", slotDocId), {
-      bookingStatus: "confirmed",
-      paymentStatus: "pending_review",
-    });
-    console.log("Slot updated", slotDocId);
-
-    clearTimeout(timeoutId);
-    showConfirmedView(state.currentBookingCode, state.currentBookingData);
-    showToast("Slip received. Booking confirmed — pending admin review.");
-
-  } catch (err) {
-    clearTimeout(timeoutId);
-    if (didTimeout) return; // timeout already handled
-    console.error("Slip upload failed:", err);
-    showToast(err.message || "Upload failed. Please try again.", true);
-    submitSlipBtn.disabled  = false;
-    submitSlipBtn.textContent = "Submit Payment Slip";
+  } catch(e){
+    clearTimeout(tid); if(didTimeout) return;
+    console.error("Slip upload failed:",e);
+    showToast(e.message||"Upload failed. Try again.",true);
+    btn.disabled=false; btn.textContent="Submit Payment Slip";
   }
 });
 
-// ── BOOKING TYPE SWITCH ───────────────────────────────────
-document.querySelectorAll("[data-booking]").forEach(btn => {
-  btn.addEventListener("click", () => {
-    if (btn.disabled) return;
-    state.booking = btn.dataset.booking;
-    setActive("[data-booking]", btn);
-    renderTimes();
-    renderSummary();
+// ── BUY PASS VIEW ───────────────────────────────────────────────
+function openBuyPassView(mode) {
+  state.selectedPackageType=null;
+  $("buyPassTitle").textContent=mode==="ultra"?"Buy Ultra Pass":"Buy Off-Peak Pass";
+  renderPackages(mode);
+  $("passTotal").textContent="฿—";
+  $("passTotalNote").textContent="Select a package above";
+  $("purchaseBtn").disabled=true;
+
+  const nameInput=$("passName");
+  if(!nameInput.value && state.lineProfile.displayName!=="Guest") nameInput.value=state.lineProfile.displayName;
+
+  showView("viewBuyPass");
+}
+
+function renderPackages(mode) {
+  const grid=$("pkgGrid"); grid.innerHTML="";
+  const pkgs=mode==="ultra"
+    ?[PACKAGES.ultra_10, PACKAGES.ultra_20]
+    :[PACKAGES.offpeak];
+
+  pkgs.forEach(pkg=>{
+    const card=document.createElement("div");
+    card.className="pkgcard";
+    card.innerHTML=`
+      <div class="pkgcard-top">
+        <div class="pkg-name">${pkg.packageName}</div>
+        <div class="pkg-price">฿${pkg.price.toLocaleString("en-US")}</div>
+      </div>
+      <div class="pkg-desc">${pkg.desc}</div>
+      <div class="pkg-badge">Valid ${pkg.validityDays} days</div>`;
+    card.addEventListener("click",()=>{
+      grid.querySelectorAll(".pkgcard").forEach(c=>c.classList.remove("on"));
+      card.classList.add("on");
+      state.selectedPackageType=pkg.packageType;
+      $("passTotal").textContent=`฿${pkg.price.toLocaleString("en-US")}`;
+      $("passTotalNote").textContent=pkg.packageName;
+      $("purchaseBtn").disabled=false;
+    });
+    grid.append(card);
   });
+}
+
+$("purchaseBtn").addEventListener("click", async()=>{
+  const name=$("passName").value.trim(), phone=$("passPhone").value.trim();
+  $("passName").classList.toggle("invalid",!name);
+  $("passPhone").classList.toggle("invalid",!phone);
+  if(!name){ $("passName").focus(); showToast("Name is required",true); return; }
+  if(!phone){ $("passPhone").focus(); showToast("Phone is required",true); return; }
+  if(!state.selectedPackageType){ showToast("Please select a package",true); return; }
+
+  const btn=$("purchaseBtn"); btn.disabled=true; btn.textContent="Saving...";
+  try {
+    const pkg=PACKAGES[state.selectedPackageType];
+    const code=generateCode("PP");
+    const expiresAt=new Date(Date.now()+PAY_MINS*60*1000);
+
+    const payload={
+      purchaseCode:     code,
+      lineUserId:       state.lineProfile.userId,
+      lineDisplayName:  state.lineProfile.displayName,
+      customerName:     name,
+      customerPhone:    phone,
+      packageType:      pkg.packageType,
+      packageName:      pkg.packageName,
+      price:            pkg.price,
+      totalMinutes:     pkg.totalMinutes,
+      validityDays:     pkg.validityDays,
+      weeklyLimitHours: pkg.weeklyLimitHours||null,
+      monthlyLimitHours:pkg.monthlyLimitHours||null,
+      status:           "pending_payment",
+      paymentStatus:    "unpaid",
+      paymentExpiresAt: Timestamp.fromDate(expiresAt),
+      slipUrl:null, slipUploadedAt:null,
+    };
+
+    const pRef=await addDoc(collection(db,"pass_purchases"),{ ...payload, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
+
+    state.paymentMode         ="pass";
+    state.currentPurchaseCode  =code;
+    state.currentPurchaseDocId =pRef.id;
+    state.currentPurchaseData  ={...payload,expiresAt};
+
+    showPaymentPanel(code, pkg.price, expiresAt, pkg.packageName, `${name} · ${phone}`);
+    showView("viewPayment");
+  } catch(e){
+    console.error(e); showToast("Failed to create purchase. Try again.",true);
+  } finally {
+    btn.disabled=false; btn.textContent="Purchase Pass";
+  }
 });
 
-confirmButton.addEventListener("click", createBooking);
+// ── MY BOOKINGS ─────────────────────────────────────────────────
+async function openMyBookings() {
+  showView("viewMyBookings");
+  $("myContent").innerHTML=`<div style="text-align:center;padding:32px"><div class="spinner" style="margin:0 auto 10px"></div><p style="color:var(--muted);font-size:.82rem">Loading...</p></div>`;
 
-// ── HELPERS ──────────────────────────────────────────────
+  try {
+    const uid=state.lineProfile.userId;
+
+    const [bookSnap, pkgSnap, purchSnap] = await Promise.all([
+      getDocs(query(collection(db,"bookings"), where("lineUserId","==",uid))),
+      getDocs(query(collection(db,"customer_packages"), where("lineUserId","==",uid), where("status","==","active"))),
+      getDocs(query(collection(db,"pass_purchases"), where("lineUserId","==",uid))),
+    ]);
+
+    const bookings = bookSnap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    const packages = pkgSnap.docs.map(d=>({id:d.id,...d.data()}));
+    const purchases= purchSnap.docs.map(d=>({id:d.id,...d.data()}))
+      .filter(p=>p.status==="pending_payment"||p.status==="pending_review")
+      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+
+    renderMyBookings(bookings, packages, purchases);
+  } catch(e){
+    console.error(e);
+    $("myContent").innerHTML=`<div class="empty"><p>Failed to load. Please try again.</p></div>`;
+  }
+}
+
+function renderMyBookings(bookings, packages, purchases) {
+  const active=bookings.filter(b=>b.bookingStatus!=="cancelled");
+  const now=new Date();
+
+  if(!active.length && !packages.length && !purchases.length) {
+    $("myContent").innerHTML=`<div class="empty">
+      <div class="empty-icon">📭</div>
+      <p>No active bookings or passes yet.</p>
+      <div class="empty-btns">
+        <button class="btn-empty" onclick="openBookingView();showView('viewBooking')">🎾 Book Single Use</button>
+        <button class="btn-empty" onclick="openBuyPassView('ultra');showView('viewBuyPass')">⚡ Buy Ultra Pass</button>
+        <button class="btn-empty" onclick="openBuyPassView('offpeak');showView('viewBuyPass')">🌙 Buy Off-Peak Pass</button>
+      </div></div>`;
+    return;
+  }
+
+  let html="";
+
+  // Pending pass purchases
+  if(purchases.length){
+    html+=`<div class="sec-title">Pass Purchases</div>`;
+    purchases.forEach(p=>{
+      html+=`<div class="passitem">
+        <div class="passitem-top"><div class="pass-name">${p.packageName||"—"}</div><span class="sp s-${p.paymentStatus}">${p.paymentStatus}</span></div>
+        <div class="pass-info">
+          <span>Code: <strong>${p.purchaseCode}</strong></span>
+          <span>฿${p.price?.toLocaleString("en-US")||"—"}</span>
+          ${p.status==="pending_review"?`<span style="color:var(--brand-dark)">⏳ Slip received, pending admin review</span>`:`<span style="color:var(--warning)">💳 Payment required</span>`}
+        </div>
+        ${p.status==="pending_payment"?`<button class="btn-rpay" style="margin-top:9px;width:100%" onclick="resumePassPayment('${p.id}')">Complete Payment →</button>`:""}
+      </div>`;
+    });
+  }
+
+  // Active bookings
+  if(active.length){
+    html+=`<div class="sec-title">Bookings</div>`;
+    active.forEach(b=>{
+      const isPendPay=b.bookingStatus==="pending_payment";
+      const isPendRev=b.paymentStatus==="pending_review";
+      const isPaid   =b.paymentStatus==="paid"||b.paymentStatus==="package";
+      html+=`<div class="bitem">
+        <div class="bitem-top"><span class="bitem-code">${b.bookingCode}</span><span class="bitem-type">${b.bookingType||"—"}</span></div>
+        <div class="bitem-details">
+          <div class="bf-field"><div class="bf-lbl">Date</div><div class="bf-val">${b.date||"—"}</div></div>
+          <div class="bf-field"><div class="bf-lbl">Time</div><div class="bf-val">${b.startTime||"—"}–${b.endTime||"—"}</div></div>
+          <div class="bf-field"><div class="bf-lbl">Name</div><div class="bf-val">${b.customerName||"—"}</div></div>
+          <div class="bf-field"><div class="bf-lbl">Price</div><div class="bf-val">฿${b.price??0}</div></div>
+        </div>
+        <div class="bitem-footer">
+          <span class="sp s-${b.bookingStatus}">${b.bookingStatus}</span>
+          ${isPendPay?`<button class="btn-rpay" onclick="resumeBookingPayment('${b.id}')">Complete Payment →</button>`:""}
+          ${isPendRev?`<span style="font-size:.72rem;color:#60a5fa">⏳ Slip received, pending admin review</span>`:""}
+          ${(isPaid&&!isPendRev)?`<span style="font-size:.72rem;color:var(--brand-dark)">✅ Confirmed</span>`:""}
+        </div>
+      </div>`;
+    });
+  }
+
+  // Active passes
+  if(packages.length){
+    html+=`<div class="sec-title">Active Passes</div>`;
+    packages.forEach(p=>{
+      const validUntil=p.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—";
+      const isUltra=p.packageType==="ultra_10"||p.packageType==="ultra_20";
+      html+=`<div class="passitem">
+        <div class="passitem-top"><div class="pass-name">${p.packageName}</div><span class="pass-active">Active</span></div>
+        ${isUltra?`<div class="pass-mins">${p.remainingMinutes||0} min remaining</div>`:""} 
+        <div class="pass-info">
+          <span>Valid until: <strong>${validUntil}</strong></span>
+          ${p.weeklyLimitHours?`<span>Weekly limit: ${p.weeklyLimitHours} hrs · Monthly: ${p.monthlyLimitHours} hrs</span>`:""}
+        </div>
+      </div>`;
+    });
+  }
+
+  $("myContent").innerHTML=`<div style="padding:0 0 16px">${html}</div>`;
+}
+
+// Resume payment for pending booking from My Bookings
+window.resumeBookingPayment = async(docId)=>{
+  try {
+    const snap=await getDoc(doc(db,"bookings",docId));
+    if(!snap.exists()) return;
+    const b={id:snap.id,...snap.data()};
+    state.paymentMode="booking";
+    state.currentBookingCode=b.bookingCode;
+    state.currentBookingDocId=b.id;
+    state.currentBookingData=b;
+    const exp=b.paymentExpiresAt?.toDate?.()||new Date();
+    showPaymentPanel(b.bookingCode,b.price||350,exp,b.date||"—",`${b.startTime||"—"}–${b.endTime||"—"}`);
+    showView("viewPayment");
+  } catch(e){ showToast("Could not load booking.",true); }
+};
+
+// Resume payment for pending pass purchase from My Bookings
+window.resumePassPayment = async(docId)=>{
+  try {
+    const snap=await getDoc(doc(db,"pass_purchases",docId));
+    if(!snap.exists()) return;
+    const p={id:snap.id,...snap.data()};
+    state.paymentMode="pass";
+    state.currentPurchaseCode=p.purchaseCode;
+    state.currentPurchaseDocId=p.id;
+    state.currentPurchaseData=p;
+    const exp=p.paymentExpiresAt?.toDate?.()||new Date();
+    showPaymentPanel(p.purchaseCode,p.price||0,exp,p.packageName||"—",`${p.customerName||"—"}`);
+    showView("viewPayment");
+  } catch(e){ showToast("Could not load purchase.",true); }
+};
+
+window.openBookingView=openBookingView;
+window.openBuyPassView=openBuyPassView;
+
+// ── SUCCESS ─────────────────────────────────────────────────────
+function showSuccess(icon,title,code,msg) {
+  $("succIcon").textContent=icon;
+  $("succTitle").textContent=title;
+  $("succCode").textContent=code;
+  $("succMsg").textContent=msg;
+  showView("viewSuccess");
+}
+
+// ── HELPERS ─────────────────────────────────────────────────────
 function getSelectedDate() {
-  const d = new Date(); d.setDate(d.getDate() + state.dateOffset); d.setHours(0,0,0,0); return d;
+  const d=new Date(); d.setDate(d.getDate()+state.dateOffset); d.setHours(0,0,0,0); return d;
 }
 function getSelectedDateISO() {
-  const d = getSelectedDate();
+  const d=getSelectedDate();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
-function getSelectedDateLabel() {
-  if (state.dateOffset === 0) return "Today";
-  if (state.dateOffset === 1) return "Tomorrow";
-  return new Intl.DateTimeFormat("en-US", { weekday:"short", month:"short", day:"numeric" }).format(getSelectedDate());
-}
-function getHour(t) { return Number(t.split(":")[0]); }
 function formatEndTime(t) {
-  const end = getHour(t) + BUSINESS.duration;
-  return `${String(end >= 24 ? end-24 : end).padStart(2,"0")}:00${end >= 24 ? " (+1)" : ""}`;
-}
-function setActive(sel, active) {
-  document.querySelectorAll(sel).forEach(b => {
-    b.classList.toggle("active", b === active);
-    if (b.getAttribute("role") === "radio") b.setAttribute("aria-checked", String(b === active));
-  });
-}
-function showToast(msg, isError = false) {
-  const t = $("toast");
-  t.textContent = msg;
-  t.className = `toast show${isError ? " error" : ""}`;
-  setTimeout(() => t.classList.remove("show"), 3000);
+  const h=parseInt(t)+1; return h>=24?"00:00 (+1)":`${String(h).padStart(2,"0")}:00`;
 }
 
-// ── BOOT ─────────────────────────────────────────────────
+// ── BOOT ────────────────────────────────────────────────────────
 initLiff();
 </script>
 </body>
