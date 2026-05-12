@@ -386,6 +386,11 @@ const fbApp=initializeApp(firebaseConfig);
 const db=getFirestore(fbApp);
 const $=id=>document.getElementById(id);
 
+// ── HELPERS: HTML escape + phone normalize ───────────────────────
+// esc(): use for ANY customer/admin-typed string injected via innerHTML.
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const normalizePhone = p => String(p||"").replace(/\D/g,"");
+
 // ── ADMIN NAMES ──────────────────────────────────────────────────
 ADMIN_NAMES.forEach(n=>{const o=document.createElement("option");o.value=o.textContent=n;$("adminSel").append(o);});
 
@@ -453,40 +458,42 @@ function renderBookings(){
 
 function cardHTML(b){
   const tc=b.bookingType?.includes("Ultra")?"tu":b.bookingType?.includes("Off")?"to":"ts";
-  // FIXED: canReschedule = not cancelled/expired/completed/no_show (paid bookings CAN reschedule)
+  // canReschedule = not cancelled/expired/completed/no_show (paid bookings CAN reschedule)
   const canResch=!["cancelled","expired","completed","no_show"].includes(b.bookingStatus);
   const isCancelled=b.bookingStatus==="cancelled";
   const isPaid=b.paymentStatus==="paid";
   const canMarkPaid=b.paymentStatus==="pending_review"&&!isCancelled;
   const canCancel=!isCancelled&&!isPaid;
   const created=b.createdAt?.toDate?b.createdAt.toDate().toLocaleString("en-US",{dateStyle:"short",timeStyle:"short"}):"—";
-  const prevRow=b.previousDate?`<div><div class="fl">Previously</div><div class="fv dim">${b.previousDate} ${b.previousStartTime}–${b.previousEndTime}</div></div>`:"";
-  const slip=b.slipUrl
-    ?`<div class="slip-sec"><div class="slbl">Payment Slip</div><a href="${b.slipUrl}" target="_blank"><img class="simg" src="${b.slipUrl}" alt="Slip"/></a></div>`
+  const prevRow=b.previousDate?`<div><div class="fl">Previously</div><div class="fv dim">${esc(b.previousDate)} ${esc(b.previousStartTime)}–${esc(b.previousEndTime)}</div></div>`:"";
+  // slipUrl comes from Firebase Storage getDownloadURL — escape for safety; only render if it begins with http(s).
+  const safeSlip=(typeof b.slipUrl==="string"&&/^https?:\/\//.test(b.slipUrl))?b.slipUrl:"";
+  const slip=safeSlip
+    ?`<div class="slip-sec"><div class="slbl">Payment Slip</div><a href="${esc(safeSlip)}" target="_blank" rel="noopener noreferrer"><img class="simg" src="${esc(safeSlip)}" alt="Slip"/></a></div>`
     :`<div class="slip-sec"><div class="slbl">Payment Slip</div><p class="noslip">No slip yet</p></div>`;
 
   // Show paid badge separately + reschedule button even when paid
   const paidBadge=isPaid?`<span class="sp s-paid">✓ Paid</span>`:"";
   const actions=isCancelled
     ?`<button class="bdone">✗ Cancelled</button>`
-    :`${canMarkPaid?`<button class="bp" data-paid="${b.id}">✓ Mark as Paid</button>`:""}
-      ${canResch?`<button class="br" data-resch="${b.id}">📅 Reschedule</button>`:""}
-      ${canCancel?`<button class="bc" data-cancel="${b.id}">✗ Cancel</button>`:""}`;
+    :`${canMarkPaid?`<button class="bp" data-paid="${esc(b.id)}">✓ Mark as Paid</button>`:""}
+      ${canResch?`<button class="br" data-resch="${esc(b.id)}">📅 Reschedule</button>`:""}
+      ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}`;
 
-  return `<div class="bcard" id="card-${b.id}">
-    <div class="bcard-hdr"><span class="bcode">${b.bookingCode||"—"}</span><div style="display:flex;gap:5px;align-items:center">${paidBadge}<span class="tbadge ${tc}">${b.bookingType||"—"}</span></div></div>
+  return `<div class="bcard" id="card-${esc(b.id)}">
+    <div class="bcard-hdr"><span class="bcode">${esc(b.bookingCode||"—")}</span><div style="display:flex;gap:5px;align-items:center">${paidBadge}<span class="tbadge ${tc}">${esc(b.bookingType||"—")}</span></div></div>
     <div class="bcard-body">
       <div class="bfields">
-        <div><div class="fl">Customer</div><div class="fv">${b.customerName||"—"}</div></div>
-        <div><div class="fl">Phone</div><div class="fv">${b.customerPhone||"—"}</div></div>
-        <div><div class="fl">Date</div><div class="fv">${b.date||"—"}</div></div>
-        <div><div class="fl">Time</div><div class="fv">${b.startTime||"—"}–${b.endTime||"—"}</div></div>
-        <div><div class="fl">Price</div><div class="fv">฿${b.price??0}</div></div>
-        <div><div class="fl">Booking Status</div><div class="fv"><span class="sp s-${b.bookingStatus}">${b.bookingStatus||"—"}</span></div></div>
-        <div><div class="fl">Payment Status</div><div class="fv"><span class="sp s-${b.paymentStatus}">${b.paymentStatus||"—"}</span></div></div>
-        <div><div class="fl">Created</div><div class="fv dim">${created}</div></div>
+        <div><div class="fl">Customer</div><div class="fv">${esc(b.customerName||"—")}</div></div>
+        <div><div class="fl">Phone</div><div class="fv">${esc(b.customerPhone||"—")}</div></div>
+        <div><div class="fl">Date</div><div class="fv">${esc(b.date||"—")}</div></div>
+        <div><div class="fl">Time</div><div class="fv">${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</div></div>
+        <div><div class="fl">Price</div><div class="fv">฿${Number(b.price)||0}</div></div>
+        <div><div class="fl">Booking Status</div><div class="fv"><span class="sp s-${esc(b.bookingStatus)}">${esc(b.bookingStatus||"—")}</span></div></div>
+        <div><div class="fl">Payment Status</div><div class="fv"><span class="sp s-${esc(b.paymentStatus)}">${esc(b.paymentStatus||"—")}</span></div></div>
+        <div><div class="fl">Created</div><div class="fv dim">${esc(created)}</div></div>
         ${prevRow}
-        ${b.customerNote?`<div style="grid-column:1/-1"><div class="fl">Note</div><div class="fv dim">${b.customerNote}</div></div>`:""}
+        ${b.customerNote?`<div style="grid-column:1/-1"><div class="fl">Note</div><div class="fv dim">${esc(b.customerNote)}</div></div>`:""}
       </div>
       ${slip}
       <div class="acts">${actions}</div>
@@ -523,7 +530,7 @@ $("refreshBtn").addEventListener("click",loadBookings);
 const allH=()=>{const h=[];for(let i=OPEN_HOUR;i<CLOSE_HOUR;i++)h.push(i);return h;};
 const slId=(date,h)=>`${RESOURCE_ID}_${date}_${String(h).padStart(2,"0")}00`;
 const fH=h=>`${String(h).padStart(2,"0")}:00`;
-const fEnd=h=>h+1>=24?"00:00 (+1)":`${String(h+1).padStart(2,"0")}:00`;
+const fEnd=h=>h+1>=24?"00:00":`${String(h+1).padStart(2,"0")}:00`;
 function dateRange(s,n){const d=[],b=new Date(s+"T00:00:00");for(let i=0;i<n;i++){const x=new Date(b);x.setDate(b.getDate()+i);d.push(x.toISOString().slice(0,10));}return d;}
 
 async function setSlots(dates,close=false){
@@ -685,9 +692,21 @@ $("searchCustomerBtn").addEventListener("click", async()=>{
   $("searchResult").style.display="none"; $("notFound").style.display="none"; foundCustomer=null;
 
   try{
-    const snap=await getDocs(query(collection(db,"bookings"),where("customerPhone","==",phone)));
-    if(!snap.empty){
-      const docs=snap.docs.map(d=>d.data()).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    const normalized=normalizePhone(phone);
+    // Search both normalized (new bookings) and raw (legacy bookings without the field)
+    const [snapNorm, snapRaw] = await Promise.all([
+      getDocs(query(collection(db,"bookings"),where("customerPhoneNormalized","==",normalized))),
+      getDocs(query(collection(db,"bookings"),where("customerPhone","==",phone))),
+    ]);
+    const seen=new Set();
+    const docs=[];
+    [...snapNorm.docs, ...snapRaw.docs].forEach(d=>{
+      if(seen.has(d.id)) return;
+      seen.add(d.id);
+      docs.push(d.data());
+    });
+    docs.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    if(docs.length){
       foundCustomer=docs[0];
       $("foundName").textContent=foundCustomer.customerName||"—";
       $("foundPhone").textContent=foundCustomer.customerPhone||"—";
@@ -720,23 +739,29 @@ $("addPassBtn").addEventListener("click", async()=>{
     const vFrom=new Date(validFrom+"T00:00:00");
     const vUntil=new Date(vFrom.getTime()+pkg.validityDays*24*60*60*1000);
 
+    const phoneRaw=foundCustomer.customerPhone||$("searchPhone").value.trim();
     await addDoc(collection(db,"customer_packages"),{
-      lineUserId:       foundCustomer.lineUserId||"",
-      lineDisplayName:  foundCustomer.lineDisplayName||"",
-      customerName:     name,
-      customerPhone:    foundCustomer.customerPhone||$("searchPhone").value.trim(),
-      packageType:      pkg.packageType,
-      packageName:      pkg.packageName,
-      totalMinutes:     pkg.totalMinutes,
-      remainingMinutes: pkg.totalMinutes,
-      weeklyLimitHours: pkg.weeklyLimitHours||null,
-      monthlyLimitHours:pkg.monthlyLimitHours||null,
-      validFrom:        Timestamp.fromDate(vFrom),
-      validUntil:       Timestamp.fromDate(vUntil),
-      status:           "active",
-      addedByAdmin:     admin,
+      lineUserId:              foundCustomer.lineUserId||"",
+      lineDisplayName:         foundCustomer.lineDisplayName||"",
+      customerName:            name,
+      customerPhone:           phoneRaw,
+      customerPhoneNormalized: normalizePhone(phoneRaw),
+      packageType:             pkg.packageType,
+      packageName:             pkg.packageName,
+      totalMinutes:            pkg.totalMinutes,
+      remainingMinutes:        pkg.totalMinutes,
+      weeklyLimitHours:        pkg.weeklyLimitHours||null,
+      monthlyLimitHours:       pkg.monthlyLimitHours||null,
+      // Off-Peak quota counters — Maps keyed by ISO week / calendar month.
+      // Empty by default; booking transaction reads + increments these atomically.
+      weeklyUsage:             {},
+      monthlyUsage:            {},
+      validFrom:               Timestamp.fromDate(vFrom),
+      validUntil:              Timestamp.fromDate(vUntil),
+      status:                  "active",
+      addedByAdmin:            admin,
       createdFromPurchaseCode: null,
-      createdAt:        serverTimestamp(),
+      createdAt:               serverTimestamp(),
     });
 
     showToast(`✓ ${pkg.packageName} added for ${name}`);
@@ -762,10 +787,10 @@ async function loadActivePasses(){
       const validUntil=p.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—";
       const isUltra=p.packageType?.includes("ultra");
       return `<div class="srow" style="grid-template-columns:1fr 1fr 1fr auto;padding:10px 12px;margin-bottom:5px">
-        <div><div class="fl">Customer</div><div class="fv">${p.customerName||"—"} · ${p.customerPhone||"—"}</div></div>
-        <div><div class="fl">Package</div><div class="fv">${p.packageName||"—"}</div></div>
-        <div><div class="fl">${isUltra?"Remaining":"Valid Until"}</div><div class="fv">${isUltra?`${p.remainingMinutes||0} min`:validUntil}</div></div>
-        <button class="stoggle st-close" data-deactivate="${p.id}" style="padding:5px 10px;font-size:.7rem">Deactivate</button>
+        <div><div class="fl">Customer</div><div class="fv">${esc(p.customerName||"—")} · ${esc(p.customerPhone||"—")}</div></div>
+        <div><div class="fl">Package</div><div class="fv">${esc(p.packageName||"—")}</div></div>
+        <div><div class="fl">${isUltra?"Remaining":"Valid Until"}</div><div class="fv">${isUltra?`${Number(p.remainingMinutes)||0} min`:esc(validUntil)}</div></div>
+        <button class="stoggle st-close" data-deactivate="${esc(p.id)}" style="padding:5px 10px;font-size:.7rem">Deactivate</button>
       </div>`;
     }).join("");
 
@@ -829,7 +854,7 @@ $("mLoadSlots").addEventListener("click",async()=>{
         $("rTimeGrid").querySelectorAll(".mtbtn").forEach(b=>b.classList.remove("sel"));
         btn.classList.add("sel");reschTime=btn.dataset.time;
         const endH=Number(reschTime.split(":")[0])+1;
-        $("rHint").textContent=`Selected: ${reschTime} – ${endH>=24?"00:00 (+1)":`${String(endH).padStart(2,"0")}:00`}`;
+        $("rHint").textContent=`Selected: ${reschTime} – ${endH>=24?"00:00":`${String(endH).padStart(2,"0")}:00`}`;
         $("mConfirm").disabled=false;
       });
     });
@@ -841,7 +866,7 @@ $("mConfirm").addEventListener("click",async()=>{
   if(!reschBooking||!reschTime)return;
   const newDate=$("rDate").value;
   const endH=Number(reschTime.split(":")[0])+1;
-  const newEnd=endH>=24?"00:00 (+1)":`${String(endH).padStart(2,"0")}:00`;
+  const newEnd=endH>=24?"00:00":`${String(endH).padStart(2,"0")}:00`;
   const oldSlId=`${RESOURCE_ID}_${reschBooking.date}_${reschBooking.startTime.replace(":","")}`; 
   const newSlId=`${RESOURCE_ID}_${newDate}_${reschTime.replace(":","")}`; 
   const avSlId =`${RESOURCE_ID}_${newDate}_${reschTime.replace(":","")}`; 

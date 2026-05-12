@@ -439,6 +439,22 @@ function generateCode(prefix) {
   return `${prefix}-${new Date().getFullYear()}-${Math.floor(1000+Math.random()*9000)}`;
 }
 
+// ── HELPERS: HTML escape + phone normalize + period keys ────────
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const normalizePhone = p => String(p||"").replace(/\D/g,"");
+// ISO 8601 week key like "2026-W19" — used as a map key for off-peak quota tracking.
+function getISOWeekKey(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2,"0")}`;
+}
+function getMonthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}`;
+}
+
 // ── LIFF INIT ───────────────────────────────────────────────────
 async function initLiff() {
   $("ltext").textContent="Connecting to LINE...";
@@ -613,9 +629,10 @@ function updatePaymentTypeButtons() {
       document.querySelectorAll(".ptbtn").forEach(b=>b.classList.remove("on"));
       btn.classList.add("on");
       state.bookingPaymentType=btn.dataset.pt;
-      // Re-validate times for off-peak restrictions
-      renderTimes();
+      // Re-validate selected time BEFORE rendering — otherwise the disabled tile keeps
+      // its "on" class while the Confirm button is disabled, which looks broken.
       if(state.time && getDisabledReason(state.time, parseInt(state.time))) state.time=null;
+      renderTimes();
       updateBookingConfirmBtn();
       // Update price display
       if(state.bookingPaymentType==="single"){
@@ -644,56 +661,141 @@ $("confirmBkBtn").addEventListener("click", async()=>{
   if(!phone){ $("bkPhone").focus(); showToast("Phone is required",true); return; }
   if(!state.time){ showToast("Please select a time",true); return; }
 
+  const payType = state.bookingPaymentType;
+  if(payType!=="single" && payType!=="ultra" && payType!=="offpeak"){
+    showToast("Invalid payment type.",true); return;
+  }
+  // Guests can't use passes — no LIFF userId means we can't verify ownership.
+  if(payType!=="single" && state.lineProfile.userId==="guest"){
+    showToast("Please log in with LINE to use a pass.",true); return;
+  }
+  // Defense-in-depth: client must have surfaced eligibility before allowing pass type.
+  // (Server-side checks below are the real gate.)
+  if(payType==="ultra"   && !state.eligibility.ultraPkg)   { showToast("No active Ultra Pass.",true); return; }
+  if(payType==="offpeak" && !state.eligibility.offpeakPkg) { showToast("No active Off-Peak Pass.",true); return; }
+
   const btn=$("confirmBkBtn"); btn.disabled=true; btn.textContent="Saving...";
   try {
     const code      = generateCode("UT");
     const dateISO   = getSelectedDateISO();
     const endTime   = formatEndTime(state.time);
-    const slotDocId = `${RESOURCE_ID}_${dateISO}_${state.time.replace(":","")}`; 
-    const isSingle  = state.bookingPaymentType==="single";
+    const slotDocId = `${RESOURCE_ID}_${dateISO}_${state.time.replace(":","")}`;
+    const isSingle  = payType==="single";
     const expiresAt = isSingle ? new Date(Date.now()+PAY_MINS*60*1000) : null;
     const expiresTS = isSingle ? Timestamp.fromDate(expiresAt) : null;
 
     const bookingPayload = {
-      bookingCode:    code,
-      resourceId:     RESOURCE_ID,
-      bookingType:    isSingle?"Single Use":state.bookingPaymentType==="ultra"?"Ultra Pass":"Off-Peak Pass",
-      lineUserId:     state.lineProfile.userId,
-      lineDisplayName:state.lineProfile.displayName,
-      customerName:   name,
-      customerPhone:  phone,
-      customerNote:   $("bkNote").value.trim(),
-      date:           dateISO,
-      startTime:      state.time,
+      bookingCode:             code,
+      resourceId:              RESOURCE_ID,
+      bookingType:             isSingle?"Single Use":payType==="ultra"?"Ultra Pass":"Off-Peak Pass",
+      lineUserId:              state.lineProfile.userId,
+      lineDisplayName:         state.lineProfile.displayName,
+      customerName:            name,
+      customerPhone:           phone,
+      customerPhoneNormalized: normalizePhone(phone),
+      customerNote:            $("bkNote").value.trim(),
+      date:                    dateISO,
+      startTime:               state.time,
       endTime,
-      durationHours:  1,
-      price:          isSingle?350:0,
-      bookingStatus:  isSingle?"pending_payment":"confirmed",
-      paymentStatus:  isSingle?"unpaid":"package",
-      paymentExpiresAt: expiresTS,
-      slipUrl:        null, slipUploadedAt:null, cancelReason:null,
+      durationHours:           1,
+      price:                   isSingle?350:0,
+      bookingStatus:           isSingle?"pending_payment":"confirmed",
+      paymentStatus:           isSingle?"unpaid":"package",
+      paymentExpiresAt:        expiresTS,
+      slipUrl:                 null, slipUploadedAt:null, cancelReason:null,
     };
 
     const bookingRef = doc(collection(db,"bookings"));
     const slotRef    = doc(db,"booking_slots",slotDocId);
     const availRef   = doc(db,"available_slots",slotDocId);
 
+    // Build the reads plan first — all reads must complete before any writes in a transaction.
+    const pkgRef = payType==="ultra"
+      ? doc(db,"customer_packages",state.eligibility.ultraPkg.id)
+      : payType==="offpeak"
+      ? doc(db,"customer_packages",state.eligibility.offpeakPkg.id)
+      : null;
+    const holRef = payType==="offpeak" ? doc(db,"holidays",dateISO) : null;
+
     await runTransaction(db, async t=>{
-      const [slotSnap, availSnap] = await Promise.all([t.get(slotRef), t.get(availRef)]);
-      if(!availSnap.exists()||availSnap.data().status!=="open") throw new Error("This slot is no longer open. Please pick another time.");
+      const readPromises = [t.get(slotRef), t.get(availRef)];
+      if(pkgRef) readPromises.push(t.get(pkgRef));
+      if(holRef) readPromises.push(t.get(holRef));
+      const reads = await Promise.all(readPromises);
+      const slotSnap = reads[0], availSnap = reads[1];
+      const pkgSnap  = pkgRef ? reads[2] : null;
+      const holSnap  = holRef ? reads[pkgRef?3:2] : null;
+
+      // ── Slot availability ─────────────────────────────────────
+      if(!availSnap.exists()||availSnap.data().status!=="open")
+        throw new Error("This slot is no longer open. Please pick another time.");
       if(slotSnap.exists()){
         const sd=slotSnap.data();
         if(sd.bookingStatus==="confirmed") throw new Error("This slot was just booked. Please pick another time.");
-        if(sd.bookingStatus==="pending_payment"){const exp=sd.expiresAt?.toDate?.();if(!exp||exp>new Date()) throw new Error("Slot is temporarily held. Try again shortly.");}
+        if(sd.bookingStatus==="pending_payment"){
+          const exp=sd.expiresAt?.toDate?.();
+          if(!exp||exp>new Date()) throw new Error("Slot is temporarily held. Try again shortly.");
+        }
       }
 
-      // If using Ultra Pass: deduct minutes
-      if(state.bookingPaymentType==="ultra" && state.eligibility.ultraPkg){
-        const pkgRef=doc(db,"customer_packages",state.eligibility.ultraPkg.id);
-        t.update(pkgRef,{ remainingMinutes:state.eligibility.ultraPkg.remainingMinutes-60, updatedAt:serverTimestamp() });
+      // ── Pass validation: ULTRA ────────────────────────────────
+      if(payType==="ultra"){
+        if(!pkgSnap||!pkgSnap.exists()) throw new Error("Ultra Pass not found.");
+        const pd=pkgSnap.data();
+        if(pd.lineUserId!==state.lineProfile.userId) throw new Error("Pass does not belong to this account.");
+        if(pd.status!=="active") throw new Error("Pass is not active.");
+        const validUntil=pd.validUntil?.toDate?.();
+        if(!validUntil||validUntil<new Date()) throw new Error("Pass has expired.");
+        if((pd.remainingMinutes||0)<60) throw new Error("Not enough minutes left on your pass.");
+        t.update(pkgRef,{
+          remainingMinutes: pd.remainingMinutes-60,
+          updatedAt:        serverTimestamp(),
+        });
       }
-      // TODO: Off-Peak quota deduction — wire up real weekly/monthly tracking here
 
+      // ── Pass validation: OFF-PEAK + quota ─────────────────────
+      if(payType==="offpeak"){
+        if(!pkgSnap||!pkgSnap.exists()) throw new Error("Off-Peak Pass not found.");
+        const pd=pkgSnap.data();
+        if(pd.lineUserId!==state.lineProfile.userId) throw new Error("Pass does not belong to this account.");
+        if(pd.status!=="active") throw new Error("Pass is not active.");
+        const validUntil=pd.validUntil?.toDate?.();
+        if(!validUntil||validUntil<new Date()) throw new Error("Pass has expired.");
+
+        // Day/time restrictions (also enforced in UI but re-checked here).
+        const sel=getSelectedDate();
+        const dow=sel.getDay(); // 0=Sun..6=Sat
+        if(dow<1||dow>5) throw new Error("Off-Peak: Mon–Fri only.");
+        if(holSnap?.exists?.() && holSnap.data().isHoliday===true)
+          throw new Error("Off-Peak: holidays are excluded.");
+        const startH=parseInt(state.time,10);
+        if(startH<OFFPEAK.startHour||startH+1>OFFPEAK.endHour)
+          throw new Error("Off-Peak: 09:00–15:00 only.");
+
+        // Quota check (weekly + monthly) against per-period counters on the pass doc.
+        const weekKey=getISOWeekKey(sel);
+        const monthKey=getMonthKey(sel);
+        const wkUsage=pd.weeklyUsage||{};
+        const moUsage=pd.monthlyUsage||{};
+        const wkUsed=Number(wkUsage[weekKey])||0;
+        const moUsed=Number(moUsage[monthKey])||0;
+        const wkLimitMin=(Number(pd.weeklyLimitHours)||0)*60;
+        const moLimitMin=(Number(pd.monthlyLimitHours)||0)*60;
+        // If a limit is configured but no value is set, we treat it as "block until set" so
+        // booking can never silently bypass the quota. weeklyLimitHours/monthlyLimitHours
+        // are seeded by admin.html PACKAGES (5/20 for offpeak) at addPass time.
+        if(!wkLimitMin || !moLimitMin) throw new Error("Off-Peak quota is not configured on this pass. Contact staff.");
+        if(wkUsed+60>wkLimitMin) throw new Error(`Off-Peak weekly limit reached (${wkLimitMin/60} hrs).`);
+        if(moUsed+60>moLimitMin) throw new Error(`Off-Peak monthly limit reached (${moLimitMin/60} hrs).`);
+
+        t.update(pkgRef,{
+          weeklyUsage:  { ...wkUsage,  [weekKey]:  wkUsed+60 },
+          monthlyUsage: { ...moUsage,  [monthKey]: moUsed+60 },
+          updatedAt:    serverTimestamp(),
+        });
+      }
+
+      // ── Writes ────────────────────────────────────────────────
       t.set(bookingRef,{ ...bookingPayload, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
       t.set(slotRef,{
         bookingCode:code, resourceId:RESOURCE_ID, date:dateISO, hour:state.time,
@@ -711,6 +813,10 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       showPaymentPanel(code, 350, expiresAt, dateISO, `${state.time} – ${endTime}`);
       showView("viewPayment");
     } else {
+      // Refresh local eligibility so the buttons reflect the just-deducted pass state
+      // next time the user opens the booking view.
+      state.eligibility = { hasUltra:false, ultraPkg:null, hasOffpeak:false, offpeakPkg:null };
+      try { await checkEligibility(); } catch(_) { /* non-fatal */ }
       showSuccess("✅","Booking Confirmed!",code,`${name} · ${dateISO} · ${state.time}–${endTime} · ${bookingPayload.bookingType}`);
     }
   } catch(e){
@@ -850,13 +956,13 @@ function renderMyBookings(bookings, packages, purchases) {
     html+=`<div class="sec-title">Pass Purchases</div>`;
     purchases.forEach(p=>{
       html+=`<div class="passitem">
-        <div class="passitem-top"><div class="pass-name">${p.packageName||"—"}</div><span class="sp s-${p.paymentStatus}">${p.paymentStatus}</span></div>
+        <div class="passitem-top"><div class="pass-name">${esc(p.packageName||"—")}</div><span class="sp s-${esc(p.paymentStatus)}">${esc(p.paymentStatus)}</span></div>
         <div class="pass-info">
-          <span>Code: <strong>${p.purchaseCode}</strong></span>
-          <span>฿${p.price?.toLocaleString("en-US")||"—"}</span>
+          <span>Code: <strong>${esc(p.purchaseCode)}</strong></span>
+          <span>฿${Number(p.price)?Number(p.price).toLocaleString("en-US"):"—"}</span>
           ${p.status==="pending_review"?`<span style="color:var(--brand-dark)">⏳ Slip received, pending admin review</span>`:`<span style="color:var(--warning)">💳 Payment required</span>`}
         </div>
-        ${p.status==="pending_payment"?`<button class="btn-rpay" style="margin-top:9px;width:100%" onclick="resumePassPayment('${p.id}')">Complete Payment →</button>`:""}
+        ${p.status==="pending_payment"?`<button class="btn-rpay" style="margin-top:9px;width:100%" onclick="resumePassPayment('${esc(p.id)}')">Complete Payment →</button>`:""}
       </div>`;
     });
   }
@@ -869,16 +975,16 @@ function renderMyBookings(bookings, packages, purchases) {
       const isPendRev=b.paymentStatus==="pending_review";
       const isPaid   =b.paymentStatus==="paid"||b.paymentStatus==="package";
       html+=`<div class="bitem">
-        <div class="bitem-top"><span class="bitem-code">${b.bookingCode}</span><span class="bitem-type">${b.bookingType||"—"}</span></div>
+        <div class="bitem-top"><span class="bitem-code">${esc(b.bookingCode)}</span><span class="bitem-type">${esc(b.bookingType||"—")}</span></div>
         <div class="bitem-details">
-          <div class="bf-field"><div class="bf-lbl">Date</div><div class="bf-val">${b.date||"—"}</div></div>
-          <div class="bf-field"><div class="bf-lbl">Time</div><div class="bf-val">${b.startTime||"—"}–${b.endTime||"—"}</div></div>
-          <div class="bf-field"><div class="bf-lbl">Name</div><div class="bf-val">${b.customerName||"—"}</div></div>
-          <div class="bf-field"><div class="bf-lbl">Price</div><div class="bf-val">฿${b.price??0}</div></div>
+          <div class="bf-field"><div class="bf-lbl">Date</div><div class="bf-val">${esc(b.date||"—")}</div></div>
+          <div class="bf-field"><div class="bf-lbl">Time</div><div class="bf-val">${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</div></div>
+          <div class="bf-field"><div class="bf-lbl">Name</div><div class="bf-val">${esc(b.customerName||"—")}</div></div>
+          <div class="bf-field"><div class="bf-lbl">Price</div><div class="bf-val">฿${Number(b.price)||0}</div></div>
         </div>
         <div class="bitem-footer">
-          <span class="sp s-${b.bookingStatus}">${b.bookingStatus}</span>
-          ${isPendPay?`<button class="btn-rpay" onclick="resumeBookingPayment('${b.id}')">Complete Payment →</button>`:""}
+          <span class="sp s-${esc(b.bookingStatus)}">${esc(b.bookingStatus)}</span>
+          ${isPendPay?`<button class="btn-rpay" onclick="resumeBookingPayment('${esc(b.id)}')">Complete Payment →</button>`:""}
           ${isPendRev?`<span style="font-size:.72rem;color:#60a5fa">⏳ Slip received, pending admin review</span>`:""}
           ${(isPaid&&!isPendRev)?`<span style="font-size:.72rem;color:var(--brand-dark)">✅ Confirmed</span>`:""}
         </div>
@@ -893,11 +999,11 @@ function renderMyBookings(bookings, packages, purchases) {
       const validUntil=p.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—";
       const isUltra=p.packageType==="ultra_10"||p.packageType==="ultra_20";
       html+=`<div class="passitem">
-        <div class="passitem-top"><div class="pass-name">${p.packageName}</div><span class="pass-active">Active</span></div>
-        ${isUltra?`<div class="pass-mins">${p.remainingMinutes||0} min remaining</div>`:""} 
+        <div class="passitem-top"><div class="pass-name">${esc(p.packageName)}</div><span class="pass-active">Active</span></div>
+        ${isUltra?`<div class="pass-mins">${Number(p.remainingMinutes)||0} min remaining</div>`:""}
         <div class="pass-info">
-          <span>Valid until: <strong>${validUntil}</strong></span>
-          ${p.weeklyLimitHours?`<span>Weekly limit: ${p.weeklyLimitHours} hrs · Monthly: ${p.monthlyLimitHours} hrs</span>`:""}
+          <span>Valid until: <strong>${esc(validUntil)}</strong></span>
+          ${p.weeklyLimitHours?`<span>Weekly limit: ${Number(p.weeklyLimitHours)||0} hrs · Monthly: ${Number(p.monthlyLimitHours)||0} hrs</span>`:""}
         </div>
       </div>`;
     });
@@ -939,7 +1045,9 @@ window.resumePassPayment = async(docId)=>{
 };
 
 window.openBookingView=openBookingView;
-window.openBuyPassView=openBuyPassView;
+// NOTE: customer self-purchase pass flow is not enabled. Passes are issued only via
+// admin.html → "Add Pass". Do not re-add a window.openBuyPassView reference until
+// the buy-pass view actually exists in this file.
 
 // ── SUCCESS ─────────────────────────────────────────────────────
 function showSuccess(icon,title,code,msg) {
@@ -959,11 +1067,24 @@ function getSelectedDateISO() {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
 function formatEndTime(t) {
-  const h=parseInt(t)+1; return h>=24?"00:00 (+1)":`${String(h).padStart(2,"0")}:00`;
+  const h=parseInt(t)+1; return h>=24?"00:00":`${String(h).padStart(2,"0")}:00`;
 }
 
 // ── BOOT ────────────────────────────────────────────────────────
-initLiff();
+// Wrap initLiff so an uncaught error (LIFF init, eligibility fetch, anything) can't
+// leave the user staring at a forever-spinning overlay. Always surface a message.
+initLiff().catch(err=>{
+  console.error("App boot failed:",err);
+  const lt=$("ltext");
+  if(lt){
+    lt.style.color="var(--danger)";
+    lt.style.maxWidth="280px";
+    lt.style.textAlign="center";
+    lt.textContent="Couldn't load the app. Please refresh, or check your connection.";
+  }
+  const sp=document.querySelector(".loverlay .spinner");
+  if(sp) sp.style.display="none";
+});
 </script>
 </body>
 </html>
