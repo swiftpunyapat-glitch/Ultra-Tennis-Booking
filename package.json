@@ -1,0 +1,13 @@
+{
+  "name": "ultra-tennis-booking",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ultra Tennis Booking — static frontend (index.html, admin.html) + Vercel functions in /api/ for LINE notifications.",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0"
+  }
+}
