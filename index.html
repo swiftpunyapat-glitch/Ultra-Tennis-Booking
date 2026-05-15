@@ -813,6 +813,20 @@ $("confirmBkBtn").addEventListener("click", async()=>{
     state.currentBookingDocId  = bookingRef.id;
     state.currentBookingData   = { ...bookingPayload, expiresAt };
 
+    // Fire-and-forget: notify admins of the new booking. Must not block or
+    // disrupt the customer flow — no await, no error surfaced.
+    if (window.notifyAdmins) {
+      window.notifyAdmins({
+        type: "new_booking_admin",
+        bookingCode: code,
+        customerName: name,
+        customerPhone: phone,
+        date: dateISO,
+        startTime: state.time,
+        endTime
+      });
+    }
+
     if(isSingle){
       state.paymentMode="booking";
       showPaymentPanel(code, 350, expiresAt, dateISO, `${state.time} – ${endTime}`);
@@ -900,6 +914,19 @@ $("submitSlipBtn").addEventListener("click", async()=>{
       const slotId=`${RESOURCE_ID}_${state.currentBookingData.date}_${state.currentBookingData.startTime.replace(":","")}`; 
       await updateDoc(doc(db,"booking_slots",slotId),{ bookingStatus:"confirmed", paymentStatus:"pending_review" });
       console.log("Booking + slot updated");
+      // Fire-and-forget: notify admins a slip was uploaded. Must not block the
+      // success screen — no await, no error surfaced.
+      if (window.notifyAdmins) {
+        window.notifyAdmins({
+          type: "slip_uploaded_admin",
+          bookingCode: state.currentBookingData.bookingCode,
+          customerName: state.currentBookingData.customerName,
+          customerPhone: state.currentBookingData.customerPhone,
+          date: state.currentBookingData.date,
+          startTime: state.currentBookingData.startTime,
+          endTime: state.currentBookingData.endTime
+        });
+      }
       showSuccess("✅","Slip Received!",code,`${state.currentBookingData.customerName} · ${state.currentBookingData.date} · ${state.currentBookingData.startTime}–${state.currentBookingData.endTime} · Pending admin review.`);
     }
     showView("viewSuccess");

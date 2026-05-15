@@ -511,7 +511,20 @@ async function markPaid(b){
     const batch=writeBatch(db);
     batch.update(doc(db,"bookings",b.id),{paymentStatus:"paid",bookingStatus:"confirmed",adminReviewedAt:serverTimestamp(),updatedAt:serverTimestamp()});
     batch.update(doc(db,"booking_slots",`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`),{paymentStatus:"paid",bookingStatus:"confirmed"});
-    await batch.commit();showToast(`✓ ${b.bookingCode} marked as paid`);await loadBookings();
+    await batch.commit();
+    // Fire-and-forget: notify the customer their booking is paid. Must not block admin flow.
+    if (window.sendLineNotification) {
+      window.sendLineNotification({
+        eventId: `${b.bookingCode}_booking_paid_customer`,
+        type: "booking_paid_customer",
+        lineUserId: b.lineUserId,
+        bookingCode: b.bookingCode,
+        date: b.date,
+        startTime: b.startTime,
+        endTime: b.endTime
+      });
+    }
+    showToast(`✓ ${b.bookingCode} marked as paid`);await loadBookings();
   }catch(e){console.error(e);showToast("Failed.",true);if(btn){btn.disabled=false;btn.textContent="✓ Mark as Paid";}}
 }
 
@@ -522,7 +535,21 @@ async function cancelBooking(b){
     const batch=writeBatch(db);
     batch.update(doc(db,"bookings",b.id),{bookingStatus:"cancelled",paymentStatus:"rejected",cancelReason:"Slip rejected or payment not received",cancelledAt:serverTimestamp(),updatedAt:serverTimestamp()});
     batch.update(doc(db,"booking_slots",`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`),{bookingStatus:"cancelled",paymentStatus:"rejected"});
-    await batch.commit();showToast(`✗ ${b.bookingCode} cancelled`);await loadBookings();
+    await batch.commit();
+    // Fire-and-forget: notify the customer their booking was cancelled. Must not block admin flow.
+    if (window.sendLineNotification) {
+      window.sendLineNotification({
+        eventId: `${b.bookingCode}_booking_cancelled_customer`,
+        type: "booking_cancelled_customer",
+        lineUserId: b.lineUserId,
+        bookingCode: b.bookingCode,
+        date: b.date,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        reason: b.cancelReason || "สลิปไม่ถูกต้องหรือไม่พบยอดโอน"
+      });
+    }
+    showToast(`✗ ${b.bookingCode} cancelled`);await loadBookings();
   }catch(e){console.error(e);showToast("Failed.",true);if(btn){btn.disabled=false;btn.textContent="✗ Cancel";}}
 }
 
@@ -769,6 +796,19 @@ $("addPassBtn").addEventListener("click", async()=>{
       createdAt:               serverTimestamp(),
     });
 
+    // Fire-and-forget: notify the customer their pass is active. Must not block admin flow.
+    // If lineUserId is empty (customer not LINE-linked yet), the API logs it as skipped.
+    if (window.sendLineNotification) {
+      window.sendLineNotification({
+        eventId: `pass_${foundCustomer.lineUserId}_${pkgType}_${Date.now()}`,
+        type: "pass_activated_customer",
+        lineUserId: foundCustomer.lineUserId,
+        packageName: pkg.packageName,
+        remainingMinutes: pkg.totalMinutes,
+        validUntil: vUntil.toLocaleDateString("en-GB")
+      });
+    }
+
     showToast(`✓ ${pkg.packageName} added for ${name}`);
     // Reset form
     $("searchPhone").value=""; $("packageSelect").value=""; $("manualName").value="";
@@ -896,6 +936,21 @@ $("mConfirm").addEventListener("click",async()=>{
       t.update(doc(db,"booking_slots",oldSlId),{bookingStatus:"rescheduled",paymentStatus:reschBooking.paymentStatus});
       t.set(doc(db,"booking_slots",newSlId),{bookingCode:reschBooking.bookingCode,resourceId:RESOURCE_ID,date:newDate,hour:reschTime,bookingStatus:reschBooking.bookingStatus,paymentStatus:reschBooking.paymentStatus,expiresAt:null});
     });
+    // Fire-and-forget: notify the customer their booking was rescheduled. Must not block admin flow.
+    if (window.sendLineNotification) {
+      window.sendLineNotification({
+        eventId: `${reschBooking.bookingCode}_booking_rescheduled_customer_${newDate}_${reschTime}`,
+        type: "booking_rescheduled_customer",
+        lineUserId: reschBooking.lineUserId,
+        bookingCode: reschBooking.bookingCode,
+        previousDate: reschBooking.date,
+        previousStartTime: reschBooking.startTime,
+        previousEndTime: reschBooking.endTime,
+        date: newDate,
+        startTime: reschTime,
+        endTime: newEnd
+      });
+    }
     showToast(`📅 ${reschBooking.bookingCode} → ${newDate} ${reschTime}`);
     closeModal();await loadBookings();
   }catch(e){console.error(e);showToast(e.message||"Reschedule failed.",true);btn.disabled=false;btn.textContent="Confirm Reschedule";}
