@@ -186,6 +186,20 @@
     .toast.show{opacity:1;transform:translate(-50%,0);}
     .toast.err{background:var(--dan);}
 
+    /* Daily View — Phase 2.3 (reuses existing theme vars; no color additions) */
+    .dvrow{display:grid;grid-template-columns:108px auto 1fr auto;align-items:center;gap:9px;padding:8px 10px;background:var(--s2);border:1px solid var(--bd);border-radius:7px;margin-bottom:5px;}
+    .dvrow .stime{font-size:.78rem;font-weight:700;color:var(--mid);}
+    .dvrow .dv-info{font-size:.74rem;color:var(--mid);min-width:0;overflow:hidden;}
+    .dvrow .dv-info strong{color:var(--t);font-weight:700;font-size:.78rem;display:block;}
+    .dvrow .dv-info .dv-meta{color:var(--m);font-size:.7rem;margin-top:1px;}
+    .dvrow .dv-actions{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;}
+    .dv-badge{display:inline-block;padding:1px 6px;border-radius:999px;background:var(--s);color:var(--mid);font-size:.6rem;font-weight:700;margin-left:5px;vertical-align:middle;}
+    .dv-badge.new{background:#1e3a5f;color:var(--bl);}
+    .dv-badge.rep{background:#0d3320;color:var(--g);}
+    .dv-badge.pass{background:#2d1e5f;color:#a78bfa;}
+    .dv-history{background:var(--s2);border:1px dashed var(--bd);border-radius:7px;padding:8px 11px;margin-bottom:12px;font-size:.78rem;color:var(--mid);}
+    .dv-history strong{color:var(--ac);}
+
     @media(max-width:600px){
       .main{padding:12px 13px;}
       .bfields{grid-template-columns:1fr 1fr;}
@@ -227,6 +241,7 @@
 
   <div class="tabbar">
     <button class="tab on" data-tab="bookings">📋 Bookings</button>
+    <button class="tab" data-tab="daily">📅 Daily View</button>
     <button class="tab" data-tab="slots">🗓 Slot Manager</button>
     <button class="tab" data-tab="passes">🎫 Add Pass</button>
   </div>
@@ -255,6 +270,27 @@
       <button class="fbtn" id="exportPassesBtn">Passes</button>
     </div>
     <div class="main"><div id="bookingsList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
+  </div>
+
+  <!-- DAILY VIEW TAB -->
+  <div id="tabDaily" style="display:none">
+    <div class="filters">
+      <button class="rfbtn" id="dvPrev">‹ Prev</button>
+      <button class="rfbtn" id="dvToday">Today</button>
+      <button class="rfbtn" id="dvNext">Next ›</button>
+      <input type="date" id="dvDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:5px 9px;font-size:.78rem"/>
+      <button class="rfbtn" id="dvRefresh" style="margin-left:auto">↻ Refresh</button>
+      <button class="smbtn smg" id="dvAddManualBtn" style="padding:5px 11px;font-size:.74rem">+ Add Manual Booking</button>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="sn" id="dvStTotal">—</div><div class="sl">Bookings</div></div>
+      <div class="stat"><div class="sn cg" id="dvStConfirmed">—</div><div class="sl">Confirmed</div></div>
+      <div class="stat"><div class="sn ct" id="dvStReview">—</div><div class="sl">Pending Review</div></div>
+      <div class="stat"><div class="sn cy" id="dvStPending">—</div><div class="sl">Pending Pay</div></div>
+      <div class="stat"><div class="sn cg" id="dvStOpen">—</div><div class="sl">Slots Open</div></div>
+      <div class="stat"><div class="sn cr" id="dvStClosed">—</div><div class="sl">Slots Closed</div></div>
+    </div>
+    <div class="main"><div id="dvList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
   </div>
 
   <!-- SLOT MANAGER TAB -->
@@ -405,6 +441,46 @@
   </div>
 </div>
 
+<!-- MANUAL BOOKING MODAL — Phase 2.3 -->
+<div class="moverlay" id="manModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>+ Add Manual Booking</h2><button class="mclose" id="manClose">✕</button></div>
+    <div class="mbody">
+      <div id="manHistory" class="dv-history" style="display:none">—</div>
+      <div class="mfield" style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+        <div><label>Date</label><input type="date" id="manDate"/></div>
+        <div><label>Start Time</label><select id="manTime"></select></div>
+      </div>
+      <div class="mfield"><label>Customer Name</label><input type="text" id="manName" maxlength="120" placeholder="Full name"/></div>
+      <div class="mfield"><label>Customer Phone</label><input type="text" id="manPhone" maxlength="40" placeholder="08x-xxx-xxxx"/></div>
+      <div class="mfield" style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+        <div>
+          <label>Booking Type</label>
+          <select id="manType">
+            <option value="Manual Single Use">Manual Single Use (฿350)</option>
+            <option value="Paid Outside">Paid Outside (฿350)</option>
+            <option value="Pay at Counter">Pay at Counter (฿350)</option>
+            <option value="Ultra Pass Manual">Ultra Pass Manual (฿0)</option>
+            <option value="Off-Peak Manual">Off-Peak Manual (฿0)</option>
+          </select>
+        </div>
+        <div>
+          <label>Payment Status</label>
+          <select id="manPayStatus">
+            <option value="unpaid">unpaid</option>
+            <option value="pending_review">pending_review</option>
+            <option value="paid">paid</option>
+            <option value="package">package</option>
+          </select>
+        </div>
+      </div>
+      <div class="mfield"><label>Note (optional)</label><input type="text" id="manNote" maxlength="500" placeholder="Any extra info"/></div>
+      <p id="manHint" style="font-size:.72rem;color:var(--m);margin-top:4px"></p>
+    </div>
+    <div class="mftr"><button class="mcancel" id="manCancel">Cancel</button><button class="mconfirm" id="manConfirm">Save Manual Booking</button></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script type="module">
@@ -461,9 +537,11 @@ document.querySelectorAll(".tab").forEach(btn=>{
   btn.addEventListener("click",()=>{
     document.querySelectorAll(".tab").forEach(b=>b.classList.remove("on"));btn.classList.add("on");
     $("tabBookings").style.display=btn.dataset.tab==="bookings"?"block":"none";
-    $("tabSlots").style.display=btn.dataset.tab==="slots"?"block":"none";
-    $("tabPasses").style.display=btn.dataset.tab==="passes"?"block":"none";
+    $("tabDaily").style.display   =btn.dataset.tab==="daily"   ?"block":"none";
+    $("tabSlots").style.display   =btn.dataset.tab==="slots"   ?"block":"none";
+    $("tabPasses").style.display  =btn.dataset.tab==="passes"  ?"block":"none";
     if(btn.dataset.tab==="passes") loadActivePasses();
+    if(btn.dataset.tab==="daily")  loadDailyView();
   });
 });
 
@@ -1158,6 +1236,389 @@ $("minConfirm").addEventListener("click",async()=>{
 document.querySelector("[data-tab='passes']").addEventListener("click",()=>{
   if(!$("validFromDate").value) $("validFromDate").value=new Date().toISOString().slice(0,10);
   loadActivePasses();
+});
+
+// ── DAILY VIEW (Phase 2.3) ──────────────────────────────────────
+// Per-day slot grid with bookings overlaid + customer history badges +
+// inline actions (Manual Book / Reschedule / Cancel reusing existing fns).
+// Data fetched per load: available_slots, booking_slots, bookings (this date
+// only), customer_packages (all), bookings (all — for visit count history).
+
+let dvLastLoad=null;
+
+function todayISOString(){
+  const d=new Date(),pad=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+function shiftDate(iso,days){
+  const [y,m,d]=iso.split("-").map(Number);
+  const dt=new Date(y,m-1,d); dt.setDate(dt.getDate()+days);
+  const pad=n=>String(n).padStart(2,"0");
+  return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}`;
+}
+
+async function loadDailyView(){
+  if(!$("dvDate").value) $("dvDate").value=todayISOString();
+  const date=$("dvDate").value;
+  dvLastLoad=date;
+  $("dvList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading ${esc(date)}...</p></div>`;
+
+  try{
+    const [avSnap,bkSnap,bookSnap,pkgSnap,allBookSnap]=await Promise.all([
+      getDocs(query(collection(db,"available_slots"),where("date","==",date),where("resourceId","==",RESOURCE_ID))),
+      getDocs(query(collection(db,"booking_slots"),where("date","==",date),where("resourceId","==",RESOURCE_ID))),
+      getDocs(query(collection(db,"bookings"),where("date","==",date))),
+      getDocs(collection(db,"customer_packages")),
+      getDocs(collection(db,"bookings")),
+    ]);
+
+    const avByTime={}; avSnap.forEach(d=>{ const dd=d.data(); avByTime[dd.startTime]=dd; });
+    const bsByHour={}; bkSnap.forEach(d=>{ const dd=d.data(); bsByHour[dd.hour]=dd; });
+    const bookingsOnDay=bookSnap.docs.map(d=>({id:d.id,...d.data()}));
+    const bookingByCode={}; bookingsOnDay.forEach(b=>{ if(b.bookingCode) bookingByCode[b.bookingCode]=b; });
+    const allPkgs=pkgSnap.docs.map(d=>d.data());
+    const allBks=allBookSnap.docs.map(d=>d.data());
+
+    // Aggregate per phone: confirmed/cancelled counts, last visit, active passes.
+    function lookupHistory(phone,lineUid){
+      const np=normalizePhone(phone);
+      const matches=allBks.filter(x=>{
+        const xnp=x.customerPhoneNormalized||normalizePhone(x.customerPhone);
+        return xnp&&np&&xnp===np;
+      });
+      const confirmedCount=matches.filter(x=>x.bookingStatus==="confirmed").length;
+      const cancelledCount=matches.filter(x=>x.bookingStatus==="cancelled").length;
+      const lastDate=matches.reduce((m,x)=>(x.date||"")>m?(x.date||""):m,"");
+      const activePassNames=allPkgs.filter(p=>{
+        if(p.status!=="active") return false;
+        const pnp=p.customerPhoneNormalized||normalizePhone(p.customerPhone);
+        if(np&&pnp&&np===pnp) return true;
+        if(lineUid&&lineUid!=="guest"&&lineUid!=="manual"&&p.lineUserId&&p.lineUserId===lineUid) return true;
+        return false;
+      }).map(p=>p.packageName||"").filter(Boolean);
+      return { confirmedCount, cancelledCount, lastDate, activePassNames };
+    }
+
+    const now=new Date();
+    const rows=[];
+    let countConfirmed=0,countReview=0,countPending=0,countOpen=0,countClosed=0;
+
+    for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
+      const time=fH(h),endT=fEnd(h);
+      const av=avByTime[time]||null;
+      const bs=bsByHour[time]||null;
+      let status,booking=null;
+
+      // booking_slots takes precedence when it points to a live (confirmed or
+      // unexpired-pending) booking; otherwise fall back to available_slots status.
+      if(bs && bs.bookingStatus==="confirmed"){
+        status="booked";
+        booking=bookingByCode[bs.bookingCode]||null;
+        countConfirmed++;
+        if(booking?.paymentStatus==="pending_review") countReview++;
+      } else if(bs && bs.bookingStatus==="pending_payment"){
+        const exp=bs.expiresAt?.toDate?.();
+        if(exp&&exp>now){
+          status="pending"; booking=bookingByCode[bs.bookingCode]||null; countPending++;
+        } else if(av && av.status==="open"){ status="open"; countOpen++; }
+        else  if(av && av.status==="closed"){ status="closed"; countClosed++; }
+        else  { status="not_set"; }
+      } else if(av && av.status==="open"){ status="open"; countOpen++; }
+      else  if(av && av.status==="closed"){ status="closed"; countClosed++; }
+      else  { status="not_set"; }
+
+      rows.push({h,time,endT,status,booking});
+    }
+
+    $("dvStTotal").textContent     = countConfirmed+countPending;
+    $("dvStConfirmed").textContent = countConfirmed;
+    $("dvStReview").textContent    = countReview;
+    $("dvStPending").textContent   = countPending;
+    $("dvStOpen").textContent      = countOpen;
+    $("dvStClosed").textContent    = countClosed;
+
+    $("dvList").innerHTML = `<div>${rows.map(r=>renderDailyRow(r,lookupHistory)).join("")}</div>`;
+
+    // Wire row actions
+    $("dvList").querySelectorAll("[data-dv-manual]").forEach(b=>{
+      b.addEventListener("click",()=>openManualModal(date,b.dataset.dvManual));
+    });
+    $("dvList").querySelectorAll("[data-dv-resch]").forEach(b=>{
+      b.addEventListener("click",()=>{
+        const bk=bookingByCode[b.dataset.dvResch];
+        if(bk) openResch(bk); else showToast("Booking not found.",true);
+      });
+    });
+    $("dvList").querySelectorAll("[data-dv-cancel]").forEach(b=>{
+      b.addEventListener("click",()=>{
+        const bk=bookingByCode[b.dataset.dvCancel];
+        if(bk) cancelBooking(bk); else showToast("Booking not found.",true);
+      });
+    });
+  } catch(e){
+    console.error(e);
+    $("dvList").innerHTML=`<div class="estate">❌ Failed to load Daily View.</div>`;
+  }
+}
+
+function renderDailyRow(r,lookupHistory){
+  const {time,endT,status,booking}=r;
+  let pill,info,actions;
+
+  if((status==="booked"||status==="pending") && booking){
+    const phone=booking.customerPhone||"";
+    const hist=lookupHistory(phone,booking.lineUserId);
+    const visitLabel = hist.confirmedCount<=1
+      ? `<span class="dv-badge new">New customer</span>`
+      : `<span class="dv-badge rep">Visits: ${hist.confirmedCount} times</span>`;
+    const cancelledLabel = hist.cancelledCount>0 ? `<span class="dv-badge">Cancelled: ${hist.cancelledCount}</span>` : "";
+    const passLabel = hist.activePassNames.length
+      ? `<span class="dv-badge pass">${esc(hist.activePassNames[0])}</span>`
+      : "";
+    pill = status==="booked"
+      ? `<span class="sstatus ss-booked">${esc(booking.paymentStatus||"booked")}</span>`
+      : `<span class="sstatus ss-booked" style="background:#3d2e00;color:var(--warn)">pending</span>`;
+    info = `<div class="dv-info">
+      <strong>${esc(booking.customerName||"—")} · ${esc(phone||"—")}${visitLabel}${cancelledLabel}${passLabel}</strong>
+      <div class="dv-meta">${esc(booking.bookingCode||"—")} · ${esc(booking.bookingType||"—")} · ${esc(booking.bookingStatus||"—")}${hist.lastDate?` · last: ${esc(hist.lastDate)}`:""}</div>
+    </div>`;
+    const canResch=!["cancelled","expired","completed","no_show"].includes(booking.bookingStatus);
+    const canCancel=booking.bookingStatus!=="cancelled"&&booking.paymentStatus!=="paid";
+    actions = `<div class="dv-actions">
+      ${canResch?`<button class="stoggle st-open" data-dv-resch="${esc(booking.bookingCode)}" style="padding:4px 9px;font-size:.7rem">Reschedule</button>`:""}
+      ${canCancel?`<button class="stoggle st-close" data-dv-cancel="${esc(booking.bookingCode)}" style="padding:4px 9px;font-size:.7rem">Cancel</button>`:""}
+    </div>`;
+  } else if(status==="booked"||status==="pending"){
+    // booking_slot says reserved but matching booking doc not found (data drift)
+    pill = `<span class="sstatus ss-booked">${status}</span>`;
+    info = `<div class="dv-info"><strong>—</strong><div class="dv-meta">Slot reserved but booking doc not found.</div></div>`;
+    actions = `<div class="dv-actions"></div>`;
+  } else if(status==="open"){
+    pill = `<span class="sstatus ss-open">Open</span>`;
+    info = `<div class="dv-info"><div class="dv-meta">Available for booking</div></div>`;
+    actions = `<div class="dv-actions"><button class="stoggle st-create" data-dv-manual="${esc(time)}" style="padding:4px 9px;font-size:.7rem">+ Manual Book</button></div>`;
+  } else if(status==="closed"){
+    pill = `<span class="sstatus ss-closed">Closed</span>`;
+    info = `<div class="dv-info"><div class="dv-meta">Not available</div></div>`;
+    actions = `<div class="dv-actions"></div>`;
+  } else {
+    pill = `<span class="sstatus ss-none">Not set</span>`;
+    info = `<div class="dv-info"><div class="dv-meta">Open in Slot Manager first</div></div>`;
+    actions = `<div class="dv-actions"></div>`;
+  }
+
+  return `<div class="dvrow"><span class="stime">${esc(time)} – ${esc(endT)}</span>${pill}${info}${actions}</div>`;
+}
+
+// Date controls
+$("dvDate").addEventListener("change",loadDailyView);
+$("dvPrev").addEventListener("click",()=>{
+  $("dvDate").value=shiftDate($("dvDate").value||todayISOString(),-1); loadDailyView();
+});
+$("dvNext").addEventListener("click",()=>{
+  $("dvDate").value=shiftDate($("dvDate").value||todayISOString(),1); loadDailyView();
+});
+$("dvToday").addEventListener("click",()=>{
+  $("dvDate").value=todayISOString(); loadDailyView();
+});
+$("dvRefresh").addEventListener("click",loadDailyView);
+$("dvAddManualBtn").addEventListener("click",()=>{
+  if(!$("dvDate").value) $("dvDate").value=todayISOString();
+  openManualModal($("dvDate").value,null);
+});
+
+// ── MANUAL BOOKING (Phase 2.3) ──────────────────────────────────
+// Admin creates a confirmed booking for a walk-in customer. Same booking_slots
+// + bookings shape as customer bookings, so the existing list, reschedule,
+// cancel, and Mark Paid all work on manual bookings too.
+// NOTE: We intentionally do NOT fire LINE notifications here — lineUserId is
+// "manual" (placeholder). Subsequent admin actions (mark paid / cancel /
+// reschedule) still call sendLineNotification — those will be logged as failed
+// in notification_logs (LINE rejects a fake userId). Functionally harmless.
+
+const MANUAL_PRICE = {
+  "Manual Single Use":350, "Paid Outside":350, "Pay at Counter":350,
+  "Ultra Pass Manual":0,   "Off-Peak Manual":0,
+};
+
+// Populate the start-time dropdown once at module load
+(function fillManTimes(){
+  const sel=$("manTime");
+  for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
+    const o=document.createElement("option");
+    o.value=fH(h); o.textContent=`${fH(h)} – ${fEnd(h)}`;
+    sel.append(o);
+  }
+})();
+
+function openManualModal(prefillDate,prefillTime){
+  $("manDate").value = prefillDate || $("dvDate").value || todayISOString();
+  $("manTime").value = prefillTime || fH(OPEN_HOUR);
+  $("manName").value="";
+  $("manPhone").value="";
+  $("manType").value="Manual Single Use";
+  $("manPayStatus").value="unpaid"; // safe default vs strict Firestore rules
+  $("manNote").value="";
+  $("manHistory").style.display="none";
+  $("manHistory").textContent="";
+  $("manHint").textContent="";
+  $("manConfirm").disabled=false;
+  $("manConfirm").textContent="Save Manual Booking";
+  $("manModal").style.display="flex";
+}
+function closeManualModal(){ $("manModal").style.display="none"; }
+$("manClose").addEventListener("click",closeManualModal);
+$("manCancel").addEventListener("click",closeManualModal);
+$("manModal").addEventListener("click",e=>{ if(e.target===$("manModal")) closeManualModal(); });
+
+// Debounced phone history lookup (350ms, min 4 digits)
+let manPhoneTimer=null;
+$("manPhone").addEventListener("input",()=>{
+  clearTimeout(manPhoneTimer);
+  const raw=$("manPhone").value.trim();
+  const np=normalizePhone(raw);
+  if(np.length<4){ $("manHistory").style.display="none"; return; }
+  manPhoneTimer=setTimeout(()=>doManualPhoneLookup(np),350);
+});
+
+async function doManualPhoneLookup(np){
+  try{
+    const [snapNorm,snapRaw,pkgSnap]=await Promise.all([
+      getDocs(query(collection(db,"bookings"),where("customerPhoneNormalized","==",np))),
+      getDocs(query(collection(db,"bookings"),where("customerPhone","==",$("manPhone").value.trim()))),
+      getDocs(query(collection(db,"customer_packages"),where("status","==","active"))),
+    ]);
+    const seen=new Set(); const docs=[];
+    [...snapNorm.docs,...snapRaw.docs].forEach(d=>{
+      if(seen.has(d.id)) return;
+      seen.add(d.id); docs.push(d.data());
+    });
+    if(!docs.length){
+      $("manHistory").style.display="block";
+      $("manHistory").innerHTML=`<strong>New customer</strong> — no previous bookings found.`;
+      return;
+    }
+    docs.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    const latest=docs[0];
+    const confirmed=docs.filter(x=>x.bookingStatus==="confirmed").length;
+    const cancelled=docs.filter(x=>x.bookingStatus==="cancelled").length;
+    const lastDate=docs.reduce((m,x)=>(x.date||"")>m?(x.date||""):m,"");
+    const activePasses=pkgSnap.docs.map(d=>d.data()).filter(p=>{
+      const pnp=p.customerPhoneNormalized||normalizePhone(p.customerPhone);
+      if(pnp&&pnp===np) return true;
+      if(latest.lineUserId&&latest.lineUserId!=="guest"&&latest.lineUserId!=="manual"&&p.lineUserId===latest.lineUserId) return true;
+      return false;
+    });
+    const passLabel=activePasses.length
+      ? ` · Active: ${activePasses.map(p=>p.packageName||"").filter(Boolean).join(", ")}`
+      : "";
+    $("manHistory").style.display="block";
+    $("manHistory").innerHTML=
+      `<strong>${esc(latest.customerName||"—")}</strong> · Visits ${confirmed} · Cancelled ${cancelled}`+
+      `${lastDate?` · Last: ${esc(lastDate)}`:""}${esc(passLabel)}`;
+    // Auto-fill customer name if empty
+    if(!$("manName").value.trim() && latest.customerName){
+      $("manName").value=latest.customerName;
+    }
+  } catch(e){
+    console.warn("Manual phone lookup failed:",e);
+  }
+}
+
+function genManualCode(){
+  return `MANUAL-${new Date().getFullYear()}-${Math.floor(1000+Math.random()*9000)}`;
+}
+
+$("manConfirm").addEventListener("click",async()=>{
+  const name=$("manName").value.trim();
+  const phone=$("manPhone").value.trim();
+  const date=$("manDate").value;
+  const time=$("manTime").value;
+  const bookingType=$("manType").value;
+  const paymentStatus=$("manPayStatus").value;
+  const note=$("manNote").value.trim();
+
+  if(!name)  { $("manName").focus();  showToast("Customer name required.",true); return; }
+  if(!phone) { $("manPhone").focus(); showToast("Customer phone required.",true); return; }
+  if(!date)  { $("manDate").focus();  showToast("Date required.",true); return; }
+  if(!time)  { $("manTime").focus();  showToast("Start time required.",true); return; }
+
+  const startH=parseInt(time,10);
+  const endTime=fEnd(startH);
+  const code=genManualCode();
+  const adminName=sessionStorage.getItem("adminName")||"admin";
+  const price=MANUAL_PRICE[bookingType] ?? 350;
+  const slotId=`${RESOURCE_ID}_${date}_${time.replace(":","")}`;
+  const slotRef=doc(db,"booking_slots",slotId);
+  const availRef=doc(db,"available_slots",slotId);
+  const bookingRef=doc(collection(db,"bookings"));
+
+  const btn=$("manConfirm"); btn.disabled=true; btn.textContent="Saving...";
+  try{
+    await runTransaction(db,async t=>{
+      const [slotSnap,availSnap]=await Promise.all([t.get(slotRef),t.get(availRef)]);
+      if(!availSnap.exists())
+        throw new Error("Slot is not set. Open it in Slot Manager first.");
+      if(availSnap.data().status!=="open")
+        throw new Error("Slot is closed. Open it in Slot Manager first.");
+      if(slotSnap.exists()){
+        const sd=slotSnap.data();
+        if(sd.bookingStatus==="confirmed") throw new Error("Slot is already booked.");
+        if(sd.bookingStatus==="pending_payment"){
+          const exp=sd.expiresAt?.toDate?.();
+          if(!exp||exp>new Date()) throw new Error("Slot is held by a pending payment.");
+        }
+        // "rescheduled" and "cancelled" slot rows are released → allowed to overwrite.
+      }
+
+      t.set(bookingRef,{
+        bookingCode:             code,
+        resourceId:              RESOURCE_ID,
+        bookingType:             bookingType,
+        lineUserId:              "manual",
+        lineDisplayName:         "Manual Booking",
+        customerName:            name,
+        customerPhone:           phone,
+        customerPhoneNormalized: normalizePhone(phone),
+        customerNote:            note,
+        date:                    date,
+        startTime:               time,
+        endTime:                 endTime,
+        durationHours:           1,
+        price:                   price,
+        bookingStatus:           "confirmed",
+        paymentStatus:           paymentStatus,
+        source:                  "admin_manual",
+        createdBy:               adminName,
+        createdAt:               serverTimestamp(),
+        updatedAt:               serverTimestamp(),
+      });
+      t.set(slotRef,{
+        bookingCode:    code,
+        resourceId:     RESOURCE_ID,
+        date:           date,
+        hour:           time,
+        bookingStatus:  "confirmed",
+        paymentStatus:  paymentStatus,
+        source:         "admin_manual",
+        createdBy:      adminName,
+        createdAt:      serverTimestamp(),
+        updatedAt:      serverTimestamp(),
+      });
+    });
+
+    showToast(`✓ Manual booking ${code} saved`);
+    closeManualModal();
+    // Reload Daily View if currently looking at the same date
+    if(dvLastLoad===date) loadDailyView();
+    // Best-effort: refresh main bookings list if it's been loaded
+    try { loadBookings(); } catch(_) { /* non-fatal */ }
+  } catch(e){
+    console.error(e);
+    showToast(e.message||"Failed to save manual booking.",true);
+  } finally {
+    btn.disabled=false; btn.textContent="Save Manual Booking";
+  }
 });
 
 // ── RESCHEDULE ───────────────────────────────────────────────────
