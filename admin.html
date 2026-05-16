@@ -173,6 +173,9 @@
     .mcancel{padding:8px 16px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--m);font-size:.82rem;font-weight:800;}
     .mconfirm{padding:8px 16px;border-radius:7px;background:var(--g);color:#0a1a0c;font-size:.82rem;font-weight:900;}
     .mconfirm:disabled{background:#666;cursor:not-allowed;}
+    /* Modal form controls — Phase 2 pass-minute adjustment (reuses existing theme vars) */
+    .mfield select,.mfield input[type=number],.mfield input[type=text]{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.88rem;}
+    .mfield select:focus,.mfield input[type=number]:focus,.mfield input[type=text]:focus{outline:none;border-color:var(--g);}
 
     /* MISC */
     .lstate{text-align:center;padding:44px;color:var(--m);font-size:.85rem;}
@@ -244,6 +247,12 @@
       <button class="fbtn" data-filter="confirmed">Confirmed</button>
       <button class="fbtn" data-filter="cancelled">Cancelled</button>
       <button class="rfbtn" id="refreshBtn" style="margin-left:auto">↻ Refresh</button>
+    </div>
+    <div class="filters" style="border-top:0">
+      <span style="font-size:.7rem;color:var(--m);font-weight:800;text-transform:uppercase;letter-spacing:.4px;align-self:center;margin-right:2px">⬇ Export CSV</span>
+      <button class="fbtn" id="exportCustomersBtn">Customers</button>
+      <button class="fbtn" id="exportBookingsBtn">Bookings</button>
+      <button class="fbtn" id="exportPassesBtn">Passes</button>
     </div>
     <div class="main"><div id="bookingsList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
   </div>
@@ -364,6 +373,38 @@
   </div>
 </div>
 
+<!-- ADJUST MINUTES MODAL (Ultra Pass only) -->
+<div class="moverlay" id="minModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>⏱ Adjust Pass Minutes</h2><button class="mclose" id="minClose">✕</button></div>
+    <div class="mbody">
+      <div class="minfo">
+        <strong id="minCustomer">—</strong>
+        <span id="minPackage">—</span>
+        <span id="minCurrent" style="display:block;margin-top:3px;font-size:.75rem">Current remaining: — min</span>
+      </div>
+      <div class="mfield">
+        <label>Action</label>
+        <select id="minAction">
+          <option value="add_minutes">➕ Add minutes</option>
+          <option value="deduct_minutes">➖ Deduct minutes</option>
+          <option value="set_minutes">✎ Set remaining minutes</option>
+        </select>
+      </div>
+      <div class="mfield">
+        <label id="minLabel">Minutes to add</label>
+        <input type="number" id="minValue" min="1" step="1" placeholder="e.g. 60"/>
+      </div>
+      <div class="mfield">
+        <label>Reason / Note</label>
+        <input type="text" id="minReason" maxlength="200" placeholder="e.g. Compensation for cancelled session"/>
+      </div>
+      <p id="minPreview" style="font-size:.72rem;color:var(--m);margin-top:4px"></p>
+    </div>
+    <div class="mftr"><button class="mcancel" id="minCancel">Cancel</button><button class="mconfirm" id="minConfirm">Save Adjustment</button></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script type="module">
@@ -422,12 +463,12 @@ document.querySelectorAll(".tab").forEach(btn=>{
     $("tabBookings").style.display=btn.dataset.tab==="bookings"?"block":"none";
     $("tabSlots").style.display=btn.dataset.tab==="slots"?"block":"none";
     $("tabPasses").style.display=btn.dataset.tab==="passes"?"block":"none";
-    if(btn.dataset.tab==="passes") loadPasses();
+    if(btn.dataset.tab==="passes") loadActivePasses();
   });
 });
 
 // ── BOOKINGS ─────────────────────────────────────────────────────
-let allBookings=[],activeFilter="all",reschBooking=null,reschTime=null;
+let allBookings=[],activeFilter="all",reschBooking=null,reschTime=null,activePasses=[],minPass=null;
 
 async function loadBookings(){
   $("bookingsList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading...</p></div>`;
@@ -557,6 +598,153 @@ document.querySelectorAll(".fbtn[data-filter]").forEach(btn=>{
   btn.addEventListener("click",()=>{activeFilter=btn.dataset.filter;document.querySelectorAll(".fbtn[data-filter]").forEach(b=>b.classList.remove("on"));btn.classList.add("on");renderBookings();});
 });
 $("refreshBtn").addEventListener("click",loadBookings);
+
+// ── TODO(phase-3): GOOGLE CALENDAR SYNC — NOT IMPLEMENTED YET ────
+// When built:
+//  • Sync a calendar event after Admin "Mark as Paid" succeeds (inside markPaid()).
+//  • Prefer ONE shared "Ultra Tennis Bookings" calendar for the whole shop,
+//    not per-admin calendars.
+//  • Persist the created event id on the booking doc as `googleCalendarEventId`
+//    so reschedule (mConfirm) and cancel (cancelBooking) can patch / delete the
+//    same event later.
+//  • Needs a backend route (service account or OAuth) — do NOT put Google
+//    credentials in this client file.
+// ─────────────────────────────────────────────────────────────────
+
+// ── CSV EXPORT (client-side only, no backend route) ─────────────
+function csvCell(v){
+  const s = v==null ? "" : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+}
+function downloadCSV(filename,headers,rows){
+  const lines=[headers.map(csvCell).join(",")];
+  rows.forEach(r=>lines.push(headers.map(h=>csvCell(r[h])).join(",")));
+  // Prepend BOM so Excel reads UTF-8 (Thai names) correctly.
+  const blob=new Blob(["﻿"+lines.join("\r\n")],{type:"text/csv;charset=utf-8;"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url; a.download=filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function csvStamp(){
+  const d=new Date(),pad=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+function tsToDateTime(ts){
+  const d=ts?.toDate?.()||(ts instanceof Date?ts:null);
+  if(!d) return "";
+  const pad=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function tsToDate(ts){
+  const d=ts?.toDate?.()||(ts instanceof Date?ts:null);
+  if(!d) return "";
+  const pad=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
+$("exportBookingsBtn").addEventListener("click",()=>{
+  if(!allBookings.length){ showToast("No bookings loaded — click Refresh first.",true); return; }
+  const headers=["bookingCode","customerName","lineDisplayName","lineUserId","customerPhone","normalizedPhone","date","startTime","endTime","bookingType","bookingStatus","paymentStatus","price","createdAt"];
+  const rows=allBookings.map(b=>({
+    bookingCode:b.bookingCode||"",
+    customerName:b.customerName||"",
+    lineDisplayName:b.lineDisplayName||"",
+    lineUserId:b.lineUserId||"",
+    customerPhone:b.customerPhone||"",
+    normalizedPhone:b.customerPhoneNormalized||normalizePhone(b.customerPhone),
+    date:b.date||"",
+    startTime:b.startTime||"",
+    endTime:b.endTime||"",
+    bookingType:b.bookingType||"",
+    bookingStatus:b.bookingStatus||"",
+    paymentStatus:b.paymentStatus||"",
+    price:b.price??"",
+    createdAt:tsToDateTime(b.createdAt),
+  }));
+  downloadCSV(`bookings_${csvStamp()}.csv`,headers,rows);
+  showToast(`✓ Exported ${rows.length} bookings`);
+});
+
+$("exportPassesBtn").addEventListener("click",async()=>{
+  const btn=$("exportPassesBtn"); btn.disabled=true; btn.textContent="…";
+  try{
+    const snap=await getDocs(collection(db,"customer_packages"));
+    const passes=snap.docs.map(d=>d.data());
+    if(!passes.length){ showToast("No passes to export.",true); return; }
+    const headers=["customerName","lineDisplayName","lineUserId","customerPhone","packageType","packageName","remainingMinutes","validFrom","validUntil","status","createdAt","updatedAt"];
+    const rows=passes.map(p=>({
+      customerName:p.customerName||"",
+      lineDisplayName:p.lineDisplayName||"",
+      lineUserId:p.lineUserId||"",
+      customerPhone:p.customerPhone||"",
+      packageType:p.packageType||"",
+      packageName:p.packageName||"",
+      remainingMinutes:p.remainingMinutes??"",
+      validFrom:tsToDate(p.validFrom),
+      validUntil:tsToDate(p.validUntil),
+      status:p.status||"",
+      createdAt:tsToDateTime(p.createdAt),
+      updatedAt:tsToDateTime(p.updatedAt),
+    }));
+    downloadCSV(`passes_${csvStamp()}.csv`,headers,rows);
+    showToast(`✓ Exported ${rows.length} passes`);
+  }catch(e){ console.error(e); showToast("Pass export failed.",true); }
+  finally{ btn.disabled=false; btn.textContent="Passes"; }
+});
+
+$("exportCustomersBtn").addEventListener("click",async()=>{
+  if(!allBookings.length){ showToast("No bookings loaded — click Refresh first.",true); return; }
+  const btn=$("exportCustomersBtn"); btn.disabled=true; btn.textContent="…";
+  try{
+    const snap=await getDocs(collection(db,"customer_packages"));
+    const allPkgs=snap.docs.map(d=>d.data());
+    // Aggregate bookings per customer, keyed by normalizedPhone (fallback: lineUserId).
+    const map=new Map();
+    allBookings.forEach(b=>{
+      const np=b.customerPhoneNormalized||normalizePhone(b.customerPhone);
+      const key=np||b.lineUserId||"unknown";
+      if(!map.has(key)) map.set(key,{
+        customerName:"",lineDisplayName:"",lineUserId:"",customerPhone:"",normalizedPhone:np,
+        totalBookings:0,confirmedBookings:0,cancelledBookings:0,lastBookingDate:"",_lastTs:-1,
+      });
+      const c=map.get(key);
+      c.totalBookings++;
+      if(b.bookingStatus==="confirmed") c.confirmedBookings++;
+      if(b.bookingStatus==="cancelled") c.cancelledBookings++;
+      if((b.date||"")>c.lastBookingDate) c.lastBookingDate=b.date||"";
+      // Identity fields from the most recent booking by createdAt.
+      const ts=b.createdAt?.seconds||0;
+      if(ts>=c._lastTs){
+        c._lastTs=ts;
+        if(b.customerName) c.customerName=b.customerName;
+        if(b.customerPhone) c.customerPhone=b.customerPhone;
+        if(b.lineDisplayName) c.lineDisplayName=b.lineDisplayName;
+        if(b.lineUserId&&b.lineUserId!=="guest") c.lineUserId=b.lineUserId;
+      }
+    });
+    // Join active packages onto each customer (match by normalizedPhone OR lineUserId).
+    map.forEach(c=>{
+      const matched=allPkgs.filter(p=>{
+        if(p.status!=="active") return false;
+        const pnp=p.customerPhoneNormalized||normalizePhone(p.customerPhone);
+        if(pnp&&c.normalizedPhone&&pnp===c.normalizedPhone) return true;
+        if(p.lineUserId&&p.lineUserId!=="guest"&&c.lineUserId&&p.lineUserId===c.lineUserId) return true;
+        return false;
+      });
+      c.activePackageNames=matched.map(p=>p.packageName||"").filter(Boolean).join(" | ");
+      c.totalRemainingMinutes=matched.reduce((s,p)=>s+(Number(p.remainingMinutes)||0),0);
+      c.validUntilList=matched.map(p=>tsToDate(p.validUntil)).filter(Boolean).join(" | ");
+    });
+    const headers=["customerName","lineDisplayName","lineUserId","customerPhone","normalizedPhone","totalBookings","confirmedBookings","cancelledBookings","lastBookingDate","activePackageNames","totalRemainingMinutes","validUntilList"];
+    const rows=[...map.values()].map(({_lastTs,...rest})=>rest);
+    if(!rows.length){ showToast("No customers to export.",true); return; }
+    downloadCSV(`customers_${csvStamp()}.csv`,headers,rows);
+    showToast(`✓ Exported ${rows.length} customers`);
+  }catch(e){ console.error(e); showToast("Customer export failed.",true); }
+  finally{ btn.disabled=false; btn.textContent="Customers"; }
+});
 
 // ── SLOT MANAGER ─────────────────────────────────────────────────
 const allH=()=>{const h=[];for(let i=OPEN_HOUR;i<CLOSE_HOUR;i++)h.push(i);return h;};
@@ -825,6 +1013,7 @@ async function loadActivePasses(){
     const snap=await getDocs(query(collection(db,"customer_packages"),where("status","==","active")));
     const passes=snap.docs.map(d=>({id:d.id,...d.data()}))
       .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    activePasses=passes; // cached for the minute-adjust modal lookup
 
     if(!passes.length){ $("activePassesList").innerHTML=`<div class="smempty">No active passes.</div>`; return; }
 
@@ -835,7 +1024,10 @@ async function loadActivePasses(){
         <div><div class="fl">Customer</div><div class="fv">${esc(p.customerName||"—")} · ${esc(p.customerPhone||"—")}</div></div>
         <div><div class="fl">Package</div><div class="fv">${esc(p.packageName||"—")}</div></div>
         <div><div class="fl">${isUltra?"Remaining":"Valid Until"}</div><div class="fv">${isUltra?`${Number(p.remainingMinutes)||0} min`:esc(validUntil)}</div></div>
-        <button class="stoggle st-close" data-deactivate="${esc(p.id)}" style="padding:5px 10px;font-size:.7rem">Deactivate</button>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">
+          ${isUltra?`<button class="stoggle st-open" data-adjust="${esc(p.id)}" style="padding:5px 10px;font-size:.7rem">⏱ Adjust</button>`:""}
+          <button class="stoggle st-close" data-deactivate="${esc(p.id)}" style="padding:5px 10px;font-size:.7rem">Deactivate</button>
+        </div>
       </div>`;
     }).join("");
 
@@ -849,10 +1041,118 @@ async function loadActivePasses(){
         }catch(e){showToast("Failed.",true);btn.disabled=false;}
       });
     });
+    // Wire Adjust buttons (rendered for Ultra Pass rows only)
+    $("activePassesList").querySelectorAll("[data-adjust]").forEach(btn=>{
+      btn.addEventListener("click",()=>openMinModal(btn.dataset.adjust));
+    });
   }catch(e){ console.error(e); $("activePassesList").innerHTML=`<div class="smempty">❌ Failed to load.</div>`; }
 }
 
 $("refreshPassesBtn").addEventListener("click",loadActivePasses);
+
+// ── ADJUST PASS MINUTES (Ultra Pass only) ───────────────────────
+// Opens the modal for a single Ultra pass. Off-Peak passes don't have a
+// minute counter — the Adjust button isn't rendered for them, but we
+// double-check here as defense-in-depth.
+function openMinModal(passId){
+  const p=activePasses.find(x=>x.id===passId);
+  if(!p){ showToast("Pass not found. Refresh and try again.",true); return; }
+  if(!String(p.packageType||"").includes("ultra")){
+    showToast("Minute controls apply to Ultra Pass only.",true); return;
+  }
+  minPass=p;
+  $("minCustomer").textContent=`${p.customerName||"—"} · ${p.customerPhone||"—"}`;
+  $("minPackage").textContent=p.packageName||"—";
+  $("minCurrent").textContent=`Current remaining: ${Number(p.remainingMinutes)||0} min`;
+  $("minAction").value="add_minutes";
+  $("minLabel").textContent="Minutes to add";
+  $("minValue").value="";
+  $("minReason").value="";
+  $("minPreview").textContent="";
+  $("minConfirm").disabled=false;
+  $("minConfirm").textContent="Save Adjustment";
+  $("minModal").style.display="flex";
+}
+function closeMinModal(){ $("minModal").style.display="none"; minPass=null; }
+$("minClose").addEventListener("click",closeMinModal);
+$("minCancel").addEventListener("click",closeMinModal);
+$("minModal").addEventListener("click",e=>{ if(e.target===$("minModal")) closeMinModal(); });
+
+function minNewRemaining(action,current,value){
+  if(action==="add_minutes")    return current+value;
+  if(action==="deduct_minutes") return current-value;
+  return value; // set_minutes
+}
+function updateMinPreview(){
+  if(!minPass) return;
+  const cur=Number(minPass.remainingMinutes)||0;
+  const raw=$("minValue").value.trim();
+  const val=Number(raw);
+  if(raw===""||!Number.isFinite(val)||val<0){ $("minPreview").textContent=""; return; }
+  const next=minNewRemaining($("minAction").value,cur,val);
+  $("minPreview").textContent = next<0
+    ? `⚠️ Result would be ${next} min — not allowed (cannot go below 0).`
+    : `Preview: ${cur} min → ${next} min`;
+}
+$("minAction").addEventListener("change",()=>{
+  const a=$("minAction").value;
+  $("minLabel").textContent = a==="add_minutes" ? "Minutes to add"
+    : a==="deduct_minutes" ? "Minutes to deduct"
+    : "New remaining minutes";
+  updateMinPreview();
+});
+$("minValue").addEventListener("input",updateMinPreview);
+
+$("minConfirm").addEventListener("click",async()=>{
+  if(!minPass) return;
+  const action=$("minAction").value;
+  const raw=$("minValue").value.trim();
+  const value=Number(raw);
+  const reason=$("minReason").value.trim();
+  // Validation: positive whole number of minutes.
+  if(raw===""||!Number.isFinite(value)||value<=0||!Number.isInteger(value)){
+    showToast("Enter a positive whole number of minutes.",true); return;
+  }
+  const oldRemaining=Number(minPass.remainingMinutes)||0;
+  const newRemaining=minNewRemaining(action,oldRemaining,value);
+  // Validation: remaining cannot go below 0.
+  if(newRemaining<0){ showToast("Remaining minutes cannot go below 0.",true); return; }
+  const deltaMinutes=newRemaining-oldRemaining;
+  const adminName=sessionStorage.getItem("adminName")||"admin";
+
+  const btn=$("minConfirm"); btn.disabled=true; btn.textContent="Saving...";
+  try{
+    // Atomic: update the pass + write the audit log together.
+    const batch=writeBatch(db);
+    batch.update(doc(db,"customer_packages",minPass.id),{
+      remainingMinutes:newRemaining,
+      updatedAt:serverTimestamp(),
+    });
+    batch.set(doc(collection(db,"customer_package_logs")),{
+      packageId:minPass.id,
+      lineUserId:minPass.lineUserId||"",
+      customerName:minPass.customerName||"",
+      customerPhone:minPass.customerPhone||"",
+      packageType:minPass.packageType||"",
+      packageName:minPass.packageName||"",
+      action,
+      oldRemainingMinutes:oldRemaining,
+      newRemainingMinutes:newRemaining,
+      deltaMinutes,
+      reason,
+      adminName,
+      createdAt:serverTimestamp(),
+    });
+    await batch.commit();
+    showToast(`✓ ${minPass.packageName||"Pass"} → ${newRemaining} min`);
+    closeMinModal();
+    loadActivePasses();
+  }catch(e){
+    console.error(e); showToast("Failed to adjust minutes.",true);
+  }finally{
+    btn.disabled=false; btn.textContent="Save Adjustment";
+  }
+});
 
 // Set valid from to today by default when tab opens
 document.querySelector("[data-tab='passes']").addEventListener("click",()=>{
