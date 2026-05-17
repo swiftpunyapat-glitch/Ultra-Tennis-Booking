@@ -505,9 +505,15 @@ import {
   runTransaction,setDoc,query,where,orderBy,serverTimestamp,Timestamp
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 
-// ── CONFIG ── ⚠️ Change ADMIN_NAMES and ADMIN_PIN before going live!
-const ADMIN_NAMES=["Art","Staff 2","Staff 3","Staff 4","Staff 5"];
-const ADMIN_PIN="1234"; // ← Change this!
+// ── CONFIG ── ⚠️ Change ADMIN_CREDENTIALS before going live!
+const ADMIN_CREDENTIALS = {
+  Art: "7879",
+  Aoy: "8816",
+  Mon: "2106",
+  Ano: "6619",
+  Stam: "6369",
+};
+const ADMIN_NAMES = Object.keys(ADMIN_CREDENTIALS);
 const RESOURCE_ID="room1";
 const OPEN_HOUR=6,CLOSE_HOUR=24;
 
@@ -542,7 +548,7 @@ $("pinIn").addEventListener("keydown",e=>{if(e.key==="Enter")$("loginBtn").click
 $("loginBtn").addEventListener("click",()=>{
   const n=$("adminSel").value,p=$("pinIn").value,err=$("loginErr");
   if(!n){err.textContent="Please select your name.";err.style.display="block";return;}
-  if(p!==ADMIN_PIN){err.style.display="block";$("pinIn").value="";$("pinIn").focus();return;}
+  if(p!==ADMIN_CREDENTIALS[n]){err.style.display="block";$("pinIn").value="";$("pinIn").focus();return;}
   err.style.display="none";sessionStorage.setItem("adminName",n);showApp(n);loadBookings();
 });
 $("logoutBtn").addEventListener("click",()=>{
