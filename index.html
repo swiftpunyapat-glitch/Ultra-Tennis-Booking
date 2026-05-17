@@ -51,11 +51,14 @@
     .shell{width:min(100%,520px);margin:0 auto;padding-bottom:40px;}
 
     /* Profile header */
-    .pheader{display:grid;grid-template-columns:50px 1fr;gap:12px;align-items:center;padding:14px 16px;background:rgba(255,255,255,.88);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50;backdrop-filter:blur(10px);box-shadow:0 8px 22px rgba(11,39,66,.06);}
+    .pheader{display:grid;grid-template-columns:50px 1fr auto;gap:12px;align-items:center;padding:14px 16px;background:rgba(255,255,255,.88);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50;backdrop-filter:blur(10px);box-shadow:0 8px 22px rgba(11,39,66,.06);}
     .avatar{width:50px;height:50px;border-radius:50%;background:linear-gradient(135deg,var(--ut-navy),var(--ut-blue) 58%,var(--ut-cyan));display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.1rem;font-weight:800;overflow:hidden;flex-shrink:0;}
     .avatar img{width:100%;height:100%;object-fit:cover;border-radius:50%;}
     .pname{font-size:1rem;font-weight:800;color:var(--ut-navy);}
     .psub{font-size:.72rem;color:var(--muted);}
+    .lang-toggle{display:flex;align-items:center;gap:3px;background:var(--soft);border:1px solid var(--line);border-radius:999px;padding:3px;}
+    .lang-btn{min-width:34px;padding:4px 8px;border-radius:999px;background:transparent;color:var(--muted);font-size:.68rem;font-weight:900;}
+    .lang-btn.on{background:linear-gradient(135deg,var(--ut-blue),var(--ut-cyan));color:#fff;box-shadow:0 4px 10px rgba(31,122,224,.18);}
 
     /* View */
     .view{padding:16px;}
@@ -237,7 +240,7 @@
 
 <div class="loverlay" id="loverlay">
   <div class="spinner"></div>
-  <p id="ltext">Loading...</p>
+  <p id="ltext" data-i18n="loading">Loading...</p>
 </div>
 
 <div class="shell" id="shell" style="display:none">
@@ -249,26 +252,30 @@
       <div class="pname" id="pname">Loading...</div>
       <div class="psub">Ultra Tennis · Floor G, Omni Business Mall</div>
     </div>
+    <div class="lang-toggle" role="group" aria-label="Language">
+      <button class="lang-btn" data-lang="th" type="button">TH</button>
+      <button class="lang-btn" data-lang="en" type="button">EN</button>
+    </div>
   </header>
 
   <!-- VIEW: HOME -->
   <div id="viewHome">
     <div style="padding:20px 16px 8px">
-      <p style="font-size:.82rem;color:var(--muted);text-align:center">Open daily 06:00–00:00 · Floor G, Omni Business Mall</p>
+      <p style="font-size:.82rem;color:var(--muted);text-align:center" data-i18n="homeHours">Open daily 06:00–00:00 · Floor G, Omni Business Mall</p>
     </div>
     <div class="hgrid" style="grid-template-columns:1fr">
       <button class="hcard" id="btnSingle" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
         <div class="hcard-icon" style="font-size:2rem">🎾</div>
         <div>
-          <div class="hcard-label" style="font-size:1rem">Book Single Use</div>
-          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px">฿350 / hour · Pay by QR slip</div>
+          <div class="hcard-label" style="font-size:1rem" data-i18n="bookSingle">Book Single Use</div>
+          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="singleSub">฿350 / hour · Pay by QR slip</div>
         </div>
       </button>
       <button class="hcard" id="btnMyBookings" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
         <div class="hcard-icon" style="font-size:2rem">📋</div>
         <div>
-          <div class="hcard-label" style="font-size:1rem">My Booking & My Pass</div>
-          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px">View bookings · Check pass balance</div>
+          <div class="hcard-label" style="font-size:1rem" data-i18n="myBookingPass">My Booking & My Pass</div>
+          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="myBookingSub">View bookings · Check pass balance</div>
         </div>
       </button>
     </div>
@@ -277,63 +284,63 @@
   <!-- VIEW: BOOKING -->
   <div id="viewBooking" style="display:none">
     <div class="view">
-      <button class="back" id="bkBack">← Back</button>
-      <div class="ptitle">Book Practice Room</div>
+      <button class="back" id="bkBack">← <span data-i18n="back">Back</span></button>
+      <div class="ptitle" data-i18n="bookPracticeRoom">Book Practice Room</div>
 
       <div class="card">
-        <div class="slabel">Select Date</div>
+        <div class="slabel" data-i18n="selectDate">Select Date</div>
         <div class="dstrip" id="dateStrip"></div>
       </div>
 
       <div class="card">
-        <div class="slabel">Duration</div>
-        <div class="dur-badge"><strong>⏱ 1 Hour per Booking</strong><span>Book again for more time</span></div>
+        <div class="slabel" data-i18n="duration">Duration</div>
+        <div class="dur-badge"><strong>⏱ <span data-i18n="oneHour">1 Hour per Booking</span></strong><span data-i18n="bookAgain">Book again for more time</span></div>
       </div>
 
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px">
-          <div class="slabel" style="margin:0">Available Times</div>
+          <div class="slabel" style="margin:0" data-i18n="availableTimes">Available Times</div>
           <div id="slotsText" style="font-size:.72rem;color:var(--muted)">—</div>
         </div>
-        <div class="tgrid" id="timeGrid"><p class="tloading">Loading slots...</p></div>
+        <div class="tgrid" id="timeGrid"><p class="tloading" data-i18n="loadingSlots">Loading slots...</p></div>
       </div>
 
       <div class="card" id="ptCard">
-        <div class="slabel">Payment Type</div>
+        <div class="slabel" data-i18n="paymentType">Payment Type</div>
         <div class="ptgrid">
-          <button class="ptbtn on" data-pt="single"><span class="pt-name">Single Use</span><small class="pt-sub">฿350</small></button>
-          <button class="ptbtn" data-pt="ultra" id="ptUltra" disabled><span class="pt-name">Ultra Pass</span><small class="pt-sub" id="ptUltraSub">No active pass</small></button>
-          <button class="ptbtn" data-pt="offpeak" id="ptOffpeak" disabled><span class="pt-name">Off-Peak</span><small class="pt-sub" id="ptOffpeakSub">No active pass</small></button>
+          <button class="ptbtn on" data-pt="single"><span class="pt-name" data-i18n="singleUse">Single Use</span><small class="pt-sub">฿350</small></button>
+          <button class="ptbtn" data-pt="ultra" id="ptUltra" disabled><span class="pt-name" data-i18n="ultraPass">Ultra Pass</span><small class="pt-sub" id="ptUltraSub">No active pass</small></button>
+          <button class="ptbtn" data-pt="offpeak" id="ptOffpeak" disabled><span class="pt-name" data-i18n="offPeak">Off-Peak</span><small class="pt-sub" id="ptOffpeakSub">No active pass</small></button>
         </div>
       </div>
 
       <div class="rcard" style="margin-bottom:12px">
         <div class="rimg"></div>
         <div class="rinfo">
-          <div class="eyebrow">Court</div>
-          <h3>Ultra Tennis Practice Room</h3>
-          <p style="font-size:.72rem;color:var(--muted);margin-top:3px">Indoor · LED · AC · Camera</p>
+          <div class="eyebrow" data-i18n="court">Court</div>
+          <h3 data-i18n="roomName">Ultra Tennis Practice Room</h3>
+          <p style="font-size:.72rem;color:var(--muted);margin-top:3px" data-i18n="roomFeatures">Indoor · LED · AC · Camera</p>
           <div class="rtags"><span class="rtag">📍 Floor G · Omni Mall</span></div>
         </div>
       </div>
 
       <div class="card">
-        <div class="slabel">Your Info</div>
+        <div class="slabel" data-i18n="yourInfo">Your Info</div>
         <div class="fgrid">
-          <label>Name<input type="text" id="bkName" autocomplete="name" placeholder="Full name"/></label>
-          <label>Phone<input type="tel" id="bkPhone" autocomplete="tel" placeholder="Phone number"/></label>
-          <label class="full">Note (optional)<textarea id="bkNote" rows="2" placeholder="Special requests..."></textarea></label>
+          <label><span data-i18n="name">Name</span><input type="text" id="bkName" autocomplete="name" placeholder="Full name"/></label>
+          <label><span data-i18n="phone">Phone</span><input type="tel" id="bkPhone" autocomplete="tel" placeholder="Phone number"/></label>
+          <label class="full"><span data-i18n="noteOptional">Note (optional)</span><textarea id="bkNote" rows="2" placeholder="Special requests..."></textarea></label>
         </div>
       </div>
 
       <div class="card">
         <div class="crow">
           <div>
-            <div class="eyebrow">Total</div>
+            <div class="eyebrow" data-i18n="total">Total</div>
             <h2 id="bkPrice">฿350</h2>
             <p id="bkNote2">Payment due within 15 minutes.</p>
           </div>
-          <button class="btn-go" id="confirmBkBtn" disabled>Confirm Booking</button>
+          <button class="btn-go" id="confirmBkBtn" disabled data-i18n="confirmBooking">Confirm Booking</button>
         </div>
       </div>
     </div>
@@ -346,24 +353,24 @@
         <div class="eyebrow" id="payEyebrow">Payment Required</div>
         <div class="pcode" id="payCode">—</div>
         <div class="pmeta">
-          <div class="pmeta-item"><div class="lbl">Amount</div><div class="val" id="payAmt">฿350</div></div>
-          <div class="pmeta-item"><div class="lbl">Pay Before</div><div class="val red" id="payDl">—</div></div>
-          <div class="pmeta-item"><div class="lbl">Date / Item</div><div class="val" id="payDate" style="font-size:.78rem">—</div></div>
-          <div class="pmeta-item"><div class="lbl">Details</div><div class="val" id="payDets" style="font-size:.75rem">—</div></div>
+          <div class="pmeta-item"><div class="lbl" data-i18n="amount">Amount</div><div class="val" id="payAmt">฿350</div></div>
+          <div class="pmeta-item"><div class="lbl" data-i18n="payBefore">Pay Before</div><div class="val red" id="payDl">—</div></div>
+          <div class="pmeta-item"><div class="lbl" data-i18n="dateItem">Date / Item</div><div class="val" id="payDate" style="font-size:.78rem">—</div></div>
+          <div class="pmeta-item"><div class="lbl" data-i18n="details">Details</div><div class="val" id="payDets" style="font-size:.75rem">—</div></div>
         </div>
         <div class="qrwrap">
           <img src="/payment-qr.png" alt="QR"
-            onerror="this.parentElement.innerHTML='<p style=\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\'>⚠️ QR not found.<br>Please contact staff.</p>'"/>
+            onerror="this.parentElement.innerHTML='<p style=\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\'>⚠️ '+(window.utT?window.utT('qrNotFound'):'QR not found. Please contact staff.')+'</p>'"/>
         </div>
-        <p class="qrnote">Scan with any banking app</p>
-        <div class="tnote">💳 Transfer <strong>฿<span id="payAmtText">350</span></strong> and upload slip below</div>
+        <p class="qrnote" data-i18n="scanBank">Scan with any banking app</p>
+        <div class="tnote">💳 <span id="transferTextA">Transfer</span> <strong>฿<span id="payAmtText">350</span></strong> <span id="transferTextB">and upload slip below</span></div>
         <div class="sarea" id="slipArea" onclick="document.getElementById('slipIn').click()">
           <p id="slipAreaTxt">📎 <strong>Tap to upload payment slip</strong></p>
-          <p style="font-size:.7rem;margin-top:2px">JPG, PNG · Max 5MB</p>
+          <p style="font-size:.7rem;margin-top:2px" data-i18n="fileHint">JPG, PNG · Max 5MB</p>
           <img id="slipPrev" class="spreview" style="display:none" alt="Slip preview"/>
         </div>
         <input type="file" id="slipIn" accept="image/*" style="display:none"/>
-        <button class="btn-slip" id="submitSlipBtn" disabled>Submit Payment Slip</button>
+        <button class="btn-slip" id="submitSlipBtn" disabled data-i18n="submitSlip">Submit Payment Slip</button>
       </div>
     </div>
   </div>
@@ -371,13 +378,13 @@
   <!-- VIEW: MY BOOKINGS -->
   <div id="viewMyBookings" style="display:none">
     <div class="view" style="padding:16px 16px 0">
-      <button class="back" id="myBack">← Back</button>
-      <div class="ptitle">My Booking & My Pass</div>
+      <button class="back" id="myBack">← <span data-i18n="back">Back</span></button>
+      <div class="ptitle" data-i18n="myBookingPass">My Booking & My Pass</div>
     </div>
     <div id="myContent" class="mlist">
       <div style="text-align:center;padding:32px">
         <div class="spinner" style="margin:0 auto 10px"></div>
-        <p style="color:var(--muted);font-size:.82rem">Loading...</p>
+        <p style="color:var(--muted);font-size:.82rem" data-i18n="loading">Loading...</p>
       </div>
     </div>
   </div>
@@ -387,10 +394,10 @@
     <div class="view">
       <div class="card scard">
         <div class="scard-icon" id="succIcon">✅</div>
-        <h2 id="succTitle">Done!</h2>
+        <h2 id="succTitle" data-i18n="done">Done!</h2>
         <div class="scode" id="succCode">—</div>
         <p id="succMsg">—</p>
-        <button class="btn-home" id="succHomeBtn">Back to Home</button>
+        <button class="btn-home" id="succHomeBtn" data-i18n="backHome">Back to Home</button>
       </div>
     </div>
   </div>
@@ -460,11 +467,269 @@ const state = {
   currentPurchaseData: null,
   // Pass purchase flow
   selectedPackageType: null,
+  myBookingsData: null,
+  successData: null,
 };
 
 // ── DOM ─────────────────────────────────────────────────────────
 const $     = id => document.getElementById(id);
 const VIEWS = ["viewHome","viewBooking","viewPayment","viewMyBookings","viewSuccess"];
+const LANG_KEY = "ultra_lang";
+let currentLang = localStorage.getItem(LANG_KEY) || "th";
+if(!["th","en"].includes(currentLang)) currentLang="th";
+const I18N = {
+  th: {
+    loading:"กำลังโหลด...",
+    connectingLine:"กำลังเชื่อมต่อ LINE...",
+    loadingPass:"กำลังโหลดข้อมูลแพ็กเกจ...",
+    homeHours:"เปิดทุกวัน 06:00–00:00 · ชั้น G, Omni Business Mall",
+    bookSingle:"จองใช้บริการรายครั้ง",
+    singleSub:"350 บาท / ชั่วโมง · ชำระผ่าน QR และอัปโหลดสลิป",
+    myBookingPass:"การจองและแพ็กเกจของฉัน",
+    myBookingSub:"ดูการจอง · เช็กชั่วโมงคงเหลือ",
+    back:"กลับ",
+    bookPracticeRoom:"จองห้องซ้อม",
+    selectDate:"เลือกวันที่",
+    duration:"ระยะเวลา",
+    oneHour:"จองครั้งละ 1 ชั่วโมง",
+    bookAgain:"หากต้องการหลายชั่วโมง สามารถจองเพิ่มได้",
+    availableTimes:"เลือกเวลา",
+    loadingSlots:"กำลังโหลดช่วงเวลา...",
+    paymentType:"วิธีชำระ / สิทธิ์ที่ใช้",
+    singleUse:"รายครั้ง",
+    ultraPass:"Ultra Pass",
+    offPeak:"Off-Peak",
+    noActivePass:"ยังไม่มีแพ็กเกจที่ใช้งานได้",
+    court:"สนาม / ห้องซ้อม",
+    roomName:"ห้องซ้อม Ultra Tennis",
+    roomFeatures:"ในร่ม · ไฟ LED · แอร์ · กล้อง",
+    yourInfo:"ข้อมูลผู้จอง",
+    name:"ชื่อ",
+    phone:"เบอร์โทร",
+    noteOptional:"หมายเหตุ (ถ้ามี)",
+    fullName:"ชื่อ-นามสกุล",
+    phoneNumber:"เบอร์โทร",
+    specialRequests:"รายละเอียดเพิ่มเติม...",
+    total:"ยอดชำระ",
+    paymentDue:"กรุณาชำระเงินภายใน 15 นาที",
+    confirmBooking:"ยืนยันการจอง",
+    saving:"กำลังบันทึก...",
+    paymentRequired:"กรุณาชำระเงิน",
+    passPaymentRequired:"กรุณาชำระเงินแพ็กเกจ",
+    amount:"ยอดชำระ",
+    payBefore:"ชำระก่อน",
+    dateItem:"วันที่ / รายการ",
+    details:"รายละเอียด",
+    qrNotFound:"ไม่พบ QR กรุณาติดต่อแอดมิน",
+    scanBank:"สแกนด้วยแอปธนาคาร",
+    transferA:"โอนเงินจำนวน",
+    transferB:"บาท แล้วอัปโหลดสลิปด้านล่าง",
+    tapUpload:"แตะเพื่ออัปโหลดสลิป",
+    fileHint:"JPG, PNG · ขนาดไม่เกิน 5MB",
+    submitSlip:"ส่งสลิปชำระเงิน",
+    uploading:"กำลังอัปโหลด...",
+    done:"สำเร็จแล้ว",
+    backHome:"กลับหน้าแรก",
+    today:"วันนี้",
+    available:"ว่าง",
+    slotsAvailable:"ว่าง {count} ช่วงเวลา",
+    noAvailableSlots:"ไม่มีช่วงเวลาว่าง",
+    timePassed:"เวลานี้ผ่านไปแล้ว",
+    notOpened:"ยังไม่เปิดให้จอง",
+    alreadyBooked:"มีผู้จองแล้ว",
+    offPeakWeekdays:"Off-Peak: จันทร์–ศุกร์เท่านั้น",
+    offPeakHoliday:"Off-Peak: ไม่รวมวันหยุด",
+    offPeakHours:"Off-Peak: 09:00–15:00 เท่านั้น",
+    ultraMinLeft:"เหลือ {min} นาที",
+    validUntil:"ใช้ได้ถึง {date}",
+    noPassOption:"ยังไม่มีแพ็กเกจสำหรับตัวเลือกนี้",
+    passNoteUltra:"หัก 60 นาทีจาก Ultra Pass",
+    passNoteOffpeak:"หัก 1 ครั้งจาก Off-Peak Pass",
+    selectFile:"กรุณาเลือกไฟล์",
+    imageOnly:"กรุณาอัปโหลดรูปภาพ (JPG, PNG)",
+    fileTooLarge:"ไฟล์ใหญ่เกินไป สูงสุด 5MB",
+    uploadTimeout:"อัปโหลดใช้เวลานานเกินไป กรุณาตรวจสอบการเชื่อมต่อ",
+    nameRequired:"กรุณากรอกชื่อ",
+    phoneRequired:"กรุณากรอกเบอร์โทร",
+    selectTime:"กรุณาเลือกเวลา",
+    invalidPayment:"วิธีชำระไม่ถูกต้อง",
+    linePassRequired:"กรุณาเข้าสู่ระบบ LINE เพื่อใช้แพ็กเกจ",
+    noUltra:"ยังไม่มี Ultra Pass ที่ใช้งานได้",
+    noOffpeak:"ยังไม่มี Off-Peak Pass ที่ใช้งานได้",
+    bookingFailed:"จองไม่สำเร็จ กรุณาลองใหม่",
+    uploadFailed:"อัปโหลดสลิปไม่สำเร็จ กรุณาลองใหม่",
+    bookingConfirmed:"ยืนยันการจองแล้ว",
+    slipReceived:"ได้รับสลิปแล้ว",
+    passPending:"คำสั่งซื้อแพ็กเกจอยู่ระหว่างรอแอดมินตรวจสอบ",
+    pendingReview:"รอแอดมินตรวจสอบ",
+    noBookings:"ยังไม่มีรายการจอง",
+    bookNow:"จองเลย",
+    failedLoad:"โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่",
+    passPurchases:"รายการซื้อแพ็กเกจ",
+    bookings:"รายการจอง",
+    activePasses:"แพ็กเกจที่ใช้งานอยู่",
+    code:"รหัส",
+    paymentRequiredShort:"รอชำระเงิน",
+    completePayment:"ชำระเงินต่อ →",
+    date:"วันที่",
+    time:"เวลา",
+    price:"ราคา",
+    confirmed:"ยืนยันแล้ว",
+    active:"ใช้งานอยู่",
+    minRemaining:"เหลือ {min} นาที",
+    validUntilLabel:"ใช้ได้ถึง",
+    weeklyLimit:"จำกัดต่อสัปดาห์: {week} ชม. · ต่อเดือน: {month} ชม.",
+    couldNotLoadBooking:"โหลดรายการจองไม่ได้",
+    couldNotLoadPurchase:"โหลดรายการซื้อไม่ได้",
+    appLoadFailed:"โหลดแอปไม่ได้ กรุณารีเฟรชหรือตรวจสอบการเชื่อมต่อ"
+  },
+  en: {
+    loading:"Loading...",
+    connectingLine:"Connecting to LINE...",
+    loadingPass:"Loading your pass info...",
+    homeHours:"Open daily 06:00–00:00 · Floor G, Omni Business Mall",
+    bookSingle:"Book Single Use",
+    singleSub:"฿350 / hour · Pay by QR slip",
+    myBookingPass:"My Booking & My Pass",
+    myBookingSub:"View bookings · Check pass balance",
+    back:"Back",
+    bookPracticeRoom:"Book Practice Room",
+    selectDate:"Select Date",
+    duration:"Duration",
+    oneHour:"1 Hour per Booking",
+    bookAgain:"Book again for more time",
+    availableTimes:"Available Times",
+    loadingSlots:"Loading slots...",
+    paymentType:"Payment Type",
+    singleUse:"Single Use",
+    ultraPass:"Ultra Pass",
+    offPeak:"Off-Peak",
+    noActivePass:"No active pass",
+    court:"Court",
+    roomName:"Ultra Tennis Practice Room",
+    roomFeatures:"Indoor · LED · AC · Camera",
+    yourInfo:"Your Info",
+    name:"Name",
+    phone:"Phone",
+    noteOptional:"Note (optional)",
+    fullName:"Full name",
+    phoneNumber:"Phone number",
+    specialRequests:"Special requests...",
+    total:"Total",
+    paymentDue:"Payment due within 15 minutes.",
+    confirmBooking:"Confirm Booking",
+    saving:"Saving...",
+    paymentRequired:"Payment Required",
+    passPaymentRequired:"Pass Payment Required",
+    amount:"Amount",
+    payBefore:"Pay Before",
+    dateItem:"Date / Item",
+    details:"Details",
+    qrNotFound:"QR not found. Please contact staff.",
+    scanBank:"Scan with any banking app",
+    transferA:"Transfer",
+    transferB:"and upload slip below",
+    tapUpload:"Tap to upload payment slip",
+    fileHint:"JPG, PNG · Max 5MB",
+    submitSlip:"Submit Payment Slip",
+    uploading:"Uploading...",
+    done:"Done!",
+    backHome:"Back to Home",
+    today:"Today",
+    available:"Available",
+    slotsAvailable:"{count} slots available",
+    noAvailableSlots:"No available slots",
+    timePassed:"Time has passed",
+    notOpened:"Not opened for booking yet",
+    alreadyBooked:"Already booked",
+    offPeakWeekdays:"Off-Peak: Mon–Fri only",
+    offPeakHoliday:"Off-Peak: Holiday excluded",
+    offPeakHours:"Off-Peak: 09:00–15:00 only",
+    ultraMinLeft:"{min} min left",
+    validUntil:"Valid until {date}",
+    noPassOption:"No active pass for this option.",
+    passNoteUltra:"60 min deducted from Ultra Pass",
+    passNoteOffpeak:"1 session deducted from Off-Peak Pass",
+    selectFile:"Please select a file",
+    imageOnly:"Please upload an image (JPG, PNG)",
+    fileTooLarge:"File too large. Max 5MB.",
+    uploadTimeout:"Upload timed out. Check connection.",
+    nameRequired:"Name is required",
+    phoneRequired:"Phone is required",
+    selectTime:"Please select a time",
+    invalidPayment:"Invalid payment type.",
+    linePassRequired:"Please log in with LINE to use a pass.",
+    noUltra:"No active Ultra Pass.",
+    noOffpeak:"No active Off-Peak Pass.",
+    bookingFailed:"Failed to book. Try again.",
+    uploadFailed:"Upload failed. Try again.",
+    bookingConfirmed:"Booking Confirmed!",
+    slipReceived:"Slip Received!",
+    passPending:"Your pass purchase is pending admin review. It will be activated shortly after confirmation.",
+    pendingReview:"Pending admin review",
+    noBookings:"No bookings yet",
+    bookNow:"Book now",
+    failedLoad:"Failed to load. Please try again.",
+    passPurchases:"Pass Purchases",
+    bookings:"Bookings",
+    activePasses:"Active Passes",
+    code:"Code",
+    paymentRequiredShort:"Payment required",
+    completePayment:"Complete Payment →",
+    date:"Date",
+    time:"Time",
+    price:"Price",
+    confirmed:"Confirmed",
+    active:"Active",
+    minRemaining:"{min} min remaining",
+    validUntilLabel:"Valid until",
+    weeklyLimit:"Weekly limit: {week} hrs · Monthly: {month} hrs",
+    couldNotLoadBooking:"Could not load booking.",
+    couldNotLoadPurchase:"Could not load purchase.",
+    appLoadFailed:"Couldn't load the app. Please refresh, or check your connection."
+  }
+};
+function t(key, vars={}) {
+  let text = I18N[currentLang]?.[key] || I18N.en[key] || key;
+  Object.entries(vars).forEach(([k,v])=>{ text=text.replaceAll(`{${k}}`, v); });
+  return text;
+}
+window.utT = t;
+function applyI18n() {
+  document.documentElement.lang=currentLang;
+  document.querySelectorAll("[data-i18n]").forEach(el=>{ el.textContent=t(el.dataset.i18n); });
+  $("bkName").placeholder=t("fullName");
+  $("bkPhone").placeholder=t("phoneNumber");
+  $("bkNote").placeholder=t("specialRequests");
+  document.querySelectorAll(".lang-btn").forEach(btn=>btn.classList.toggle("on",btn.dataset.lang===currentLang));
+  if($("transferTextA")) $("transferTextA").textContent=t("transferA");
+  if($("transferTextB")) $("transferTextB").textContent=t("transferB");
+  if($("slipAreaTxt") && !$("slipIn").files?.length) $("slipAreaTxt").innerHTML=`📎 <strong>${t("tapUpload")}</strong>`;
+  if($("payEyebrow")) $("payEyebrow").textContent=state.paymentMode==="pass"?t("passPaymentRequired"):t("paymentRequired");
+  if($("ptUltraSub")) $("ptUltraSub").textContent=state.eligibility.hasUltra ? t("ultraMinLeft",{min:state.eligibility.ultraPkg.remainingMinutes}) : t("noActivePass");
+  if($("ptOffpeakSub")) $("ptOffpeakSub").textContent=state.eligibility.hasOffpeak ? t("validUntil",{date:state.eligibility.offpeakPkg.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—"}) : t("noActivePass");
+  if($("confirmBkBtn") && !$("confirmBkBtn").disabled) $("confirmBkBtn").textContent=t("confirmBooking");
+  if($("submitSlipBtn") && !$("submitSlipBtn").disabled) $("submitSlipBtn").textContent=t("submitSlip");
+  updateBookingPriceNote();
+}
+function setupLanguageToggle() {
+  document.querySelectorAll(".lang-btn").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      currentLang=btn.dataset.lang;
+      localStorage.setItem(LANG_KEY,currentLang);
+      applyI18n();
+      buildDates();
+      renderTimes();
+      if(state.myBookingsData && $("viewMyBookings").style.display!=="none"){
+        renderMyBookings(state.myBookingsData.bookings,state.myBookingsData.packages,state.myBookingsData.purchases);
+      }
+      if(state.successData && $("viewSuccess").style.display!=="none"){
+        renderSuccess();
+      }
+    });
+  });
+  applyI18n();
+}
 function showView(id) {
   VIEWS.forEach(v => { const el=$(v); if(el) el.style.display="none"; });
   const el=$(id); if(el) el.style.display="block";
@@ -499,7 +764,7 @@ function getMonthKey(date) {
 
 // ── LIFF INIT ───────────────────────────────────────────────────
 async function initLiff() {
-  $("ltext").textContent="Connecting to LINE...";
+  $("ltext").textContent=t("connectingLine");
   try {
     await liff.init({ liffId:LIFF_ID });
     if(!liff.isLoggedIn()){ liff.login(); return; }
@@ -511,7 +776,7 @@ async function initLiff() {
   if(state.lineProfile.pictureUrl) av.innerHTML=`<img src="${state.lineProfile.pictureUrl}" alt="Avatar"/>`;
   else av.textContent = state.lineProfile.displayName.charAt(0).toUpperCase();
 
-  $("ltext").textContent="Loading your pass info...";
+  $("ltext").textContent=t("loadingPass");
   await checkEligibility();
 
   $("loverlay").style.display="none";
@@ -575,18 +840,18 @@ function openBookingView() {
 }
 
 function buildDates() {
-  const strip=$("dateStrip"), fmt=new Intl.DateTimeFormat("en-US",{weekday:"short"});
+  const strip=$("dateStrip"), fmt=new Intl.DateTimeFormat(currentLang==="th"?"th-TH":"en-US",{weekday:"short"});
   const today=new Date(); strip.innerHTML="";
   for(let i=0;i<30;i++){
     const d=new Date(today); d.setDate(today.getDate()+i);
     const btn=document.createElement("button");
     btn.className=`dbtn${i===state.dateOffset?" on":""}`;
-    btn.innerHTML=`<span>${i===0?"Today":fmt.format(d)}</span><strong>${d.getDate()}</strong>`;
+    btn.innerHTML=`<span>${i===0?t("today"):fmt.format(d)}</span><strong>${d.getDate()}</strong>`;
     btn.addEventListener("click", async()=>{
       state.dateOffset=i; state.time=null;
       strip.querySelectorAll(".dbtn").forEach(b=>b.classList.remove("on"));
       btn.classList.add("on");
-      $("timeGrid").innerHTML=`<p class="tloading">Loading...</p>`;
+      $("timeGrid").innerHTML=`<p class="tloading">${t("loading")}</p>`;
       await loadSlotsAndRender(getSelectedDateISO());
       updateBookingConfirmBtn();
     });
@@ -622,7 +887,7 @@ function renderTimes() {
     const reason=getDisabledReason(time,h);
     const btn=document.createElement("button");
     btn.className=`tbtn${time===state.time?" on":""}`;
-    btn.textContent=time; btn.title=reason||"Available";
+    btn.textContent=time; btn.title=reason||t("available");
     btn.disabled=Boolean(reason);
     btn.addEventListener("click",()=>{
       state.time=time;
@@ -633,22 +898,22 @@ function renderTimes() {
     grid.append(btn);
     if(!reason) avail++;
   }
-  $("slotsText").textContent=`${avail} slots available`;
+  $("slotsText").textContent=avail ? t("slotsAvailable",{count:avail}) : t("noAvailableSlots");
 }
 
 function getDisabledReason(time, h) {
   // Past time check
-  if(state.dateOffset===0 && h<=new Date().getHours()) return "Time has passed";
+  if(state.dateOffset===0 && h<=new Date().getHours()) return t("timePassed");
   // Admin must open slot
-  if(!state.openSlots.has(time)) return "Not opened for booking yet";
+  if(!state.openSlots.has(time)) return t("notOpened");
   // Actively booked
-  if(state.blockedSlots.has(time)) return "Already booked";
+  if(state.blockedSlots.has(time)) return t("alreadyBooked");
   // Off-Peak restrictions
   if(state.bookingPaymentType==="offpeak"){
     const day=getSelectedDate().getDay();
-    if(day<1||day>5) return "Off-Peak: Mon–Fri only";
-    if(state.currentDateIsHoliday) return "Off-Peak: Holiday excluded";
-    if(h<OFFPEAK.startHour||h+1>OFFPEAK.endHour) return "Off-Peak: 09:00–15:00 only";
+    if(day<1||day>5) return t("offPeakWeekdays");
+    if(state.currentDateIsHoliday) return t("offPeakHoliday");
+    if(h<OFFPEAK.startHour||h+1>OFFPEAK.endHour) return t("offPeakHours");
   }
   return "";
 }
@@ -659,15 +924,15 @@ function updatePaymentTypeButtons() {
   uBtn.disabled = !el.hasUltra;
   oBtn.disabled = !el.hasOffpeak;
   $("ptUltraSub").textContent = el.hasUltra
-    ? `${el.ultraPkg.remainingMinutes} min left`
-    : "No active pass";
+    ? t("ultraMinLeft",{min:el.ultraPkg.remainingMinutes})
+    : t("noActivePass");
   $("ptOffpeakSub").textContent = el.hasOffpeak
-    ? `Valid until ${el.offpeakPkg.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—"}`
-    : "No active pass";
+    ? t("validUntil",{date:el.offpeakPkg.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—"})
+    : t("noActivePass");
 
   document.querySelectorAll(".ptbtn").forEach(btn=>{
     btn.addEventListener("click",()=>{
-      if(btn.disabled){ showToast("No active pass for this option.",true); return; }
+      if(btn.disabled){ showToast(t("noPassOption"),true); return; }
       document.querySelectorAll(".ptbtn").forEach(b=>b.classList.remove("on"));
       btn.classList.add("on");
       state.bookingPaymentType=btn.dataset.pt;
@@ -677,17 +942,23 @@ function updatePaymentTypeButtons() {
       renderTimes();
       updateBookingConfirmBtn();
       // Update price display
-      if(state.bookingPaymentType==="single"){
-        $("bkPrice").textContent="฿350";
-        $("bkNote2").textContent="Payment due within 15 minutes.";
-      } else {
-        $("bkPrice").textContent="฿0 (Pass)";
-        $("bkNote2").textContent=state.bookingPaymentType==="ultra"
-          ? `60 min deducted from Ultra Pass`
-          : "1 session deducted from Off-Peak Pass";
-      }
+      updateBookingPriceNote();
     });
   });
+  updateBookingPriceNote();
+}
+
+function updateBookingPriceNote(){
+  if(!$("bkPrice")||!$("bkNote2")) return;
+  if(state.bookingPaymentType==="single"){
+    $("bkPrice").textContent="฿350";
+    $("bkNote2").textContent=t("paymentDue");
+  } else {
+    $("bkPrice").textContent="฿0 (Pass)";
+    $("bkNote2").textContent=state.bookingPaymentType==="ultra"
+      ? t("passNoteUltra")
+      : t("passNoteOffpeak");
+  }
 }
 
 function updateBookingConfirmBtn() {
@@ -699,24 +970,24 @@ $("confirmBkBtn").addEventListener("click", async()=>{
   const name=$("bkName").value.trim(), phone=$("bkPhone").value.trim();
   $("bkName").classList.toggle("invalid",!name);
   $("bkPhone").classList.toggle("invalid",!phone);
-  if(!name){ $("bkName").focus(); showToast("Name is required",true); return; }
-  if(!phone){ $("bkPhone").focus(); showToast("Phone is required",true); return; }
-  if(!state.time){ showToast("Please select a time",true); return; }
+  if(!name){ $("bkName").focus(); showToast(t("nameRequired"),true); return; }
+  if(!phone){ $("bkPhone").focus(); showToast(t("phoneRequired"),true); return; }
+  if(!state.time){ showToast(t("selectTime"),true); return; }
 
   const payType = state.bookingPaymentType;
   if(payType!=="single" && payType!=="ultra" && payType!=="offpeak"){
-    showToast("Invalid payment type.",true); return;
+    showToast(t("invalidPayment"),true); return;
   }
   // Guests can't use passes — no LIFF userId means we can't verify ownership.
   if(payType!=="single" && state.lineProfile.userId==="guest"){
-    showToast("Please log in with LINE to use a pass.",true); return;
+    showToast(t("linePassRequired"),true); return;
   }
   // Defense-in-depth: client must have surfaced eligibility before allowing pass type.
   // (Server-side checks below are the real gate.)
-  if(payType==="ultra"   && !state.eligibility.ultraPkg)   { showToast("No active Ultra Pass.",true); return; }
-  if(payType==="offpeak" && !state.eligibility.offpeakPkg) { showToast("No active Off-Peak Pass.",true); return; }
+  if(payType==="ultra"   && !state.eligibility.ultraPkg)   { showToast(t("noUltra"),true); return; }
+  if(payType==="offpeak" && !state.eligibility.offpeakPkg) { showToast(t("noOffpeak"),true); return; }
 
-  const btn=$("confirmBkBtn"); btn.disabled=true; btn.textContent="Saving...";
+  const btn=$("confirmBkBtn"); btn.disabled=true; btn.textContent=t("saving");
   try {
     const code      = generateCode("UT");
     const dateISO   = getSelectedDateISO();
@@ -873,12 +1144,12 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       // next time the user opens the booking view.
       state.eligibility = { hasUltra:false, ultraPkg:null, hasOffpeak:false, offpeakPkg:null };
       try { await checkEligibility(); } catch(_) { /* non-fatal */ }
-      showSuccess("✅","Booking Confirmed!",code,`${name} · ${dateISO} · ${state.time}–${endTime} · ${bookingPayload.bookingType}`);
+      showSuccess("✅",t("bookingConfirmed"),code,`${name} · ${dateISO} · ${state.time}–${endTime} · ${displayBookingType(bookingPayload.bookingType)}`);
     }
   } catch(e){
-    console.error(e); showToast(e.message||"Failed to book. Try again.",true);
+    console.error(e); showToast(e.message||t("bookingFailed"),true);
   } finally {
-    btn.disabled=false; btn.textContent="Confirm Booking";
+    btn.disabled=false; btn.textContent=t("confirmBooking");
   }
 });
 
@@ -892,9 +1163,11 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel) {
   $("payDl").textContent     = expiresAt instanceof Date
     ? expiresAt.toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"})
     : "—";
-  $("payEyebrow").textContent= state.paymentMode==="pass"?"Pass Payment Required":"Payment Required";
+  $("payEyebrow").textContent= state.paymentMode==="pass"?t("passPaymentRequired"):t("paymentRequired");
+  $("transferTextA").textContent=t("transferA");
+  $("transferTextB").textContent=t("transferB");
   // Reset slip area
-  $("slipAreaTxt").innerHTML='📎 <strong>Tap to upload payment slip</strong>';
+  $("slipAreaTxt").innerHTML=`📎 <strong>${t("tapUpload")}</strong>`;
   $("slipPrev").style.display="none";
   $("slipIn").value="";
   $("slipArea").classList.remove("has");
@@ -913,13 +1186,13 @@ $("slipIn").addEventListener("change",()=>{
 // Submit slip
 $("submitSlipBtn").addEventListener("click", async()=>{
   const file=$("slipIn").files[0];
-  if(!file){ showToast("Please select a file",true); return; }
-  if(!file.type.startsWith("image/")){ showToast("Please upload an image (JPG, PNG)",true); return; }
-  if(file.size>5*1024*1024){ showToast("File too large. Max 5MB.",true); return; }
+  if(!file){ showToast(t("selectFile"),true); return; }
+  if(!file.type.startsWith("image/")){ showToast(t("imageOnly"),true); return; }
+  if(file.size>5*1024*1024){ showToast(t("fileTooLarge"),true); return; }
 
-  const btn=$("submitSlipBtn"); btn.disabled=true; btn.textContent="Uploading...";
+  const btn=$("submitSlipBtn"); btn.disabled=true; btn.textContent=t("uploading");
   let didTimeout=false;
-  const tid=setTimeout(()=>{ didTimeout=true; showToast("Upload timed out. Check connection.",true); btn.disabled=false; btn.textContent="Submit Payment Slip"; },20000);
+  const tid=setTimeout(()=>{ didTimeout=true; showToast(t("uploadTimeout"),true); btn.disabled=false; btn.textContent=t("submitSlip"); },20000);
 
   try {
     const ts=Date.now();
@@ -944,7 +1217,7 @@ $("submitSlipBtn").addEventListener("click", async()=>{
       const pRef=doc(db,"pass_purchases",state.currentPurchaseDocId);
       await updateDoc(pRef,{ status:"pending_review", paymentStatus:"pending_review", slipUrl:url, slipUploadedAt:serverTimestamp(), updatedAt:serverTimestamp() });
       console.log("Pass purchase updated");
-      showSuccess("📨","Slip Received!",code,"Your pass purchase is pending admin review. It will be activated shortly after confirmation.");
+      showSuccess("📨",t("slipReceived"),code,t("passPending"));
     } else {
       const bRef=doc(db,"bookings",state.currentBookingDocId);
       await updateDoc(bRef,{ bookingStatus:"confirmed", paymentStatus:"pending_review", slipUrl:url, slipUploadedAt:serverTimestamp(), updatedAt:serverTimestamp() });
@@ -964,22 +1237,22 @@ $("submitSlipBtn").addEventListener("click", async()=>{
           endTime: state.currentBookingData.endTime
         });
       }
-      showSuccess("✅","Slip Received!",code,`${state.currentBookingData.customerName} · ${state.currentBookingData.date} · ${state.currentBookingData.startTime}–${state.currentBookingData.endTime} · Pending admin review.`);
+      showSuccess("✅",t("slipReceived"),code,`${state.currentBookingData.customerName} · ${state.currentBookingData.date} · ${state.currentBookingData.startTime}–${state.currentBookingData.endTime} · ${t("pendingReview")}.`);
     }
     showView("viewSuccess");
 
   } catch(e){
     clearTimeout(tid); if(didTimeout) return;
     console.error("Slip upload failed:",e);
-    showToast(e.message||"Upload failed. Try again.",true);
-    btn.disabled=false; btn.textContent="Submit Payment Slip";
+    showToast(e.message||t("uploadFailed"),true);
+    btn.disabled=false; btn.textContent=t("submitSlip");
   }
 });
 
 // ── MY BOOKINGS ─────────────────────────────────────────────────
 async function openMyBookings() {
   showView("viewMyBookings");
-  $("myContent").innerHTML=`<div style="text-align:center;padding:32px"><div class="spinner" style="margin:0 auto 10px"></div><p style="color:var(--muted);font-size:.82rem">Loading...</p></div>`;
+  $("myContent").innerHTML=`<div style="text-align:center;padding:32px"><div class="spinner" style="margin:0 auto 10px"></div><p style="color:var(--muted);font-size:.82rem">${t("loading")}</p></div>`;
 
   try {
     const uid=state.lineProfile.userId;
@@ -997,10 +1270,11 @@ async function openMyBookings() {
       .filter(p=>p.status==="pending_payment"||p.status==="pending_review")
       .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
 
+    state.myBookingsData={bookings,packages,purchases};
     renderMyBookings(bookings, packages, purchases);
   } catch(e){
     console.error(e);
-    $("myContent").innerHTML=`<div class="empty"><p>Failed to load. Please try again.</p></div>`;
+    $("myContent").innerHTML=`<div class="empty"><p>${t("failedLoad")}</p></div>`;
   }
 }
 
@@ -1011,9 +1285,9 @@ function renderMyBookings(bookings, packages, purchases) {
   if(!active.length && !packages.length && !purchases.length) {
     $("myContent").innerHTML=`<div class="empty">
       <div class="empty-icon">📭</div>
-      <p>No active bookings or passes yet.</p>
+      <p>${t("noBookings")}</p>
       <div class="empty-btns">
-        <button class="btn-empty" onclick="openBookingView()">🎾 Book Single Use</button>
+        <button class="btn-empty" onclick="openBookingView()">🎾 ${t("bookNow")}</button>
       </div></div>`;
     return;
   }
@@ -1022,40 +1296,40 @@ function renderMyBookings(bookings, packages, purchases) {
 
   // Pending pass purchases
   if(purchases.length){
-    html+=`<div class="sec-title">Pass Purchases</div>`;
+    html+=`<div class="sec-title">${t("passPurchases")}</div>`;
     purchases.forEach(p=>{
       html+=`<div class="passitem">
-        <div class="passitem-top"><div class="pass-name">${esc(p.packageName||"—")}</div><span class="sp s-${esc(p.paymentStatus)}">${esc(p.paymentStatus)}</span></div>
+        <div class="passitem-top"><div class="pass-name">${esc(p.packageName||"—")}</div><span class="sp s-${esc(p.paymentStatus)}">${esc(displayStatus(p.paymentStatus))}</span></div>
         <div class="pass-info">
-          <span>Code: <strong>${esc(p.purchaseCode)}</strong></span>
+          <span>${t("code")}: <strong>${esc(p.purchaseCode)}</strong></span>
           <span>฿${Number(p.price)?Number(p.price).toLocaleString("en-US"):"—"}</span>
-          ${p.status==="pending_review"?`<span style="color:var(--brand-dark)">⏳ Slip received, pending admin review</span>`:`<span style="color:var(--warning)">💳 Payment required</span>`}
+          ${p.status==="pending_review"?`<span style="color:var(--brand-dark)">⏳ ${t("pendingReview")}</span>`:`<span style="color:var(--warning)">💳 ${t("paymentRequiredShort")}</span>`}
         </div>
-        ${p.status==="pending_payment"?`<button class="btn-rpay" style="margin-top:9px;width:100%" onclick="resumePassPayment('${esc(p.id)}')">Complete Payment →</button>`:""}
+        ${p.status==="pending_payment"?`<button class="btn-rpay" style="margin-top:9px;width:100%" onclick="resumePassPayment('${esc(p.id)}')">${t("completePayment")}</button>`:""}
       </div>`;
     });
   }
 
   // Active bookings
   if(active.length){
-    html+=`<div class="sec-title">Bookings</div>`;
+    html+=`<div class="sec-title">${t("bookings")}</div>`;
     active.forEach(b=>{
       const isPendPay=b.bookingStatus==="pending_payment";
       const isPendRev=b.paymentStatus==="pending_review";
       const isPaid   =b.paymentStatus==="paid"||b.paymentStatus==="package";
       html+=`<div class="bitem">
-        <div class="bitem-top"><span class="bitem-code">${esc(b.bookingCode)}</span><span class="bitem-type">${esc(b.bookingType||"—")}</span></div>
+        <div class="bitem-top"><span class="bitem-code">${esc(b.bookingCode)}</span><span class="bitem-type">${esc(displayBookingType(b.bookingType)||"—")}</span></div>
         <div class="bitem-details">
-          <div class="bf-field"><div class="bf-lbl">Date</div><div class="bf-val">${esc(b.date||"—")}</div></div>
-          <div class="bf-field"><div class="bf-lbl">Time</div><div class="bf-val">${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</div></div>
-          <div class="bf-field"><div class="bf-lbl">Name</div><div class="bf-val">${esc(b.customerName||"—")}</div></div>
-          <div class="bf-field"><div class="bf-lbl">Price</div><div class="bf-val">฿${Number(b.price)||0}</div></div>
+          <div class="bf-field"><div class="bf-lbl">${t("date")}</div><div class="bf-val">${esc(b.date||"—")}</div></div>
+          <div class="bf-field"><div class="bf-lbl">${t("time")}</div><div class="bf-val">${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</div></div>
+          <div class="bf-field"><div class="bf-lbl">${t("name")}</div><div class="bf-val">${esc(b.customerName||"—")}</div></div>
+          <div class="bf-field"><div class="bf-lbl">${t("price")}</div><div class="bf-val">฿${Number(b.price)||0}</div></div>
         </div>
         <div class="bitem-footer">
-          <span class="sp s-${esc(b.bookingStatus)}">${esc(b.bookingStatus)}</span>
-          ${isPendPay?`<button class="btn-rpay" onclick="resumeBookingPayment('${esc(b.id)}')">Complete Payment →</button>`:""}
-          ${isPendRev?`<span style="font-size:.72rem;color:#1e40af">⏳ Slip received, pending admin review</span>`:""}
-          ${(isPaid&&!isPendRev)?`<span style="font-size:.72rem;color:var(--brand-dark)">✅ Confirmed</span>`:""}
+          <span class="sp s-${esc(b.bookingStatus)}">${esc(displayStatus(b.bookingStatus))}</span>
+          ${isPendPay?`<button class="btn-rpay" onclick="resumeBookingPayment('${esc(b.id)}')">${t("completePayment")}</button>`:""}
+          ${isPendRev?`<span style="font-size:.72rem;color:#1e40af">⏳ ${t("pendingReview")}</span>`:""}
+          ${(isPaid&&!isPendRev)?`<span style="font-size:.72rem;color:var(--brand-dark)">✅ ${t("confirmed")}</span>`:""}
         </div>
       </div>`;
     });
@@ -1063,16 +1337,16 @@ function renderMyBookings(bookings, packages, purchases) {
 
   // Active passes
   if(packages.length){
-    html+=`<div class="sec-title">Active Passes</div>`;
+    html+=`<div class="sec-title">${t("activePasses")}</div>`;
     packages.forEach(p=>{
       const validUntil=p.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—";
       const isUltra=p.packageType==="ultra_10"||p.packageType==="ultra_20";
       html+=`<div class="passitem">
-        <div class="passitem-top"><div class="pass-name">${esc(p.packageName)}</div><span class="pass-active">Active</span></div>
-        ${isUltra?`<div class="pass-mins">${Number(p.remainingMinutes)||0} min remaining</div>`:""}
+        <div class="passitem-top"><div class="pass-name">${esc(p.packageName)}</div><span class="pass-active">${t("active")}</span></div>
+        ${isUltra?`<div class="pass-mins">${t("minRemaining",{min:Number(p.remainingMinutes)||0})}</div>`:""}
         <div class="pass-info">
-          <span>Valid until: <strong>${esc(validUntil)}</strong></span>
-          ${p.weeklyLimitHours?`<span>Weekly limit: ${Number(p.weeklyLimitHours)||0} hrs · Monthly: ${Number(p.monthlyLimitHours)||0} hrs</span>`:""}
+          <span>${t("validUntilLabel")}: <strong>${esc(validUntil)}</strong></span>
+          ${p.weeklyLimitHours?`<span>${t("weeklyLimit",{week:Number(p.weeklyLimitHours)||0,month:Number(p.monthlyLimitHours)||0})}</span>`:""}
         </div>
       </div>`;
     });
@@ -1094,7 +1368,7 @@ window.resumeBookingPayment = async(docId)=>{
     const exp=b.paymentExpiresAt?.toDate?.()||new Date();
     showPaymentPanel(b.bookingCode,b.price||350,exp,b.date||"—",`${b.startTime||"—"}–${b.endTime||"—"}`);
     showView("viewPayment");
-  } catch(e){ showToast("Could not load booking.",true); }
+  } catch(e){ showToast(t("couldNotLoadBooking"),true); }
 };
 
 // Resume payment for pending pass purchase from My Bookings
@@ -1110,7 +1384,7 @@ window.resumePassPayment = async(docId)=>{
     const exp=p.paymentExpiresAt?.toDate?.()||new Date();
     showPaymentPanel(p.purchaseCode,p.price||0,exp,p.packageName||"—",`${p.customerName||"—"}`);
     showView("viewPayment");
-  } catch(e){ showToast("Could not load purchase.",true); }
+  } catch(e){ showToast(t("couldNotLoadPurchase"),true); }
 };
 
 window.openBookingView=openBookingView;
@@ -1120,11 +1394,16 @@ window.openBookingView=openBookingView;
 
 // ── SUCCESS ─────────────────────────────────────────────────────
 function showSuccess(icon,title,code,msg) {
-  $("succIcon").textContent=icon;
-  $("succTitle").textContent=title;
-  $("succCode").textContent=code;
-  $("succMsg").textContent=msg;
+  state.successData={icon,title,code,msg};
+  renderSuccess();
   showView("viewSuccess");
+}
+function renderSuccess(){
+  if(!state.successData) return;
+  $("succIcon").textContent=state.successData.icon;
+  $("succTitle").textContent=state.successData.title;
+  $("succCode").textContent=state.successData.code;
+  $("succMsg").textContent=state.successData.msg;
 }
 
 // ── HELPERS ─────────────────────────────────────────────────────
@@ -1138,10 +1417,29 @@ function getSelectedDateISO() {
 function formatEndTime(t) {
   const h=parseInt(t)+1; return h>=24?"00:00":`${String(h).padStart(2,"0")}:00`;
 }
+function displayBookingType(type){
+  if(type==="Single Use") return t("singleUse");
+  if(type==="Ultra Pass") return t("ultraPass");
+  if(type==="Off-Peak Pass") return t("offPeak");
+  return type;
+}
+function displayStatus(status){
+  const map={
+    pending_payment: t("paymentRequiredShort"),
+    pending_review: t("pendingReview"),
+    confirmed: t("confirmed"),
+    paid: t("confirmed"),
+    package: t("confirmed"),
+    cancelled: currentLang==="th" ? "ยกเลิกแล้ว" : "Cancelled",
+    rejected: currentLang==="th" ? "ไม่ผ่านการตรวจสอบ" : "Rejected"
+  };
+  return map[status] || status;
+}
 
 // ── BOOT ────────────────────────────────────────────────────────
 // Wrap initLiff so an uncaught error (LIFF init, eligibility fetch, anything) can't
 // leave the user staring at a forever-spinning overlay. Always surface a message.
+setupLanguageToggle();
 initLiff().catch(err=>{
   console.error("App boot failed:",err);
   const lt=$("ltext");
@@ -1149,7 +1447,7 @@ initLiff().catch(err=>{
     lt.style.color="var(--danger)";
     lt.style.maxWidth="280px";
     lt.style.textAlign="center";
-    lt.textContent="Couldn't load the app. Please refresh, or check your connection.";
+    lt.textContent=t("appLoadFailed");
   }
   const sp=document.querySelector(".loverlay .spinner");
   if(sp) sp.style.display="none";
