@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Ultra Tennis · Admin</title>
   <style>
-    :root{--bg:#0f1710;--s:#192219;--s2:#1e2d20;--bd:#263028;--g:#06c755;--gd:#06c75520;--gh:#06c75535;--t:#f0fdf4;--m:#7a8f7d;--mid:#a0b8a3;--dan:#f87171;--warn:#fbbf24;--ac:#34d399;--bl:#60a5fa;--r:10px;}
+    :root{--bg:#07111d;--s:#0d1b2a;--s2:#12263a;--bd:#20384f;--g:#FFD700;--gd:#FFD70022;--gh:#FFD70038;--t:#FFFFFF;--m:#9fb3c8;--mid:#c7d6e5;--dan:#f87171;--warn:#FFD700;--ac:#4A90E2;--bl:#4A90E2;--r:10px;}
     *{box-sizing:border-box;margin:0;padding:0;}
     body{background:var(--bg);color:var(--t);font-family:Inter,ui-sans-serif,system-ui,sans-serif;min-height:100vh;}
     button{border:0;font:inherit;cursor:pointer;}
@@ -25,7 +25,7 @@
     .pinwrap input{padding-right:38px;}
     .pineye{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;color:var(--m);font-size:.8rem;}
     .lbtn{width:100%;padding:12px;border-radius:8px;background:var(--g);color:#0a1a0c;font-weight:900;font-size:.95rem;}
-    .lbtn:hover{background:#05b34a;}
+    .lbtn:hover{background:#e6c200;}
     .lerr{color:var(--dan);font-size:.8rem;margin-top:10px;display:none;}
 
     /* HEADER */
@@ -182,7 +182,7 @@
     .estate{text-align:center;padding:44px 18px;color:var(--m);font-size:.82rem;}
     .spinner{width:28px;height:28px;border:2px solid var(--bd);border-top-color:var(--g);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 10px;}
     @keyframes spin{to{transform:rotate(360deg);}}
-    .toast{position:fixed;left:50%;bottom:18px;width:min(calc(100% - 32px),400px);padding:10px 13px;border-radius:8px;background:#17231c;color:#fff;font-weight:750;text-align:center;transform:translate(-50%,120px);opacity:0;transition:opacity 180ms,transform 180ms;z-index:500;}
+    .toast{position:fixed;left:50%;bottom:18px;width:min(calc(100% - 32px),400px);padding:10px 13px;border-radius:8px;background:#0d1b2a;color:#fff;font-weight:750;text-align:center;transform:translate(-50%,120px);opacity:0;transition:opacity 180ms,transform 180ms;z-index:500;}
     .toast.show{opacity:1;transform:translate(-50%,0);}
     .toast.err{background:var(--dan);}
 
@@ -199,6 +199,10 @@
     .dv-badge.pass{background:#2d1e5f;color:#a78bfa;}
     .dv-history{background:var(--s2);border:1px dashed var(--bd);border-radius:7px;padding:8px 11px;margin-bottom:12px;font-size:.78rem;color:var(--mid);}
     .dv-history strong{color:var(--ac);}
+    .dv-alertbox{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);padding:12px;margin:0 18px 12px;}
+    .dv-alertbox textarea{width:100%;min-height:170px;background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:10px 12px;font-size:.82rem;line-height:1.55;resize:vertical;}
+    .dv-alertbox textarea:focus{outline:none;border-color:var(--g);}
+    .dv-alert-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:9px;}
 
     @media(max-width:600px){
       .main{padding:12px 13px;}
@@ -290,6 +294,13 @@
       <div class="stat"><div class="sn cg" id="dvStOpen">—</div><div class="sl">Slots Open</div></div>
       <div class="stat"><div class="sn cr" id="dvStClosed">—</div><div class="sl">Slots Closed</div></div>
     </div>
+    <div class="dv-alertbox">
+      <textarea id="dvSlotAlertText" readonly placeholder="Generate slot alert text after loading Daily View."></textarea>
+      <div class="dv-alert-actions">
+        <button class="smbtn smgr" id="dvGenerateSlotAlert">Generate Slot Alert Text</button>
+        <button class="smbtn smg" id="dvCopySlotAlert">Copy Slot Alert</button>
+      </div>
+    </div>
     <div class="main"><div id="dvList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
   </div>
 
@@ -360,6 +371,12 @@
         <!-- Not Found -->
         <div id="notFound" style="display:none;background:#3d101020;border:1px solid var(--dan);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:.8rem;color:var(--dan)">
           ⚠️ No booking found for this phone. You can still add a pass — LINE User ID will be linked when customer books for the first time.
+        </div>
+
+        <!-- Customer History Panel (Phase 2.4) -->
+        <div id="customerHistoryPanel" style="display:none;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:12px;margin-bottom:12px">
+          <div style="font-size:.7rem;color:var(--m);text-transform:uppercase;font-weight:800;margin-bottom:8px">📊 Customer History</div>
+          <div id="customerHistoryBody" style="font-size:.82rem;color:var(--mid);display:grid;gap:4px">—</div>
         </div>
 
         <!-- Add Pass Form -->
@@ -468,8 +485,6 @@
           <label>Payment Status</label>
           <select id="manPayStatus">
             <option value="unpaid">unpaid</option>
-            <option value="pending_review">pending_review</option>
-            <option value="paid">paid</option>
             <option value="package">package</option>
           </select>
         </div>
@@ -512,6 +527,9 @@ const $=id=>document.getElementById(id);
 // esc(): use for ANY customer/admin-typed string injected via innerHTML.
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const normalizePhone = p => String(p||"").replace(/\D/g,"");
+function canNotifyLine(lineUserId) {
+  return !!lineUserId && lineUserId !== "guest" && lineUserId !== "manual";
+}
 
 // ── ADMIN NAMES ──────────────────────────────────────────────────
 ADMIN_NAMES.forEach(n=>{const o=document.createElement("option");o.value=o.textContent=n;$("adminSel").append(o);});
@@ -632,7 +650,7 @@ async function markPaid(b){
     batch.update(doc(db,"booking_slots",`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`),{paymentStatus:"paid",bookingStatus:"confirmed"});
     await batch.commit();
     // Fire-and-forget: notify the customer their booking is paid. Must not block admin flow.
-    if (window.sendLineNotification) {
+    if (canNotifyLine(b.lineUserId) && window.sendLineNotification) {
       window.sendLineNotification({
         eventId: `${b.bookingCode}_booking_paid_customer`,
         type: "booking_paid_customer",
@@ -656,7 +674,7 @@ async function cancelBooking(b){
     batch.update(doc(db,"booking_slots",`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`),{bookingStatus:"cancelled",paymentStatus:"rejected"});
     await batch.commit();
     // Fire-and-forget: notify the customer their booking was cancelled. Must not block admin flow.
-    if (window.sendLineNotification) {
+    if (canNotifyLine(b.lineUserId) && window.sendLineNotification) {
       window.sendLineNotification({
         eventId: `${b.bookingCode}_booking_cancelled_customer`,
         type: "booking_cancelled_customer",
@@ -987,14 +1005,18 @@ $("searchCustomerBtn").addEventListener("click", async()=>{
   const phone=$("searchPhone").value.trim();
   if(!phone){ showToast("Enter a phone number to search.",true); return; }
   const btn=$("searchCustomerBtn"); btn.disabled=true; btn.textContent="Searching...";
-  $("searchResult").style.display="none"; $("notFound").style.display="none"; foundCustomer=null;
+  $("searchResult").style.display="none"; $("notFound").style.display="none";
+  $("customerHistoryPanel").style.display="none";
+  foundCustomer=null;
 
   try{
     const normalized=normalizePhone(phone);
-    // Search both normalized (new bookings) and raw (legacy bookings without the field)
-    const [snapNorm, snapRaw] = await Promise.all([
+    // Search bookings (normalized + raw fallback for legacy docs) PLUS all active
+    // packages — needed for the customer history panel below.
+    const [snapNorm, snapRaw, pkgSnap] = await Promise.all([
       getDocs(query(collection(db,"bookings"),where("customerPhoneNormalized","==",normalized))),
       getDocs(query(collection(db,"bookings"),where("customerPhone","==",phone))),
+      getDocs(query(collection(db,"customer_packages"),where("status","==","active"))),
     ]);
     const seen=new Set();
     const docs=[];
@@ -1017,9 +1039,70 @@ $("searchCustomerBtn").addEventListener("click", async()=>{
       foundCustomer={ lineUserId:"", lineDisplayName:"", customerName:"", customerPhone:phone };
       $("manualName").value="";
     }
+    // Render the customer history panel — runs whether or not a booking was found,
+    // because admin-added passes might exist for customers who haven't booked yet.
+    renderCustomerHistoryPanel(docs, pkgSnap.docs.map(d=>d.data()), normalized, foundCustomer.lineUserId);
   }catch(e){ console.error(e); showToast("Search failed.",true); }
   finally{ btn.disabled=false; btn.textContent="Search"; }
 });
+
+// ── CUSTOMER HISTORY PANEL (Phase 2.4) ──────────────────────────
+// Renders the aggregate stats for the searched phone. Matches active packages
+// by normalizedPhone first; falls back to lineUserId (when known) so packages
+// added before the customer LINE-linked still show up.
+function renderCustomerHistoryPanel(bookings, activePkgs, normalizedPhone, lineUserId){
+  const panel=$("customerHistoryPanel"), body=$("customerHistoryBody");
+  const matchedPkgs=activePkgs.filter(p=>{
+    const pnp=p.customerPhoneNormalized||normalizePhone(p.customerPhone);
+    if(pnp&&normalizedPhone&&pnp===normalizedPhone) return true;
+    if(lineUserId&&lineUserId!=="guest"&&lineUserId!=="manual"&&p.lineUserId===lineUserId) return true;
+    return false;
+  });
+
+  // No bookings AND no active packages → genuinely new customer.
+  if(!bookings.length && !matchedPkgs.length){
+    body.innerHTML=`<div><em>New customer — no previous booking history found.</em></div>`;
+    panel.style.display="block";
+    return;
+  }
+
+  const total     = bookings.length;
+  const confirmed = bookings.filter(b=>b.bookingStatus==="confirmed").length;
+  const cancelled = bookings.filter(b=>b.bookingStatus==="cancelled").length;
+  const pending   = bookings.filter(b=>b.bookingStatus==="pending_payment").length;
+  const lastDate  = bookings.reduce((m,b)=>(b.date||"")>m?(b.date||""):m,"");
+  const latest    = bookings[0]||null;
+
+  const passNames = matchedPkgs.map(p=>p.packageName||"").filter(Boolean);
+  const ultraRemaining = matchedPkgs
+    .filter(p=>String(p.packageType||"").includes("ultra"))
+    .reduce((s,p)=>s+(Number(p.remainingMinutes)||0),0);
+  const validUntilList = matchedPkgs
+    .map(p=>{ const d=p.validUntil?.toDate?.(); return d?d.toLocaleDateString("en-GB"):""; })
+    .filter(Boolean);
+
+  const lbl = (k,v) => `<div><span style="color:var(--m)">${k}:</span> ${v}</div>`;
+  const rows=[];
+  if(latest && latest.customerName)    rows.push(lbl("Latest name", `<strong>${esc(latest.customerName)}</strong>`));
+  if(latest && latest.lineDisplayName) rows.push(lbl("LINE name", esc(latest.lineDisplayName)));
+  rows.push(lbl("LINE userId", esc(latest&&latest.lineUserId ? latest.lineUserId : "Not linked yet")));
+  if(total>0){
+    let stats=`<strong>${total}</strong> total · <strong style="color:var(--ac)">${confirmed}</strong> confirmed · ${cancelled} cancelled`;
+    if(pending>0) stats+=` · ${pending} pending`;
+    rows.push(lbl("Bookings", stats));
+  } else {
+    rows.push(lbl("Bookings", `<em>No bookings yet</em>`));
+  }
+  if(lastDate) rows.push(lbl("Last visit", esc(lastDate)));
+  if(passNames.length){
+    rows.push(lbl("Active passes", `<strong>${esc(passNames.join(" · "))}</strong>`));
+    if(ultraRemaining>0) rows.push(lbl("Ultra remaining", `<strong>${ultraRemaining} min</strong>`));
+    if(validUntilList.length) rows.push(lbl("Valid until", esc(validUntilList.join(" · "))));
+  }
+
+  body.innerHTML=rows.join("");
+  panel.style.display="block";
+}
 
 $("addPassBtn").addEventListener("click", async()=>{
   const pkgType=$("packageSelect").value;
@@ -1244,7 +1327,7 @@ document.querySelector("[data-tab='passes']").addEventListener("click",()=>{
 // Data fetched per load: available_slots, booking_slots, bookings (this date
 // only), customer_packages (all), bookings (all — for visit count history).
 
-let dvLastLoad=null;
+let dvLastLoad=null,dvSlotAlertData=null;
 
 function todayISOString(){
   const d=new Date(),pad=n=>String(n).padStart(2,"0");
@@ -1262,6 +1345,7 @@ async function loadDailyView(){
   const date=$("dvDate").value;
   dvLastLoad=date;
   $("dvList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading ${esc(date)}...</p></div>`;
+  $("dvSlotAlertText").value="";
 
   try{
     const [avSnap,bkSnap,bookSnap,pkgSnap,allBookSnap]=await Promise.all([
@@ -1274,6 +1358,7 @@ async function loadDailyView(){
 
     const avByTime={}; avSnap.forEach(d=>{ const dd=d.data(); avByTime[dd.startTime]=dd; });
     const bsByHour={}; bkSnap.forEach(d=>{ const dd=d.data(); bsByHour[dd.hour]=dd; });
+    dvSlotAlertData={date,avByTime,bsByHour,loadedAt:new Date()};
     const bookingsOnDay=bookSnap.docs.map(d=>({id:d.id,...d.data()}));
     const bookingByCode={}; bookingsOnDay.forEach(b=>{ if(b.bookingCode) bookingByCode[b.bookingCode]=b; });
     const allPkgs=pkgSnap.docs.map(d=>d.data());
@@ -1426,20 +1511,98 @@ $("dvAddManualBtn").addEventListener("click",()=>{
   if(!$("dvDate").value) $("dvDate").value=todayISOString();
   openManualModal($("dvDate").value,null);
 });
+$("dvGenerateSlotAlert").addEventListener("click",generateDailySlotAlert);
+$("dvCopySlotAlert").addEventListener("click",copyDailySlotAlert);
+
+function isActiveBookingSlot(bs,now=new Date()){
+  if(!bs) return false;
+  if(bs.bookingStatus==="confirmed") return true;
+  if(bs.bookingStatus==="pending_payment"){
+    const exp=bs.expiresAt?.toDate?.();
+    return !exp || exp>now;
+  }
+  if(bs.bookingStatus==="rescheduled"){
+    return bs.active===true || bs.slotActive===true || bs.isActive===true;
+  }
+  return false;
+}
+
+function buildDailySlotAlertText(){
+  const date=$("dvDate").value||todayISOString();
+  if(!dvSlotAlertData || dvSlotAlertData.date!==date) return null;
+
+  const now=new Date();
+  const slots=[];
+  for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
+    const time=fH(h),av=dvSlotAlertData.avByTime[time]||null,bs=dvSlotAlertData.bsByHour[time]||null;
+    if(av?.status==="open" && !isActiveBookingSlot(bs,now)){
+      slots.push({h,label:`${time}–${fEnd(h)}`});
+    }
+  }
+
+  if(!slots.length){
+    return `🎾 Ultra Tennis วันที่ ${date} เต็มแล้วทุกช่วงเวลา\n\nสามารถเช็กวันถัดไป หรือทักสอบถามคิวหลุดได้ครับ`;
+  }
+
+  const offPeak=slots.filter(s=>s.h>=9&&s.h<=15).map(s=>s.label);
+  const prime=slots.filter(s=>s.h>=18&&s.h<22).map(s=>s.label);
+  const lines=[
+    "🎾 Ultra Tennis วันนี้ยังมีช่วงว่าง!",
+    "",
+    `วันที่: ${date}`,
+    "",
+    `ยังจองได้ ${slots.length} ช่วงเวลา:`,
+    ...slots.map(s=>`• ${s.label}`),
+    ""
+  ];
+  if(offPeak.length) lines.push(`ช่วง Off-Peak ยังว่าง: ${offPeak.join(", ")}`);
+  if(prime.length) lines.push(`ช่วงเย็น/หลังเลิกงานยังว่าง: ${prime.join(", ")}`);
+  if(offPeak.length||prime.length) lines.push("");
+  lines.push("เหมาะสำหรับซ้อมเสิร์ฟ ซ้อมตี หรือมาเก็บชั่วโมงแบบส่วนตัว","จองผ่าน LINE ได้เลยครับ");
+  return lines.join("\n");
+}
+
+function generateDailySlotAlert(){
+  const text=buildDailySlotAlertText();
+  if(text==null){ showToast("Load Daily View first.",true); return ""; }
+  $("dvSlotAlertText").value=text;
+  return text;
+}
+
+async function copyDailySlotAlert(){
+  const text=generateDailySlotAlert();
+  if(!text) return;
+  try{
+    await navigator.clipboard.writeText(text);
+  }catch(_){
+    $("dvSlotAlertText").focus();
+    $("dvSlotAlertText").select();
+    document.execCommand("copy");
+  }
+  showToast("Copied slot alert text");
+}
 
 // ── MANUAL BOOKING (Phase 2.3) ──────────────────────────────────
 // Admin creates a confirmed booking for a walk-in customer. Same booking_slots
 // + bookings shape as customer bookings, so the existing list, reschedule,
 // cancel, and Mark Paid all work on manual bookings too.
 // NOTE: We intentionally do NOT fire LINE notifications here — lineUserId is
-// "manual" (placeholder). Subsequent admin actions (mark paid / cancel /
-// reschedule) still call sendLineNotification — those will be logged as failed
-// in notification_logs (LINE rejects a fake userId). Functionally harmless.
+// "manual" (placeholder). Subsequent admin actions guard customer notifications
+// with canNotifyLine(), so manual rows never call the LINE notify helper.
 
 const MANUAL_PRICE = {
   "Manual Single Use":350, "Paid Outside":350, "Pay at Counter":350,
   "Ultra Pass Manual":0,   "Off-Peak Manual":0,
 };
+const MANUAL_PACKAGE_TYPES=new Set(["Ultra Pass Manual","Off-Peak Manual"]);
+function manualPaymentStatusForType(bookingType){
+  return MANUAL_PACKAGE_TYPES.has(bookingType) ? "package" : "unpaid";
+}
+function syncManualPaymentStatus(){
+  const status=manualPaymentStatusForType($("manType").value);
+  $("manPayStatus").value=status;
+  $("manHint").textContent=`Payment status will be saved as ${status}.`;
+}
 
 // Populate the start-time dropdown once at module load
 (function fillManTimes(){
@@ -1458,18 +1621,21 @@ function openManualModal(prefillDate,prefillTime){
   $("manPhone").value="";
   $("manType").value="Manual Single Use";
   $("manPayStatus").value="unpaid"; // safe default vs strict Firestore rules
+  $("manPayStatus").disabled=true;
   $("manNote").value="";
   $("manHistory").style.display="none";
   $("manHistory").textContent="";
   $("manHint").textContent="";
   $("manConfirm").disabled=false;
   $("manConfirm").textContent="Save Manual Booking";
+  syncManualPaymentStatus();
   $("manModal").style.display="flex";
 }
 function closeManualModal(){ $("manModal").style.display="none"; }
 $("manClose").addEventListener("click",closeManualModal);
 $("manCancel").addEventListener("click",closeManualModal);
 $("manModal").addEventListener("click",e=>{ if(e.target===$("manModal")) closeManualModal(); });
+$("manType").addEventListener("change",syncManualPaymentStatus);
 
 // Debounced phone history lookup (350ms, min 4 digits)
 let manPhoneTimer=null;
@@ -1535,7 +1701,8 @@ $("manConfirm").addEventListener("click",async()=>{
   const date=$("manDate").value;
   const time=$("manTime").value;
   const bookingType=$("manType").value;
-  const paymentStatus=$("manPayStatus").value;
+  const paymentStatus=manualPaymentStatusForType(bookingType);
+  $("manPayStatus").value=paymentStatus;
   const note=$("manNote").value.trim();
 
   if(!name)  { $("manName").focus();  showToast("Customer name required.",true); return; }
@@ -1698,7 +1865,7 @@ $("mConfirm").addEventListener("click",async()=>{
       t.set(doc(db,"booking_slots",newSlId),{bookingCode:reschBooking.bookingCode,resourceId:RESOURCE_ID,date:newDate,hour:reschTime,bookingStatus:reschBooking.bookingStatus,paymentStatus:reschBooking.paymentStatus,expiresAt:null});
     });
     // Fire-and-forget: notify the customer their booking was rescheduled. Must not block admin flow.
-    if (window.sendLineNotification) {
+    if (canNotifyLine(reschBooking.lineUserId) && window.sendLineNotification) {
       window.sendLineNotification({
         eventId: `${reschBooking.bookingCode}_booking_rescheduled_customer_${newDate}_${reschTime}`,
         type: "booking_rescheduled_customer",
