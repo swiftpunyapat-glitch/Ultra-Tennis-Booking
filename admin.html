@@ -509,7 +509,7 @@ import {
 const ADMIN_CREDENTIALS = {
   Art: "7879",
   Aoy: "8816",
-  Mon: "2109",
+  Mon: "2106",
   Ano: "6619",
   Stam: "6369",
 };
@@ -598,10 +598,57 @@ function renderBookings(){
     const p=document.querySelector(`[data-paid="${b.id}"]`);
     const c=document.querySelector(`[data-cancel="${b.id}"]`);
     const r=document.querySelector(`[data-resch="${b.id}"]`);
+    const g=document.querySelector(`[data-gcal="${b.id}"]`);
     if(p) p.addEventListener("click",()=>markPaid(b));
     if(c) c.addEventListener("click",()=>cancelBooking(b));
     if(r) r.addEventListener("click",()=>openResch(b));
+    if(g) g.addEventListener("click",()=>openGoogleCalendarBooking(b));
   });
+}
+
+function buildGoogleCalendarUrl(b){
+  if(!b?.date||!b?.startTime||!b?.endTime) return "";
+  const parseBangkokDate=(date,time)=>{
+    const m=String(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const tm=String(time).match(/^(\d{2}):(\d{2})$/);
+    if(!m||!tm) return null;
+    const y=Number(m[1]),mo=Number(m[2]),d=Number(m[3]);
+    const h=Number(tm[1]),mi=Number(tm[2]);
+    if(h>23||mi>59) return null;
+    return new Date(Date.UTC(y,mo-1,d,h-7,mi,0));
+  };
+  const fmtCalDate=dt=>dt.toISOString().replace(/[-:]/g,"").replace(/\.\d{3}Z$/,"Z");
+  const start=parseBangkokDate(b.date,b.startTime);
+  let end=parseBangkokDate(b.date,b.endTime);
+  if(!start||!end||Number.isNaN(start.getTime())||Number.isNaN(end.getTime())) return "";
+  if(end<=start) end=new Date(end.getTime()+24*60*60*1000);
+  const details=[
+    `Booking Code: ${b.bookingCode||"—"}`,
+    `Customer Name: ${b.customerName||"—"}`,
+    `Phone: ${b.customerPhone||"—"}`,
+    `Date: ${b.date||"—"}`,
+    `Time: ${b.startTime||"—"}–${b.endTime||"—"}`,
+    `Booking Type: ${b.bookingType||"—"}`,
+    `Booking Status: ${b.bookingStatus||"—"}`,
+    `Payment Status: ${b.paymentStatus||"—"}`,
+    `Price: ฿${Number(b.price)||0}`,
+  ];
+  if(b.customerNote) details.push(`Customer Note: ${b.customerNote}`);
+  const params=new URLSearchParams({
+    action:"TEMPLATE",
+    text:`Ultra Tennis Booking - ${b.customerName||b.bookingCode||"Booking"}`,
+    dates:`${fmtCalDate(start)}/${fmtCalDate(end)}`,
+    details:details.join("\n"),
+    location:"Ultra Tennis",
+    ctz:"Asia/Bangkok",
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+function openGoogleCalendarBooking(b){
+  const url=buildGoogleCalendarUrl(b);
+  if(!url){alert("Booking date/time is missing or invalid.");return;}
+  window.open(url,"_blank","noopener");
 }
 
 function cardHTML(b){
@@ -625,6 +672,7 @@ function cardHTML(b){
   const actions=isCancelled
     ?`<button class="bdone">✗ Cancelled</button>`
     :`${canMarkPaid?`<button class="bp" data-paid="${esc(b.id)}">✓ Mark as Paid</button>`:""}
+      <button class="br" data-gcal="${esc(b.id)}">📅 Calendar</button>
       ${canResch?`<button class="br" data-resch="${esc(b.id)}">📅 Reschedule</button>`:""}
       ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}`;
 
