@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Ultra Tennis Availability</title>
+  <style>
+    :root{
+      --ut-navy:#0f2742;
+      --ut-blue:#0b7fd3;
+      --ut-cyan:#12b8d8;
+      --ut-bg:#f5f8fb;
+      --ut-card:#ffffff;
+      --ut-border:#d9e5ef;
+      --ut-text:#122033;
+      --ut-muted:#66778a;
+      --ut-green:#168a4a;
+      --ut-green-bg:#e7f7ee;
+      --ut-red:#c2413a;
+      --ut-red-bg:#fdebea;
+      --ut-gray:#697386;
+      --ut-gray-bg:#eef2f6;
+      --shadow:0 16px 36px rgba(15,39,66,.08);
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans Thai",sans-serif;
+      background:var(--ut-bg);
+      color:var(--ut-text);
+      min-height:100vh;
+    }
+    .app{width:min(100%,720px);margin:0 auto;padding:18px 14px 28px}
+    header{
+      background:var(--ut-card);
+      border:1px solid var(--ut-border);
+      border-radius:14px;
+      padding:16px;
+      box-shadow:var(--shadow);
+    }
+    .brand{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    h1{font-size:1.22rem;color:var(--ut-navy);font-weight:900;letter-spacing:0}
+    .sub{font-size:.82rem;color:var(--ut-muted);margin-top:4px}
+    .live{font-size:.7rem;font-weight:850;color:var(--ut-blue);background:#e8f5ff;border:1px solid #c7e8ff;padding:4px 8px;border-radius:999px;white-space:nowrap}
+    .controls{margin-top:14px;display:grid;gap:10px}
+    .strip{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+    .daybtn{
+      border:1px solid var(--ut-border);
+      background:#f8fbfd;
+      color:var(--ut-muted);
+      border-radius:10px;
+      padding:8px 3px;
+      min-height:58px;
+      font-weight:800;
+    }
+    .daybtn .dow{display:block;font-size:.68rem}
+    .daybtn .dom{display:block;font-size:1rem;color:var(--ut-text);margin-top:1px}
+    .daybtn.active{border-color:var(--ut-blue);background:#e8f5ff;color:var(--ut-blue)}
+    .daybtn.active .dom{color:var(--ut-blue)}
+    .date-row{display:flex;gap:8px;align-items:center}
+    input[type=date]{
+      flex:1;
+      min-width:0;
+      border:1px solid var(--ut-border);
+      background:var(--ut-card);
+      color:var(--ut-text);
+      border-radius:10px;
+      padding:10px 12px;
+      font-size:.95rem;
+      font-weight:700;
+    }
+    .refresh{
+      border:1px solid var(--ut-blue);
+      color:var(--ut-blue);
+      background:#e8f5ff;
+      border-radius:10px;
+      padding:10px 12px;
+      font-weight:850;
+      white-space:nowrap;
+    }
+    .summary{
+      margin:14px 0 10px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      color:var(--ut-muted);
+      font-size:.84rem;
+      font-weight:750;
+    }
+    .summary strong{font-size:1.05rem;color:var(--ut-navy)}
+    .legend{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+    .pill{display:inline-flex;align-items:center;gap:5px;font-size:.7rem}
+    .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+    .dot.av{background:var(--ut-green)}.dot.bk{background:var(--ut-red)}.dot.cl{background:var(--ut-gray)}
+    .panel{
+      background:var(--ut-card);
+      border:1px solid var(--ut-border);
+      border-radius:14px;
+      overflow:hidden;
+      box-shadow:var(--shadow);
+    }
+    .slots{display:grid;gap:0}
+    .slot{
+      display:grid;
+      grid-template-columns:96px 1fr auto;
+      gap:10px;
+      align-items:center;
+      padding:13px 14px;
+      border-bottom:1px solid var(--ut-border);
+    }
+    .slot:last-child{border-bottom:0}
+    .time{font-size:.95rem;font-weight:900;color:var(--ut-navy)}
+    .label{font-size:.82rem;color:var(--ut-muted);font-weight:750}
+    .state{
+      min-width:72px;
+      text-align:center;
+      border-radius:999px;
+      padding:5px 9px;
+      font-size:.74rem;
+      font-weight:900;
+      border:1px solid transparent;
+    }
+    .slot.available{background:linear-gradient(90deg,var(--ut-green-bg),#fff 62%)}
+    .slot.available .state{background:var(--ut-green-bg);border-color:#bce8ce;color:var(--ut-green)}
+    .slot.booked{background:linear-gradient(90deg,var(--ut-red-bg),#fff 62%)}
+    .slot.booked .state{background:var(--ut-red-bg);border-color:#fac7c4;color:var(--ut-red)}
+    .slot.closed{background:#fafbfc}
+    .slot.closed .time,.slot.closed .label{color:var(--ut-gray)}
+    .slot.closed .state{background:var(--ut-gray-bg);border-color:#d9e0e8;color:var(--ut-gray)}
+    .loading,.error,.empty{padding:28px 16px;text-align:center;color:var(--ut-muted);font-weight:750}
+    .error{color:var(--ut-red)}
+    .actions{
+      position:sticky;
+      bottom:0;
+      margin-top:14px;
+      padding:10px 0 calc(10px + env(safe-area-inset-bottom));
+      background:linear-gradient(180deg,rgba(245,248,251,0),var(--ut-bg) 35%);
+    }
+    .book{
+      display:flex;
+      width:100%;
+      min-height:52px;
+      align-items:center;
+      justify-content:center;
+      border:0;
+      border-radius:14px;
+      background:linear-gradient(135deg,var(--ut-blue),var(--ut-cyan));
+      color:#fff;
+      font-size:1rem;
+      font-weight:950;
+      text-decoration:none;
+      box-shadow:0 14px 26px rgba(11,127,211,.24);
+    }
+    @media(max-width:420px){
+      .slot{grid-template-columns:86px 1fr auto;padding:12px 11px}
+      .state{min-width:62px;font-size:.68rem}
+      .legend{justify-content:flex-start}
+      .summary{display:block}
+      .legend{margin-top:7px}
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div class="brand">
+        <div>
+          <h1>Ultra Tennis</h1>
+          <div class="sub">ตารางเวลาว่างห้องซ้อม</div>
+        </div>
+        <div class="live">Live Availability</div>
+      </div>
+      <div class="controls">
+        <div class="strip" id="dateStrip" aria-label="เลือกวันที่"></div>
+        <div class="date-row">
+          <input type="date" id="datePicker" aria-label="เลือกวันที่" />
+          <button class="refresh" id="refreshBtn" type="button">Refresh</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="summary">
+      <div><strong id="availableCount">—</strong> <span id="summaryText">กำลังโหลด...</span></div>
+      <div class="legend">
+        <span class="pill"><span class="dot av"></span>ว่าง</span>
+        <span class="pill"><span class="dot bk"></span>จองแล้ว</span>
+        <span class="pill"><span class="dot cl"></span>ปิด / ผ่านเวลา</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="slots" id="slots"><div class="loading">กำลังโหลดเวลาว่าง...</div></div>
+    </section>
+
+    <div class="actions">
+      <a class="book" id="bookNow" href="index.html">Book Now / จองเลย</a>
+    </div>
+  </main>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
+    import {
+      getFirestore, collection, getDocs, query, where
+    } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey:"AIzaSyBhJSJszidFge4fKQqExLM2cB2Sx6z2lPY",
+      authDomain:"ultra-tennis-booking.firebaseapp.com",
+      projectId:"ultra-tennis-booking",
+      storageBucket:"ultra-tennis-booking.firebasestorage.app",
+      messagingSenderId:"646504579934",
+      appId:"1:646504579934:web:44768b8ae6b744be5d05cf",
+      measurementId:"G-M6RPC2CCTM",
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const RESOURCE_ID = "room1";
+    const OPEN_HOUR = 6;
+    const CLOSE_HOUR = 24;
+
+    const $ = id => document.getElementById(id);
+    const pad = n => String(n).padStart(2,"0");
+    const fH = h => `${pad(h)}:00`;
+    const fEnd = h => h + 1 >= 24 ? "00:00" : `${pad(h+1)}:00`;
+    const slotId = (date,h) => `${RESOURCE_ID}_${date}_${pad(h)}00`;
+
+    let selectedDate = "";
+
+    function bangkokNow(){
+      return new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Bangkok"}));
+    }
+
+    function todayISO(){
+      const d = bangkokNow();
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    }
+
+    function addDaysISO(baseISO,days){
+      const d = new Date(`${baseISO}T00:00:00`);
+      d.setDate(d.getDate()+days);
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    }
+
+    function dayLabel(dateISO){
+      const d = new Date(`${dateISO}T00:00:00`);
+      return new Intl.DateTimeFormat("th-TH",{weekday:"short"}).format(d);
+    }
+
+    function toMillis(value){
+      if(!value) return null;
+      if(typeof value.toDate === "function") return value.toDate().getTime();
+      if(typeof value.seconds === "number") return value.seconds * 1000;
+      const t = new Date(value).getTime();
+      return Number.isNaN(t) ? null : t;
+    }
+
+    function expiryMillis(bs){
+      return toMillis(bs.expiresAt) ?? toMillis(bs.paymentExpiresAt) ?? toMillis(bs.holdExpiresAt);
+    }
+
+    function isBlockingSlot(bs,now=bangkokNow()){
+      if(!bs || bs.pendingReschedule === true) return false;
+      const bookingStatus = String(bs.bookingStatus || "");
+      const paymentStatus = String(bs.paymentStatus || "");
+      if(["rescheduled","cancelled","expired","rejected","completed","no_show"].includes(bookingStatus)) return false;
+      if(["confirmed","paid","pending_review"].includes(bookingStatus)) return true;
+      if(["paid","pending_review"].includes(paymentStatus)) return true;
+      if(bookingStatus === "pending_payment"){
+        const exp = expiryMillis(bs);
+        return !exp || exp > now.getTime();
+      }
+      return false;
+    }
+
+    function isPastSlot(dateISO,h){
+      const now = bangkokNow();
+      if(dateISO !== todayISO()) return false;
+      return h <= now.getHours();
+    }
+
+    function setBookLink(){
+      $("bookNow").href = `index.html?date=${encodeURIComponent(selectedDate)}`;
+    }
+
+    function renderDateStrip(){
+      const base = todayISO();
+      $("dateStrip").innerHTML = Array.from({length:7},(_,i)=>{
+        const date = addDaysISO(base,i);
+        const dom = date.slice(8,10);
+        return `<button class="daybtn${date===selectedDate?" active":""}" type="button" data-date="${date}">
+          <span class="dow">${dayLabel(date)}</span>
+          <span class="dom">${dom}</span>
+        </button>`;
+      }).join("");
+      $("dateStrip").querySelectorAll("[data-date]").forEach(btn=>{
+        btn.addEventListener("click",()=>setDate(btn.dataset.date));
+      });
+    }
+
+    function statusText(status){
+      if(status === "available") return "ว่าง";
+      if(status === "booked") return "จองแล้ว";
+      return "ปิด";
+    }
+
+    function renderSlots(rows){
+      const available = rows.filter(r=>r.status==="available").length;
+      $("availableCount").textContent = available;
+      $("summaryText").textContent = `ว่าง ${available} ช่วงเวลา`;
+      $("slots").innerHTML = rows.map(r=>`
+        <div class="slot ${r.status}">
+          <div class="time">${r.start}–${r.end}</div>
+          <div class="label">${r.reason}</div>
+          <div class="state">${statusText(r.status)}</div>
+        </div>
+      `).join("") || `<div class="empty">ไม่พบข้อมูลเวลา</div>`;
+    }
+
+    async function loadAvailability(){
+      $("slots").innerHTML = `<div class="loading">กำลังโหลดเวลาว่าง...</div>`;
+      $("availableCount").textContent = "—";
+      $("summaryText").textContent = "กำลังโหลด...";
+      setBookLink();
+      try{
+        const [avSnap,bkSnap] = await Promise.all([
+          getDocs(query(collection(db,"available_slots"),where("date","==",selectedDate),where("resourceId","==",RESOURCE_ID))),
+          getDocs(query(collection(db,"booking_slots"),where("date","==",selectedDate),where("resourceId","==",RESOURCE_ID))),
+        ]);
+
+        const avByTime = {};
+        avSnap.forEach(docSnap=>{
+          const data = docSnap.data();
+          avByTime[data.startTime] = data;
+        });
+
+        const bsByTime = {};
+        bkSnap.forEach(docSnap=>{
+          const data = docSnap.data();
+          const time = data.hour || data.startTime;
+          if(time) bsByTime[time] = data;
+        });
+
+        const now = bangkokNow();
+        const rows = [];
+        for(let h=OPEN_HOUR; h<CLOSE_HOUR; h++){
+          const start = fH(h);
+          const end = fEnd(h);
+          const av = avByTime[start];
+          const bs = bsByTime[start] || bsByTime[slotId(selectedDate,h)];
+          const past = isPastSlot(selectedDate,h);
+          let status = "closed";
+          let reason = past ? "ผ่านเวลาแล้ว" : "ยังไม่เปิดให้จอง";
+
+          if(av?.status === "closed") reason = "ปิดให้จอง";
+          if(av?.status === "open" && !past){
+            if(isBlockingSlot(bs,now)){
+              status = "booked";
+              reason = "มีผู้จองแล้ว";
+            }else{
+              status = "available";
+              reason = "พร้อมจอง";
+            }
+          }
+          rows.push({start,end,status,reason});
+        }
+        renderSlots(rows);
+      }catch(e){
+        console.error(e);
+        $("availableCount").textContent = "—";
+        $("summaryText").textContent = "โหลดข้อมูลไม่ได้";
+        $("slots").innerHTML = `<div class="error">ไม่สามารถโหลดตารางว่างได้ กรุณาลองใหม่อีกครั้ง</div>`;
+      }
+    }
+
+    function setDate(dateISO){
+      selectedDate = dateISO || todayISO();
+      $("datePicker").value = selectedDate;
+      renderDateStrip();
+      loadAvailability();
+    }
+
+    $("datePicker").addEventListener("change",()=>setDate($("datePicker").value));
+    $("refreshBtn").addEventListener("click",loadAvailability);
+
+    const params = new URLSearchParams(location.search);
+    setDate(params.get("date") || todayISO());
+  </script>
+</body>
+</html>

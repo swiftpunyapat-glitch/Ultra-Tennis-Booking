@@ -1,0 +1,2051 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Ultra Tennis · Admin</title>
+  <style>
+    :root{--bg:#07111d;--s:#0d1b2a;--s2:#12263a;--bd:#20384f;--g:#FFD700;--gd:#FFD70022;--gh:#FFD70038;--t:#FFFFFF;--m:#9fb3c8;--mid:#c7d6e5;--dan:#f87171;--warn:#FFD700;--ac:#4A90E2;--bl:#4A90E2;--r:10px;}
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:var(--bg);color:var(--t);font-family:Inter,ui-sans-serif,system-ui,sans-serif;min-height:100vh;}
+    button{border:0;font:inherit;cursor:pointer;}
+    input,select,textarea{font:inherit;}
+
+    /* LOGIN */
+    .lwrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+    .lcard{width:100%;max-width:360px;background:var(--s);border:1px solid var(--bd);border-radius:16px;padding:32px 28px;text-align:center;}
+    .llogo{font-size:2.4rem;margin-bottom:8px;}
+    .lcard h1{font-size:1.25rem;font-weight:900;}
+    .lcard p{font-size:.8rem;color:var(--m);margin-top:3px;}
+    .lfields{display:flex;flex-direction:column;gap:12px;margin:22px 0 16px;text-align:left;}
+    .lfields label{font-size:.7rem;color:var(--m);font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:4px;}
+    .lfields select,.lfields input{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:8px;color:var(--t);padding:10px 12px;font-size:.88rem;}
+    .lfields select:focus,.lfields input:focus{outline:none;border-color:var(--g);}
+    .pinwrap{position:relative;}
+    .pinwrap input{padding-right:38px;}
+    .pineye{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;color:var(--m);font-size:.8rem;}
+    .lbtn{width:100%;padding:12px;border-radius:8px;background:var(--g);color:#0a1a0c;font-weight:900;font-size:.95rem;}
+    .lbtn:hover{background:#e6c200;}
+    .lerr{color:var(--dan);font-size:.8rem;margin-top:10px;display:none;}
+
+    /* HEADER */
+    .ahdr{background:var(--s);border-bottom:1px solid var(--bd);padding:13px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;gap:12px;}
+    .ahdr-l h1{font-size:.95rem;font-weight:900;}
+    .ahdr-l span{font-size:.68rem;color:var(--m);}
+    .ahdr-r{display:flex;align-items:center;gap:8px;}
+    .abadge{background:var(--gd);border:1px solid var(--g);color:var(--g);padding:3px 9px;border-radius:999px;font-size:.72rem;font-weight:700;}
+    .loutbtn{background:var(--s2);border:1px solid var(--bd);color:var(--m);padding:5px 11px;border-radius:8px;font-size:.72rem;font-weight:700;}
+    .loutbtn:hover{border-color:var(--dan);color:var(--dan);}
+
+    /* TABS */
+    .tabbar{display:flex;background:var(--s);border-bottom:1px solid var(--bd);}
+    .tab{flex:1;padding:11px 6px;font-size:.8rem;font-weight:800;color:var(--m);background:none;border-bottom:2px solid transparent;transition:all .15s;}
+    .tab.on{color:var(--g);border-bottom-color:var(--g);}
+
+    /* STATS */
+    .stats{display:flex;border-bottom:1px solid var(--bd);}
+    .stat{flex:1;padding:10px 6px;background:var(--s);text-align:center;border-right:1px solid var(--bd);}
+    .stat:last-child{border-right:0;}
+    .sn{font-size:1.15rem;font-weight:900;}
+    .sl{font-size:.6rem;color:var(--m);text-transform:uppercase;letter-spacing:.4px;margin-top:1px;}
+    .cg{color:var(--g);}.cy{color:var(--warn);}.ct{color:var(--ac);}.cr{color:var(--dan);}
+
+    /* FILTERS */
+    .filters{padding:10px 18px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--bd);background:var(--s);}
+    .fbtn{padding:4px 10px;border-radius:999px;border:1px solid var(--bd);background:var(--s2);color:var(--m);font-size:.72rem;font-weight:700;}
+    .fbtn.on{border-color:var(--g);background:var(--gd);color:var(--g);}
+    .rfbtn{background:var(--gd);border:1px solid var(--g);color:var(--g);padding:4px 11px;border-radius:999px;font-size:.72rem;font-weight:700;}
+
+    /* MAIN */
+    .main{padding:14px 18px;max-width:1100px;margin:0 auto;}
+
+    /* BOOKING CARDS */
+    .bgrid{display:grid;gap:11px;}
+    .bcard{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;}
+    .bcard-hdr{padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid var(--bd);background:var(--s2);}
+    .bcode{font-size:.9rem;font-weight:900;color:var(--ac);}
+    .tbadge{padding:2px 7px;border-radius:999px;font-size:.62rem;font-weight:800;text-transform:uppercase;}
+    .ts{background:#1e3a5f;color:var(--bl);}.tu{background:#2d1e5f;color:#a78bfa;}.to{background:#1e3d30;color:var(--ac);}
+    .bcard-body{padding:13px 14px;}
+    .bfields{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:9px;margin-bottom:11px;}
+    .fl{font-size:.62rem;color:var(--m);text-transform:uppercase;letter-spacing:.4px;font-weight:700;}
+    .fv{font-size:.82rem;font-weight:600;margin-top:2px;}
+    .fv.dim{color:var(--m);}
+    .sp{display:inline-block;padding:2px 7px;border-radius:999px;font-size:.67rem;font-weight:800;}
+    .s-pending_payment{background:#3d2e00;color:var(--warn);}
+    .s-confirmed,.s-paid{background:#0d3320;color:var(--g);}
+    .s-cancelled{background:#3d1010;color:var(--dan);}
+    .s-unpaid{background:#3d2e00;color:var(--warn);}
+    .s-pending_review{background:#0f2d3a;color:var(--bl);}
+    .s-rejected{background:#3d1010;color:var(--dan);}
+    .s-package{background:#1e1e3d;color:#a78bfa;}
+    .s-rescheduled{background:#2d1e00;color:#fb923c;}
+    .s-pending_reschedule{background:#2d1e00;color:#fb923c;}
+    .s-active{background:#0d3320;color:var(--g);}
+    .slip-sec{margin-bottom:11px;}
+    .slbl{font-size:.62rem;color:var(--m);text-transform:uppercase;font-weight:700;margin-bottom:4px;}
+    .simg{max-width:170px;max-height:130px;border-radius:6px;border:1px solid var(--bd);object-fit:contain;cursor:pointer;display:block;}
+    .simg:hover{border-color:var(--g);}
+    .noslip{font-size:.78rem;color:var(--m);font-style:italic;}
+    .acts{display:flex;gap:7px;flex-wrap:wrap;}
+    .bp{padding:6px 13px;border-radius:7px;background:var(--gd);border:1px solid var(--g);color:var(--g);font-size:.77rem;font-weight:800;}
+    .bp:hover{background:var(--gh);}
+    .bc{padding:6px 13px;border-radius:7px;background:#3d101010;border:1px solid var(--dan);color:var(--dan);font-size:.77rem;font-weight:800;}
+    .bc:hover{background:#3d101030;}
+    .br{padding:6px 13px;border-radius:7px;background:#0f2d3a;border:1px solid var(--bl);color:var(--bl);font-size:.77rem;font-weight:800;}
+    .br:hover{background:#0f2d3a99;}
+    .bdone{padding:6px 13px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--m);font-size:.77rem;font-weight:700;cursor:default;}
+    button:disabled{opacity:.5;cursor:not-allowed;}
+    .pending-resch-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;border:1px solid var(--bd);background:var(--s2);border-radius:8px;padding:10px 12px;margin-top:8px;}
+    .pending-resch-title{font-size:.83rem;font-weight:850;color:var(--mid);}
+    .pending-resch-meta{font-size:.72rem;color:var(--m);margin-top:3px;line-height:1.45;}
+    @media(max-width:620px){.pending-resch-row{grid-template-columns:1fr}.pending-resch-row .smbtn{width:100%;}}
+
+    /* SLOT MANAGER */
+    .smcard{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);padding:15px;margin-bottom:13px;}
+    .smcard h2{font-size:.78rem;font-weight:800;color:var(--mid);text-transform:uppercase;letter-spacing:.8px;margin-bottom:11px;}
+    .smrow{display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;}
+    .smf{display:flex;flex-direction:column;gap:4px;flex:1;min-width:150px;}
+    .smf label{font-size:.68rem;color:var(--m);font-weight:700;text-transform:uppercase;}
+    .smf input[type=date]{background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%;}
+    .smf input[type=date]:focus{outline:none;border-color:var(--g);}
+    .smbtn{padding:8px 14px;border-radius:7px;font-size:.78rem;font-weight:800;white-space:nowrap;border:1px solid transparent;}
+    .smg{background:var(--gd);border-color:var(--g);color:var(--g);}.smg:hover{background:var(--gh);}
+    .smgr{background:var(--s2);border-color:var(--bd);color:var(--mid);}.smgr:hover{border-color:var(--mid);color:var(--t);}
+    .smdiv{height:1px;background:var(--bd);margin:12px 0;}
+    .qbtns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+
+    /* Slot grid */
+    .sgrid{display:grid;gap:5px;}
+    .srow{display:grid;grid-template-columns:108px 1fr auto;align-items:center;gap:9px;padding:7px 9px;background:var(--s2);border:1px solid var(--bd);border-radius:7px;}
+    .stime{font-size:.78rem;font-weight:700;color:var(--mid);}
+    .sstatus{font-size:.67rem;font-weight:800;padding:2px 7px;border-radius:999px;}
+    .ss-open{background:#0d3320;color:var(--g);}
+    .ss-booked{background:#3d2e00;color:var(--warn);}
+    .ss-closed{background:var(--s);color:var(--m);border:1px solid var(--bd);}
+    .ss-none{background:#1a1a1a;color:#555;}
+    .stoggle{padding:4px 9px;border-radius:6px;font-size:.68rem;font-weight:800;border:1px solid transparent;}
+    .st-close{background:#3d101010;border-color:var(--dan);color:var(--dan);}.st-close:hover{background:#3d101030;}
+    .st-open{background:var(--gd);border-color:var(--g);color:var(--g);}.st-open:hover{background:var(--gh);}
+    .st-create{background:var(--s);border-color:var(--bd);color:var(--m);}.st-create:hover{border-color:var(--g);color:var(--g);}
+    .st-dis{background:var(--s2);border-color:var(--bd);color:#444;cursor:not-allowed;}
+    .smload,.smempty{text-align:center;padding:28px;color:var(--m);font-size:.82rem;}
+
+    /* Holiday */
+    .holiday-box{background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:12px 14px;margin-top:12px;}
+    .holiday-box h3{font-size:.75rem;font-weight:800;color:var(--mid);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px;}
+    .holiday-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+    .holiday-row input[type=checkbox]{width:16px;height:16px;accent-color:var(--dan);cursor:pointer;}
+    .holiday-row label{font-size:.82rem;color:var(--t);font-weight:600;}
+    .holiday-row input[type=text]{background:var(--s);border:1px solid var(--bd);border-radius:6px;color:var(--t);padding:6px 9px;font-size:.8rem;flex:1;min-width:140px;}
+    .holiday-row input[type=text]:focus{outline:none;border-color:var(--dan);}
+    .holiday-save{padding:6px 12px;border-radius:6px;background:#3d101020;border:1px solid var(--dan);color:var(--dan);font-size:.75rem;font-weight:800;}
+    .holiday-save:hover{background:#3d101040;}
+    .holiday-active{font-size:.72rem;padding:2px 8px;border-radius:999px;background:#3d1010;color:var(--dan);font-weight:800;}
+
+    /* PASS PURCHASES */
+    .ppgrid{display:grid;gap:11px;}
+    .ppcard{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;}
+    .ppcard-hdr{padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid var(--bd);background:var(--s2);}
+    .ppcode{font-size:.88rem;font-weight:900;color:var(--ac);}
+    .ppbadge{padding:2px 7px;border-radius:999px;font-size:.62rem;font-weight:800;text-transform:uppercase;}
+    .pp-ultra{background:#2d1e5f;color:#a78bfa;}
+    .pp-off{background:#1e3d30;color:var(--ac);}
+    .ppcard-body{padding:13px 14px;}
+
+    /* MODAL */
+    .moverlay{position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:200;display:flex;align-items:center;justify-content:center;padding:18px;}
+    .mbox{background:var(--s);border:1px solid var(--bd);border-radius:16px;width:100%;max-width:460px;max-height:90vh;overflow-y:auto;}
+    .mhdr{padding:14px 18px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;}
+    .mhdr h2{font-size:.95rem;font-weight:900;}
+    .mclose{background:var(--s2);border:1px solid var(--bd);color:var(--m);width:28px;height:28px;border-radius:50%;font-size:.8rem;}
+    .mclose:hover{border-color:var(--dan);color:var(--dan);}
+    .mbody{padding:14px 18px;}
+    .minfo{background:var(--s2);border:1px solid var(--bd);border-radius:7px;padding:9px 13px;margin-bottom:14px;font-size:.8rem;color:var(--mid);}
+    .minfo strong{color:var(--ac);display:block;font-size:.9rem;margin-bottom:2px;}
+    .mfield{margin-bottom:12px;}
+    .mfield label{font-size:.68rem;color:var(--m);font-weight:700;text-transform:uppercase;display:block;margin-bottom:5px;}
+    .mfield input[type=date]{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.88rem;}
+    .mfield input[type=date]:focus{outline:none;border-color:var(--g);}
+    .mload-slots{width:100%;padding:8px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--mid);font-size:.78rem;font-weight:800;margin-bottom:12px;}
+    .mload-slots:hover{border-color:var(--g);color:var(--g);}
+    .mtgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:6px;}
+    .mtbtn{padding:7px 3px;border-radius:6px;background:var(--s2);border:1px solid var(--bd);color:var(--mid);font-size:.73rem;font-weight:700;text-align:center;}
+    .mtbtn:hover:not(:disabled){border-color:var(--g);color:var(--g);}
+    .mtbtn.sel{background:var(--gd);border-color:var(--g);color:var(--g);}
+    .mtbtn:disabled{opacity:.35;cursor:not-allowed;text-decoration:line-through;}
+    .mftr{padding:13px 18px;border-top:1px solid var(--bd);display:flex;gap:9px;justify-content:flex-end;}
+    .mcancel{padding:8px 16px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--m);font-size:.82rem;font-weight:800;}
+    .mconfirm{padding:8px 16px;border-radius:7px;background:var(--g);color:#0a1a0c;font-size:.82rem;font-weight:900;}
+    .mconfirm:disabled{background:#666;cursor:not-allowed;}
+    /* Modal form controls — Phase 2 pass-minute adjustment (reuses existing theme vars) */
+    .mfield select,.mfield input[type=number],.mfield input[type=text]{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.88rem;}
+    .mfield select:focus,.mfield input[type=number]:focus,.mfield input[type=text]:focus{outline:none;border-color:var(--g);}
+
+    /* MISC */
+    .lstate{text-align:center;padding:44px;color:var(--m);font-size:.85rem;}
+    .estate{text-align:center;padding:44px 18px;color:var(--m);font-size:.82rem;}
+    .spinner{width:28px;height:28px;border:2px solid var(--bd);border-top-color:var(--g);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 10px;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+    .toast{position:fixed;left:50%;bottom:18px;width:min(calc(100% - 32px),400px);padding:10px 13px;border-radius:8px;background:#0d1b2a;color:#fff;font-weight:750;text-align:center;transform:translate(-50%,120px);opacity:0;transition:opacity 180ms,transform 180ms;z-index:500;}
+    .toast.show{opacity:1;transform:translate(-50%,0);}
+    .toast.err{background:var(--dan);}
+
+    /* Daily View — Phase 2.3 (reuses existing theme vars; no color additions) */
+    .dvrow{display:grid;grid-template-columns:108px auto 1fr auto;align-items:center;gap:9px;padding:8px 10px;background:var(--s2);border:1px solid var(--bd);border-radius:7px;margin-bottom:5px;}
+    .dvrow .stime{font-size:.78rem;font-weight:700;color:var(--mid);}
+    .dvrow .dv-info{font-size:.74rem;color:var(--mid);min-width:0;overflow:hidden;}
+    .dvrow .dv-info strong{color:var(--t);font-weight:700;font-size:.78rem;display:block;}
+    .dvrow .dv-info .dv-meta{color:var(--m);font-size:.7rem;margin-top:1px;}
+    .dvrow .dv-actions{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;}
+    .dv-badge{display:inline-block;padding:1px 6px;border-radius:999px;background:var(--s);color:var(--mid);font-size:.6rem;font-weight:700;margin-left:5px;vertical-align:middle;}
+    .dv-badge.new{background:#1e3a5f;color:var(--bl);}
+    .dv-badge.rep{background:#0d3320;color:var(--g);}
+    .dv-badge.pass{background:#2d1e5f;color:#a78bfa;}
+    .dv-history{background:var(--s2);border:1px dashed var(--bd);border-radius:7px;padding:8px 11px;margin-bottom:12px;font-size:.78rem;color:var(--mid);}
+    .dv-history strong{color:var(--ac);}
+    .dv-alertbox{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);padding:12px;margin:0 18px 12px;}
+    .dv-alertbox textarea{width:100%;min-height:170px;background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:10px 12px;font-size:.82rem;line-height:1.55;resize:vertical;}
+    .dv-alertbox textarea:focus{outline:none;border-color:var(--g);}
+    .dv-alert-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:9px;}
+
+    @media(max-width:600px){
+      .main{padding:12px 13px;}
+      .bfields{grid-template-columns:1fr 1fr;}
+      .srow{grid-template-columns:88px 1fr auto;}
+      .mtgrid{grid-template-columns:repeat(3,1fr);}
+      .stats{flex-wrap:wrap;}
+      .stat{min-width:33.33%;border-bottom:1px solid var(--bd);}
+    }
+  </style>
+</head>
+<body>
+
+<script>
+  window.NOTIFY_INTERNAL_SECRET = "Notify_User_2026";
+</script>
+<script src="/notify-client.js" defer></script>
+
+<!-- LOGIN -->
+<div id="loginScreen" class="lwrap">
+  <div class="lcard">
+    <div class="llogo">🎾</div>
+    <h1>Ultra Tennis</h1>
+    <p>Admin Access</p>
+    <div class="lfields">
+      <div><label>Your Name</label><select id="adminSel"><option value="">Select name...</option></select></div>
+      <div><label>PIN</label><div class="pinwrap"><input type="password" id="pinIn" placeholder="Enter PIN" maxlength="8"/><button class="pineye" id="pinEye">👁</button></div></div>
+    </div>
+    <button class="lbtn" id="loginBtn">Login</button>
+    <p class="lerr" id="loginErr">Incorrect PIN. Please try again.</p>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="mainApp" style="display:none">
+  <header class="ahdr">
+    <div class="ahdr-l"><h1>🎾 Ultra Tennis · Admin</h1><span id="lastUpd">—</span></div>
+    <div class="ahdr-r"><span class="abadge" id="adminBadge">—</span><button class="loutbtn" id="logoutBtn">Logout</button></div>
+  </header>
+
+  <div class="tabbar">
+    <button class="tab on" data-tab="bookings">📋 Bookings</button>
+    <button class="tab" data-tab="daily">📅 Daily View</button>
+    <button class="tab" data-tab="slots">🗓 Slot Manager</button>
+    <button class="tab" data-tab="passes">🎫 Add Pass</button>
+  </div>
+
+  <!-- BOOKINGS TAB -->
+  <div id="tabBookings">
+    <div class="stats">
+      <div class="stat"><div class="sn" id="stTotal">—</div><div class="sl">Total</div></div>
+      <div class="stat"><div class="sn cy" id="stPending">—</div><div class="sl">Pending</div></div>
+      <div class="stat"><div class="sn ct" id="stReview">—</div><div class="sl">Review</div></div>
+      <div class="stat"><div class="sn cg" id="stPaid">—</div><div class="sl">Paid</div></div>
+      <div class="stat"><div class="sn cr" id="stCancelled">—</div><div class="sl">Cancelled</div></div>
+    </div>
+    <div class="filters">
+      <button class="fbtn on" data-filter="all">All</button>
+      <button class="fbtn" data-filter="pending_payment">Pending Pay</button>
+      <button class="fbtn" data-filter="pending_review">Under Review</button>
+      <button class="fbtn" data-filter="confirmed">Confirmed</button>
+      <button class="fbtn" data-filter="pending_reschedule">Pending Reschedule</button>
+      <button class="fbtn" data-filter="cancelled">Cancelled</button>
+      <button class="rfbtn" id="refreshBtn" style="margin-left:auto">↻ Refresh</button>
+    </div>
+    <div class="filters" style="border-top:0">
+      <span style="font-size:.7rem;color:var(--m);font-weight:800;text-transform:uppercase;letter-spacing:.4px;align-self:center;margin-right:2px">⬇ Export CSV</span>
+      <button class="fbtn" id="exportCustomersBtn">Customers</button>
+      <button class="fbtn" id="exportBookingsBtn">Bookings</button>
+      <button class="fbtn" id="exportPassesBtn">Passes</button>
+    </div>
+    <div class="main" id="pendingReschedulePanel" style="display:none"></div>
+    <div class="main"><div id="bookingsList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
+  </div>
+
+  <!-- DAILY VIEW TAB -->
+  <div id="tabDaily" style="display:none">
+    <div class="filters">
+      <button class="rfbtn" id="dvPrev">‹ Prev</button>
+      <button class="rfbtn" id="dvToday">Today</button>
+      <button class="rfbtn" id="dvNext">Next ›</button>
+      <input type="date" id="dvDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:5px 9px;font-size:.78rem"/>
+      <button class="rfbtn" id="dvRefresh" style="margin-left:auto">↻ Refresh</button>
+      <button class="smbtn smg" id="dvAddManualBtn" style="padding:5px 11px;font-size:.74rem">+ Add Manual Booking</button>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="sn" id="dvStTotal">—</div><div class="sl">Bookings</div></div>
+      <div class="stat"><div class="sn cg" id="dvStConfirmed">—</div><div class="sl">Confirmed</div></div>
+      <div class="stat"><div class="sn ct" id="dvStReview">—</div><div class="sl">Pending Review</div></div>
+      <div class="stat"><div class="sn cy" id="dvStPending">—</div><div class="sl">Pending Pay</div></div>
+      <div class="stat"><div class="sn cg" id="dvStOpen">—</div><div class="sl">Slots Open</div></div>
+      <div class="stat"><div class="sn cr" id="dvStClosed">—</div><div class="sl">Slots Closed</div></div>
+    </div>
+    <div class="dv-alertbox">
+      <textarea id="dvSlotAlertText" readonly placeholder="Generate slot alert text after loading Daily View."></textarea>
+      <div class="dv-alert-actions">
+        <button class="smbtn smgr" id="dvGenerateSlotAlert">Generate Slot Alert Text</button>
+        <button class="smbtn smg" id="dvCopySlotAlert">Copy Slot Alert</button>
+      </div>
+    </div>
+    <div class="main"><div id="dvList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
+  </div>
+
+  <!-- SLOT MANAGER TAB -->
+  <div id="tabSlots" style="display:none">
+    <div class="main">
+      <div class="smcard">
+        <h2>Open Slots</h2>
+        <div class="smrow" style="margin-bottom:10px">
+          <div class="smf"><label>Week Start Date</label><input type="date" id="weekDate"/></div>
+          <button class="smbtn smg" id="openWeekBtn">⚡ Open Full Week (7 days)</button>
+        </div>
+        <div class="smdiv"></div>
+        <div class="smrow">
+          <div class="smf"><label>Single Day</label><input type="date" id="dayDate"/></div>
+          <button class="smbtn smg" id="openDayBtn">+ Open This Day</button>
+          <button class="smbtn smgr" id="closeDayBtn">✕ Close This Day</button>
+        </div>
+      </div>
+
+      <div class="smcard">
+        <h2>Manage Slots</h2>
+        <div class="smrow" style="margin-bottom:12px">
+          <div class="smf"><label>View Date</label><input type="date" id="viewDate"/></div>
+          <button class="smbtn smgr" id="loadSlotsBtn">Load Slots</button>
+        </div>
+        <div class="qbtns">
+          <button class="smbtn smg" id="openAllBtn" style="font-size:.72rem">+ Open All Unset Slots</button>
+          <button class="smbtn smgr" id="closeUnbookedBtn" style="font-size:.72rem">✕ Close All Unbooked</button>
+        </div>
+        <div id="slotGrid" style="margin-top:12px"><div class="smempty">Select a date and click Load Slots.</div></div>
+        <div id="holidayBox" style="display:none" class="holiday-box">
+          <h3>Holiday Manager <span id="holActiveTag" style="display:none" class="holiday-active">Holiday</span></h3>
+          <div class="holiday-row">
+            <input type="checkbox" id="holCheck"/>
+            <label for="holCheck">Mark this date as holiday</label>
+            <input type="text" id="holName" placeholder="Holiday name (optional)"/>
+            <button class="holiday-save" id="holSave">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD PASS TAB -->
+  <div id="tabPasses" style="display:none">
+    <div class="main">
+
+      <!-- Search Customer -->
+      <div class="smcard">
+        <h2>Add Pass for Customer</h2>
+        <div class="smrow" style="margin-bottom:12px">
+          <div class="smf"><label>Search by Phone Number</label><input type="tel" id="searchPhone" placeholder="Enter customer phone number"/></div>
+          <button class="smbtn smg" id="searchCustomerBtn">Search</button>
+        </div>
+
+        <!-- Search Result -->
+        <div id="searchResult" style="display:none;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:12px;margin-bottom:12px">
+          <div style="font-size:.7rem;color:var(--m);text-transform:uppercase;font-weight:800;margin-bottom:8px">Customer Found</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.82rem">
+            <div><div class="fl">Name</div><div class="fv" id="foundName">—</div></div>
+            <div><div class="fl">Phone</div><div class="fv" id="foundPhone">—</div></div>
+            <div><div class="fl">LINE User ID</div><div class="fv" id="foundLineId" style="font-size:.72rem;word-break:break-all">—</div></div>
+            <div><div class="fl">LINE Name</div><div class="fv" id="foundLineName">—</div></div>
+          </div>
+        </div>
+
+        <!-- Not Found -->
+        <div id="notFound" style="display:none;background:#3d101020;border:1px solid var(--dan);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:.8rem;color:var(--dan)">
+          ⚠️ No booking found for this phone. You can still add a pass — LINE User ID will be linked when customer books for the first time.
+        </div>
+
+        <!-- Customer History Panel (Phase 2.4) -->
+        <div id="customerHistoryPanel" style="display:none;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:12px;margin-bottom:12px">
+          <div style="font-size:.7rem;color:var(--m);text-transform:uppercase;font-weight:800;margin-bottom:8px">📊 Customer History</div>
+          <div id="customerHistoryBody" style="font-size:.82rem;color:var(--mid);display:grid;gap:4px">—</div>
+        </div>
+
+        <!-- Add Pass Form -->
+        <div id="addPassForm">
+          <div class="smdiv"></div>
+          <div class="smrow" style="margin-bottom:10px">
+            <div class="smf">
+              <label>Package</label>
+              <select id="packageSelect" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%">
+                <option value="">Select package...</option>
+                <option value="ultra_10">⚡ Ultra Pass 10 Hours (600 min · 90 days)</option>
+                <option value="ultra_20">⚡ Ultra Pass 20 Hours (1,200 min · 180 days)</option>
+                <option value="offpeak">🌙 Off-Peak Pass (Mon–Fri 09:00–15:00 · 30 days)</option>
+              </select>
+            </div>
+          </div>
+          <div class="smrow" style="margin-bottom:12px">
+            <div class="smf"><label>Customer Name (if not found)</label><input type="text" id="manualName" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%" placeholder="Auto-filled from search"/></div>
+            <div class="smf"><label>Valid From</label><input type="date" id="validFromDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%"/></div>
+          </div>
+          <button class="smbtn smg" id="addPassBtn" style="width:100%;padding:12px;font-size:.88rem">✓ Add Pass for Customer</button>
+        </div>
+      </div>
+
+      <!-- Active Passes List -->
+      <div class="smcard">
+        <h2>Active Passes <button class="rfbtn" id="refreshPassesBtn" style="margin-left:8px;font-size:.68rem">↻ Refresh</button></h2>
+        <div id="activePassesList"><div class="smempty">Click Refresh to load active passes.</div></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- RESCHEDULE MODAL -->
+<div class="moverlay" id="reschModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>📅 Reschedule Booking</h2><button class="mclose" id="mClose">✕</button></div>
+    <div class="mbody">
+      <div class="minfo"><strong id="rCode">—</strong><span id="rOldTime">Current: —</span><span id="rCust" style="display:block;margin-top:3px;font-size:.75rem">—</span></div>
+      <div class="mfield"><label>New Date</label><input type="date" id="rDate"/></div>
+      <button class="mload-slots" id="mLoadSlots">Load Available Slots →</button>
+      <div class="mtgrid" id="rTimeGrid"></div>
+      <p id="rHint" style="font-size:.72rem;color:var(--m);margin-top:4px"></p>
+    </div>
+    <div class="mftr"><button class="mcancel" id="mCancel">Cancel</button><button class="mcancel" id="mPendingResch">Move to Pending</button><button class="mconfirm" id="mConfirm" disabled>Confirm Reschedule</button></div>
+  </div>
+</div>
+
+<!-- ADJUST MINUTES MODAL (Ultra Pass only) -->
+<div class="moverlay" id="minModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>⏱ Adjust Pass Minutes</h2><button class="mclose" id="minClose">✕</button></div>
+    <div class="mbody">
+      <div class="minfo">
+        <strong id="minCustomer">—</strong>
+        <span id="minPackage">—</span>
+        <span id="minCurrent" style="display:block;margin-top:3px;font-size:.75rem">Current remaining: — min</span>
+      </div>
+      <div class="mfield">
+        <label>Action</label>
+        <select id="minAction">
+          <option value="add_minutes">➕ Add minutes</option>
+          <option value="deduct_minutes">➖ Deduct minutes</option>
+          <option value="set_minutes">✎ Set remaining minutes</option>
+        </select>
+      </div>
+      <div class="mfield">
+        <label id="minLabel">Minutes to add</label>
+        <input type="number" id="minValue" min="1" step="1" placeholder="e.g. 60"/>
+      </div>
+      <div class="mfield">
+        <label>Reason / Note</label>
+        <input type="text" id="minReason" maxlength="200" placeholder="e.g. Compensation for cancelled session"/>
+      </div>
+      <p id="minPreview" style="font-size:.72rem;color:var(--m);margin-top:4px"></p>
+    </div>
+    <div class="mftr"><button class="mcancel" id="minCancel">Cancel</button><button class="mconfirm" id="minConfirm">Save Adjustment</button></div>
+  </div>
+</div>
+
+<!-- MANUAL BOOKING MODAL — Phase 2.3 -->
+<div class="moverlay" id="manModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>+ Add Manual Booking</h2><button class="mclose" id="manClose">✕</button></div>
+    <div class="mbody">
+      <div id="manHistory" class="dv-history" style="display:none">—</div>
+      <div class="mfield" style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+        <div><label>Date</label><input type="date" id="manDate"/></div>
+        <div><label>Start Time</label><select id="manTime"></select></div>
+      </div>
+      <div class="mfield"><label>Customer Name</label><input type="text" id="manName" maxlength="120" placeholder="Full name"/></div>
+      <div class="mfield"><label>Customer Phone</label><input type="text" id="manPhone" maxlength="40" placeholder="08x-xxx-xxxx"/></div>
+      <div class="mfield" style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+        <div>
+          <label>Booking Type</label>
+          <select id="manType">
+            <option value="Manual Single Use">Manual Single Use (฿350)</option>
+            <option value="Paid Outside">Paid Outside (฿350)</option>
+            <option value="Pay at Counter">Pay at Counter (฿350)</option>
+            <option value="Ultra Pass Manual">Ultra Pass Manual (฿0)</option>
+            <option value="Off-Peak Manual">Off-Peak Manual (฿0)</option>
+          </select>
+        </div>
+        <div>
+          <label>Payment Status</label>
+          <select id="manPayStatus">
+            <option value="unpaid">unpaid</option>
+            <option value="package">package</option>
+          </select>
+        </div>
+      </div>
+      <div class="mfield"><label>Note (optional)</label><input type="text" id="manNote" maxlength="500" placeholder="Any extra info"/></div>
+      <p id="manHint" style="font-size:.72rem;color:var(--m);margin-top:4px"></p>
+    </div>
+    <div class="mftr"><button class="mcancel" id="manCancel">Cancel</button><button class="mconfirm" id="manConfirm">Save Manual Booking</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
+import {
+  getFirestore,collection,doc,getDocs,getDoc,updateDoc,writeBatch,addDoc,
+  runTransaction,setDoc,query,where,orderBy,serverTimestamp,Timestamp
+} from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
+
+// ── CONFIG ── ⚠️ Change ADMIN_CREDENTIALS before going live!
+const ADMIN_CREDENTIALS = {
+  Art: "7879",
+  Aoy: "8816",
+  Mon: "2106",
+  Ano: "6619",
+  Stam: "6369",
+};
+const ADMIN_NAMES = Object.keys(ADMIN_CREDENTIALS);
+const RESOURCE_ID="room1";
+const OPEN_HOUR=6,CLOSE_HOUR=24;
+
+const firebaseConfig={
+  apiKey:"AIzaSyBhJSJszidFge4fKQqExLM2cB2Sx6z2lPY",
+  authDomain:"ultra-tennis-booking.firebaseapp.com",
+  projectId:"ultra-tennis-booking",
+  storageBucket:"ultra-tennis-booking.firebasestorage.app",
+  messagingSenderId:"646504579934",
+  appId:"1:646504579934:web:44768b8ae6b744be5d05cf",
+};
+const fbApp=initializeApp(firebaseConfig);
+const db=getFirestore(fbApp);
+const $=id=>document.getElementById(id);
+
+// ── HELPERS: HTML escape + phone normalize ───────────────────────
+// esc(): use for ANY customer/admin-typed string injected via innerHTML.
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const normalizePhone = p => String(p||"").replace(/\D/g,"");
+function canNotifyLine(lineUserId) {
+  return !!lineUserId && lineUserId !== "guest" && lineUserId !== "manual";
+}
+
+// ── ADMIN NAMES ──────────────────────────────────────────────────
+ADMIN_NAMES.forEach(n=>{const o=document.createElement("option");o.value=o.textContent=n;$("adminSel").append(o);});
+
+// ── AUTH ─────────────────────────────────────────────────────────
+function checkSession(){const n=sessionStorage.getItem("adminName");if(n){showApp(n);return true;}return false;}
+function showApp(n){$("loginScreen").style.display="none";$("mainApp").style.display="block";$("adminBadge").textContent=n;}
+$("pinEye").addEventListener("click",()=>{const p=$("pinIn");p.type=p.type==="password"?"text":"password";});
+$("pinIn").addEventListener("keydown",e=>{if(e.key==="Enter")$("loginBtn").click();});
+$("loginBtn").addEventListener("click",()=>{
+  const n=$("adminSel").value,p=$("pinIn").value,err=$("loginErr");
+  if(!n){err.textContent="Please select your name.";err.style.display="block";return;}
+  if(p!==ADMIN_CREDENTIALS[n]){err.style.display="block";$("pinIn").value="";$("pinIn").focus();return;}
+  err.style.display="none";sessionStorage.setItem("adminName",n);showApp(n);loadBookings();
+});
+$("logoutBtn").addEventListener("click",()=>{
+  sessionStorage.removeItem("adminName");$("mainApp").style.display="none";$("loginScreen").style.display="flex";
+  $("adminSel").value="";$("pinIn").value="";
+});
+
+// ── TABS ─────────────────────────────────────────────────────────
+document.querySelectorAll(".tab").forEach(btn=>{
+  btn.addEventListener("click",()=>{
+    document.querySelectorAll(".tab").forEach(b=>b.classList.remove("on"));btn.classList.add("on");
+    $("tabBookings").style.display=btn.dataset.tab==="bookings"?"block":"none";
+    $("tabDaily").style.display   =btn.dataset.tab==="daily"   ?"block":"none";
+    $("tabSlots").style.display   =btn.dataset.tab==="slots"   ?"block":"none";
+    $("tabPasses").style.display  =btn.dataset.tab==="passes"  ?"block":"none";
+    if(btn.dataset.tab==="passes") loadActivePasses();
+    if(btn.dataset.tab==="daily")  loadDailyView();
+  });
+});
+
+// ── BOOKINGS ─────────────────────────────────────────────────────
+let allBookings=[],activeFilter="all",reschBooking=null,reschTime=null,activePasses=[],minPass=null;
+
+async function loadBookings(){
+  $("bookingsList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading...</p></div>`;
+  try{
+    const snap=await getDocs(query(collection(db,"bookings"),orderBy("createdAt","desc")));
+    allBookings=snap.docs.map(d=>({id:d.id,...d.data()}));
+    updateStats();renderBookings();
+    $("lastUpd").textContent=`Updated ${new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}`;
+  }catch(e){console.error(e);$("bookingsList").innerHTML=`<div class="estate">❌ Failed to load. Check Firestore rules.</div>`;}
+}
+
+function updateStats(){
+  $("stTotal").textContent=allBookings.length;
+  $("stPending").textContent=allBookings.filter(b=>b.bookingStatus==="pending_payment").length;
+  $("stReview").textContent=allBookings.filter(b=>b.paymentStatus==="pending_review").length;
+  $("stPaid").textContent=allBookings.filter(b=>b.paymentStatus==="paid").length;
+  $("stCancelled").textContent=allBookings.filter(b=>b.bookingStatus==="cancelled").length;
+}
+
+function isPendingRescheduleBooking(b){
+  return b?.bookingStatus==="pending_reschedule"||(b?.bookingStatus==="rescheduled"&&b?.pendingReschedule===true);
+}
+
+function bookingStatusDisplay(b){
+  return isPendingRescheduleBooking(b)?"pending_reschedule":(b?.bookingStatus||"—");
+}
+
+function renderBookings(){
+  renderPendingRescheduleList();
+  const list=activeFilter==="all"?allBookings:allBookings.filter(b=>{
+    if(activeFilter==="pending_reschedule") return isPendingRescheduleBooking(b);
+    return b.bookingStatus===activeFilter||b.paymentStatus===activeFilter;
+  });
+  if(!list.length){$("bookingsList").innerHTML=`<div class="estate">📭 No bookings found.</div>`;return;}
+  $("bookingsList").innerHTML=`<div class="bgrid">${list.map(cardHTML).join("")}</div>`;
+  list.forEach(b=>{
+    const p=document.querySelector(`[data-paid="${b.id}"]`);
+    const c=document.querySelector(`[data-cancel="${b.id}"]`);
+    const r=document.querySelector(`[data-resch="${b.id}"]`);
+    const g=document.querySelector(`[data-gcal="${b.id}"]`);
+    if(p) p.addEventListener("click",()=>markPaid(b));
+    if(c) c.addEventListener("click",()=>cancelBooking(b));
+    if(r) r.addEventListener("click",()=>openResch(b));
+    if(g) g.addEventListener("click",()=>openGoogleCalendarBooking(b));
+  });
+}
+
+function renderPendingRescheduleList(){
+  const panel=$("pendingReschedulePanel");
+  if(!panel) return;
+  const pending=allBookings.filter(isPendingRescheduleBooking);
+  if(!pending.length){panel.style.display="none";panel.innerHTML="";return;}
+  panel.style.display="block";
+  panel.innerHTML=`<div class="smcard">
+    <h2>Pending Reschedule / เลื่อนยังไม่กำหนดวัน</h2>
+    ${pending.map(b=>`
+      <div class="pending-resch-row">
+        <div>
+          <div class="pending-resch-title">${esc(b.bookingCode||"—")} · ${esc(b.customerName||"—")}</div>
+          <div class="pending-resch-meta">
+            ${esc(b.customerPhone||"—")} · Original: ${esc(b.pendingRescheduleFromDate||b.previousDate||b.date||"—")} ${esc(b.pendingRescheduleFromStartTime||b.previousStartTime||b.startTime||"—")}–${esc(b.pendingRescheduleFromEndTime||b.previousEndTime||b.endTime||"—")}
+            <br>${esc(b.bookingType||"—")} · ${esc(b.paymentStatus||"—")}${b.customerNote?` · Note: ${esc(b.customerNote)}`:""}
+          </div>
+        </div>
+        <button class="smbtn smg" data-pending-assign="${esc(b.id)}">Assign New Slot / ลงวันใหม่</button>
+      </div>`).join("")}
+  </div>`;
+  pending.forEach(b=>{
+    const btn=panel.querySelector(`[data-pending-assign="${b.id}"]`);
+    if(btn) btn.addEventListener("click",()=>openResch(b));
+  });
+}
+
+function buildGoogleCalendarUrl(b){
+  if(!b?.date||!b?.startTime||!b?.endTime) return "";
+  const parseBangkokDate=(date,time)=>{
+    const m=String(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const tm=String(time).match(/^(\d{2}):(\d{2})$/);
+    if(!m||!tm) return null;
+    const y=Number(m[1]),mo=Number(m[2]),d=Number(m[3]);
+    const h=Number(tm[1]),mi=Number(tm[2]);
+    if(h>23||mi>59) return null;
+    return new Date(Date.UTC(y,mo-1,d,h-7,mi,0));
+  };
+  const fmtCalDate=dt=>dt.toISOString().replace(/[-:]/g,"").replace(/\.\d{3}Z$/,"Z");
+  const start=parseBangkokDate(b.date,b.startTime);
+  let end=parseBangkokDate(b.date,b.endTime);
+  if(!start||!end||Number.isNaN(start.getTime())||Number.isNaN(end.getTime())) return "";
+  if(end<=start) end=new Date(end.getTime()+24*60*60*1000);
+  const details=[
+    `Booking Code: ${b.bookingCode||"—"}`,
+    `Customer Name: ${b.customerName||"—"}`,
+    `Phone: ${b.customerPhone||"—"}`,
+    `Date: ${b.date||"—"}`,
+    `Time: ${b.startTime||"—"}–${b.endTime||"—"}`,
+    `Booking Type: ${b.bookingType||"—"}`,
+    `Booking Status: ${b.bookingStatus||"—"}`,
+    `Payment Status: ${b.paymentStatus||"—"}`,
+    `Price: ฿${Number(b.price)||0}`,
+  ];
+  if(b.customerNote) details.push(`Customer Note: ${b.customerNote}`);
+  const params=new URLSearchParams({
+    action:"TEMPLATE",
+    text:`Ultra Tennis Booking - ${b.customerName||b.bookingCode||"Booking"}`,
+    dates:`${fmtCalDate(start)}/${fmtCalDate(end)}`,
+    details:details.join("\n"),
+    location:"Ultra Tennis",
+    ctz:"Asia/Bangkok",
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+function openGoogleCalendarBooking(b){
+  const url=buildGoogleCalendarUrl(b);
+  if(!url){alert("Booking date/time is missing or invalid.");return;}
+  window.open(url,"_blank","noopener");
+}
+
+function cardHTML(b){
+  const tc=b.bookingType?.includes("Ultra")?"tu":b.bookingType?.includes("Off")?"to":"ts";
+  const statusText=bookingStatusDisplay(b);
+  // canReschedule = not cancelled/expired/completed/no_show (paid bookings CAN reschedule)
+  const canResch=!["cancelled","expired","completed","no_show"].includes(b.bookingStatus);
+  const isCancelled=b.bookingStatus==="cancelled";
+  const isPaid=b.paymentStatus==="paid";
+  const canMarkPaid=b.paymentStatus==="pending_review"&&!isCancelled;
+  const canCancel=!isCancelled&&!isPaid;
+  const created=b.createdAt?.toDate?b.createdAt.toDate().toLocaleString("en-US",{dateStyle:"short",timeStyle:"short"}):"—";
+  const prevRow=b.previousDate?`<div><div class="fl">Previously</div><div class="fv dim">${esc(b.previousDate)} ${esc(b.previousStartTime)}–${esc(b.previousEndTime)}</div></div>`:"";
+  // slipUrl comes from Firebase Storage getDownloadURL — escape for safety; only render if it begins with http(s).
+  const safeSlip=(typeof b.slipUrl==="string"&&/^https?:\/\//.test(b.slipUrl))?b.slipUrl:"";
+  const slip=safeSlip
+    ?`<div class="slip-sec"><div class="slbl">Payment Slip</div><a href="${esc(safeSlip)}" target="_blank" rel="noopener noreferrer"><img class="simg" src="${esc(safeSlip)}" alt="Slip"/></a></div>`
+    :`<div class="slip-sec"><div class="slbl">Payment Slip</div><p class="noslip">No slip yet</p></div>`;
+
+  // Show paid badge separately + reschedule button even when paid
+  const paidBadge=isPaid?`<span class="sp s-paid">✓ Paid</span>`:"";
+  const actions=isCancelled
+    ?`<button class="bdone">✗ Cancelled</button>`
+    :`${canMarkPaid?`<button class="bp" data-paid="${esc(b.id)}">✓ Mark as Paid</button>`:""}
+      <button class="br" data-gcal="${esc(b.id)}">📅 Calendar</button>
+      ${canResch?`<button class="br" data-resch="${esc(b.id)}">📅 Reschedule</button>`:""}
+      ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}`;
+
+  return `<div class="bcard" id="card-${esc(b.id)}">
+    <div class="bcard-hdr"><span class="bcode">${esc(b.bookingCode||"—")}</span><div style="display:flex;gap:5px;align-items:center">${paidBadge}<span class="tbadge ${tc}">${esc(b.bookingType||"—")}</span></div></div>
+    <div class="bcard-body">
+      <div class="bfields">
+        <div><div class="fl">Customer</div><div class="fv">${esc(b.customerName||"—")}</div></div>
+        <div><div class="fl">Phone</div><div class="fv">${esc(b.customerPhone||"—")}</div></div>
+        <div><div class="fl">Date</div><div class="fv">${esc(b.date||"—")}</div></div>
+        <div><div class="fl">Time</div><div class="fv">${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</div></div>
+        <div><div class="fl">Price</div><div class="fv">฿${Number(b.price)||0}</div></div>
+        <div><div class="fl">Booking Status</div><div class="fv"><span class="sp s-${esc(statusText)}">${esc(statusText)}</span></div></div>
+        <div><div class="fl">Payment Status</div><div class="fv"><span class="sp s-${esc(b.paymentStatus)}">${esc(b.paymentStatus||"—")}</span></div></div>
+        <div><div class="fl">Created</div><div class="fv dim">${esc(created)}</div></div>
+        ${prevRow}
+        ${b.customerNote?`<div style="grid-column:1/-1"><div class="fl">Note</div><div class="fv dim">${esc(b.customerNote)}</div></div>`:""}
+      </div>
+      ${slip}
+      <div class="acts">${actions}</div>
+    </div></div>`;
+}
+
+async function markPaid(b){
+  const btn=document.querySelector(`[data-paid="${b.id}"]`);if(btn){btn.disabled=true;btn.textContent="Saving...";}
+  try{
+    const batch=writeBatch(db);
+    batch.update(doc(db,"bookings",b.id),{paymentStatus:"paid",bookingStatus:"confirmed",adminReviewedAt:serverTimestamp(),updatedAt:serverTimestamp()});
+    batch.update(doc(db,"booking_slots",`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`),{paymentStatus:"paid",bookingStatus:"confirmed"});
+    await batch.commit();
+    // Fire-and-forget: notify the customer their booking is paid. Must not block admin flow.
+    if (canNotifyLine(b.lineUserId) && window.sendLineNotification) {
+      window.sendLineNotification({
+        eventId: `${b.bookingCode}_booking_paid_customer`,
+        type: "booking_paid_customer",
+        lineUserId: b.lineUserId,
+        bookingCode: b.bookingCode,
+        date: b.date,
+        startTime: b.startTime,
+        endTime: b.endTime
+      });
+    }
+    showToast(`✓ ${b.bookingCode} marked as paid`);await loadBookings();
+  }catch(e){console.error(e);showToast("Failed.",true);if(btn){btn.disabled=false;btn.textContent="✓ Mark as Paid";}}
+}
+
+async function cancelBooking(b){
+  if(!confirm(`Cancel ${b.bookingCode}?\n${b.customerName} · ${b.date} · ${b.startTime}\n\nThis releases the slot.`))return;
+  const btn=document.querySelector(`[data-cancel="${b.id}"]`);if(btn){btn.disabled=true;btn.textContent="Cancelling...";}
+  try{
+    const batch=writeBatch(db);
+    batch.update(doc(db,"bookings",b.id),{bookingStatus:"cancelled",paymentStatus:"rejected",cancelReason:"Slip rejected or payment not received",cancelledAt:serverTimestamp(),updatedAt:serverTimestamp()});
+    batch.update(doc(db,"booking_slots",`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`),{bookingStatus:"cancelled",paymentStatus:"rejected"});
+    await batch.commit();
+    // Fire-and-forget: notify the customer their booking was cancelled. Must not block admin flow.
+    if (canNotifyLine(b.lineUserId) && window.sendLineNotification) {
+      window.sendLineNotification({
+        eventId: `${b.bookingCode}_booking_cancelled_customer`,
+        type: "booking_cancelled_customer",
+        lineUserId: b.lineUserId,
+        bookingCode: b.bookingCode,
+        date: b.date,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        reason: b.cancelReason || "สลิปไม่ถูกต้องหรือไม่พบยอดโอน"
+      });
+    }
+    showToast(`✗ ${b.bookingCode} cancelled`);await loadBookings();
+  }catch(e){console.error(e);showToast("Failed.",true);if(btn){btn.disabled=false;btn.textContent="✗ Cancel";}}
+}
+
+document.querySelectorAll(".fbtn[data-filter]").forEach(btn=>{
+  btn.addEventListener("click",()=>{activeFilter=btn.dataset.filter;document.querySelectorAll(".fbtn[data-filter]").forEach(b=>b.classList.remove("on"));btn.classList.add("on");renderBookings();});
+});
+$("refreshBtn").addEventListener("click",loadBookings);
+
+// ── TODO(phase-3): GOOGLE CALENDAR SYNC — NOT IMPLEMENTED YET ────
+// When built:
+//  • Sync a calendar event after Admin "Mark as Paid" succeeds (inside markPaid()).
+//  • Prefer ONE shared "Ultra Tennis Bookings" calendar for the whole shop,
+//    not per-admin calendars.
+//  • Persist the created event id on the booking doc as `googleCalendarEventId`
+//    so reschedule (mConfirm) and cancel (cancelBooking) can patch / delete the
+//    same event later.
+//  • Needs a backend route (service account or OAuth) — do NOT put Google
+//    credentials in this client file.
+// ─────────────────────────────────────────────────────────────────
+
+// ── CSV EXPORT (client-side only, no backend route) ─────────────
+function csvCell(v){
+  const s = v==null ? "" : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+}
+function downloadCSV(filename,headers,rows){
+  const lines=[headers.map(csvCell).join(",")];
+  rows.forEach(r=>lines.push(headers.map(h=>csvCell(r[h])).join(",")));
+  // Prepend BOM so Excel reads UTF-8 (Thai names) correctly.
+  const blob=new Blob(["﻿"+lines.join("\r\n")],{type:"text/csv;charset=utf-8;"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url; a.download=filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function csvStamp(){
+  const d=new Date(),pad=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+function tsToDateTime(ts){
+  const d=ts?.toDate?.()||(ts instanceof Date?ts:null);
+  if(!d) return "";
+  const pad=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function tsToDate(ts){
+  const d=ts?.toDate?.()||(ts instanceof Date?ts:null);
+  if(!d) return "";
+  const pad=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
+$("exportBookingsBtn").addEventListener("click",()=>{
+  if(!allBookings.length){ showToast("No bookings loaded — click Refresh first.",true); return; }
+  const headers=["bookingCode","customerName","lineDisplayName","lineUserId","customerPhone","normalizedPhone","date","startTime","endTime","bookingType","bookingStatus","paymentStatus","price","createdAt"];
+  const rows=allBookings.map(b=>({
+    bookingCode:b.bookingCode||"",
+    customerName:b.customerName||"",
+    lineDisplayName:b.lineDisplayName||"",
+    lineUserId:b.lineUserId||"",
+    customerPhone:b.customerPhone||"",
+    normalizedPhone:b.customerPhoneNormalized||normalizePhone(b.customerPhone),
+    date:b.date||"",
+    startTime:b.startTime||"",
+    endTime:b.endTime||"",
+    bookingType:b.bookingType||"",
+    bookingStatus:b.bookingStatus||"",
+    paymentStatus:b.paymentStatus||"",
+    price:b.price??"",
+    createdAt:tsToDateTime(b.createdAt),
+  }));
+  downloadCSV(`bookings_${csvStamp()}.csv`,headers,rows);
+  showToast(`✓ Exported ${rows.length} bookings`);
+});
+
+$("exportPassesBtn").addEventListener("click",async()=>{
+  const btn=$("exportPassesBtn"); btn.disabled=true; btn.textContent="…";
+  try{
+    const snap=await getDocs(collection(db,"customer_packages"));
+    const passes=snap.docs.map(d=>d.data());
+    if(!passes.length){ showToast("No passes to export.",true); return; }
+    const headers=["customerName","lineDisplayName","lineUserId","customerPhone","packageType","packageName","remainingMinutes","validFrom","validUntil","status","createdAt","updatedAt"];
+    const rows=passes.map(p=>({
+      customerName:p.customerName||"",
+      lineDisplayName:p.lineDisplayName||"",
+      lineUserId:p.lineUserId||"",
+      customerPhone:p.customerPhone||"",
+      packageType:p.packageType||"",
+      packageName:p.packageName||"",
+      remainingMinutes:p.remainingMinutes??"",
+      validFrom:tsToDate(p.validFrom),
+      validUntil:tsToDate(p.validUntil),
+      status:p.status||"",
+      createdAt:tsToDateTime(p.createdAt),
+      updatedAt:tsToDateTime(p.updatedAt),
+    }));
+    downloadCSV(`passes_${csvStamp()}.csv`,headers,rows);
+    showToast(`✓ Exported ${rows.length} passes`);
+  }catch(e){ console.error(e); showToast("Pass export failed.",true); }
+  finally{ btn.disabled=false; btn.textContent="Passes"; }
+});
+
+$("exportCustomersBtn").addEventListener("click",async()=>{
+  if(!allBookings.length){ showToast("No bookings loaded — click Refresh first.",true); return; }
+  const btn=$("exportCustomersBtn"); btn.disabled=true; btn.textContent="…";
+  try{
+    const snap=await getDocs(collection(db,"customer_packages"));
+    const allPkgs=snap.docs.map(d=>d.data());
+    // Aggregate bookings per customer, keyed by normalizedPhone (fallback: lineUserId).
+    const map=new Map();
+    allBookings.forEach(b=>{
+      const np=b.customerPhoneNormalized||normalizePhone(b.customerPhone);
+      const key=np||b.lineUserId||"unknown";
+      if(!map.has(key)) map.set(key,{
+        customerName:"",lineDisplayName:"",lineUserId:"",customerPhone:"",normalizedPhone:np,
+        totalBookings:0,confirmedBookings:0,cancelledBookings:0,lastBookingDate:"",_lastTs:-1,
+      });
+      const c=map.get(key);
+      c.totalBookings++;
+      if(b.bookingStatus==="confirmed") c.confirmedBookings++;
+      if(b.bookingStatus==="cancelled") c.cancelledBookings++;
+      if((b.date||"")>c.lastBookingDate) c.lastBookingDate=b.date||"";
+      // Identity fields from the most recent booking by createdAt.
+      const ts=b.createdAt?.seconds||0;
+      if(ts>=c._lastTs){
+        c._lastTs=ts;
+        if(b.customerName) c.customerName=b.customerName;
+        if(b.customerPhone) c.customerPhone=b.customerPhone;
+        if(b.lineDisplayName) c.lineDisplayName=b.lineDisplayName;
+        if(b.lineUserId&&b.lineUserId!=="guest") c.lineUserId=b.lineUserId;
+      }
+    });
+    // Join active packages onto each customer (match by normalizedPhone OR lineUserId).
+    map.forEach(c=>{
+      const matched=allPkgs.filter(p=>{
+        if(p.status!=="active") return false;
+        const pnp=p.customerPhoneNormalized||normalizePhone(p.customerPhone);
+        if(pnp&&c.normalizedPhone&&pnp===c.normalizedPhone) return true;
+        if(p.lineUserId&&p.lineUserId!=="guest"&&c.lineUserId&&p.lineUserId===c.lineUserId) return true;
+        return false;
+      });
+      c.activePackageNames=matched.map(p=>p.packageName||"").filter(Boolean).join(" | ");
+      c.totalRemainingMinutes=matched.reduce((s,p)=>s+(Number(p.remainingMinutes)||0),0);
+      c.validUntilList=matched.map(p=>tsToDate(p.validUntil)).filter(Boolean).join(" | ");
+    });
+    const headers=["customerName","lineDisplayName","lineUserId","customerPhone","normalizedPhone","totalBookings","confirmedBookings","cancelledBookings","lastBookingDate","activePackageNames","totalRemainingMinutes","validUntilList"];
+    const rows=[...map.values()].map(({_lastTs,...rest})=>rest);
+    if(!rows.length){ showToast("No customers to export.",true); return; }
+    downloadCSV(`customers_${csvStamp()}.csv`,headers,rows);
+    showToast(`✓ Exported ${rows.length} customers`);
+  }catch(e){ console.error(e); showToast("Customer export failed.",true); }
+  finally{ btn.disabled=false; btn.textContent="Customers"; }
+});
+
+// ── SLOT MANAGER ─────────────────────────────────────────────────
+const allH=()=>{const h=[];for(let i=OPEN_HOUR;i<CLOSE_HOUR;i++)h.push(i);return h;};
+const slId=(date,h)=>`${RESOURCE_ID}_${date}_${String(h).padStart(2,"0")}00`;
+const fH=h=>`${String(h).padStart(2,"0")}:00`;
+const fEnd=h=>h+1>=24?"00:00":`${String(h+1).padStart(2,"0")}:00`;
+function dateRange(s,n){const d=[],b=new Date(s+"T00:00:00");for(let i=0;i<n;i++){const x=new Date(b);x.setDate(b.getDate()+i);d.push(x.toISOString().slice(0,10));}return d;}
+
+async function setSlots(dates,close=false){
+  const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now(),batch=writeBatch(db);
+  dates.forEach(date=>{
+    allH().forEach(h=>{
+      const ref=doc(db,"available_slots",slId(date,h));
+      batch.set(ref,close
+        ?{resourceId:RESOURCE_ID,date,startTime:fH(h),endTime:fEnd(h),status:"closed",closedAt:now,closedBy:admin,openedAt:null,openedBy:null}
+        :{resourceId:RESOURCE_ID,date,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null}
+      );
+    });
+  });
+  await batch.commit();
+}
+
+function getViewDate(){return $("viewDate").value;}
+
+$("openWeekBtn").addEventListener("click",async()=>{
+  const s=$("weekDate").value;if(!s){showToast("Pick a week start date.",true);return;}
+  const btn=$("openWeekBtn");btn.disabled=true;btn.textContent="Opening...";
+  try{await setSlots(dateRange(s,7));showToast(`✓ Opened 7 days from ${s}`);
+    if($("viewDate").value)await loadSlotGrid($("viewDate").value);}
+  catch(e){console.error(e);showToast("Failed.",true);}
+  finally{btn.disabled=false;btn.textContent="⚡ Open Full Week (7 days)";}
+});
+
+$("openDayBtn").addEventListener("click",async()=>{
+  const d=$("dayDate").value;if(!d){showToast("Pick a date.",true);return;}
+  const btn=$("openDayBtn");btn.disabled=true;btn.textContent="Opening...";
+  try{await setSlots([d]);showToast(`✓ Opened all slots for ${d}`);
+    if(getViewDate()===d)await loadSlotGrid(d);}
+  catch(e){console.error(e);showToast("Failed.",true);}
+  finally{btn.disabled=false;btn.textContent="+ Open This Day";}
+});
+
+$("closeDayBtn").addEventListener("click",async()=>{
+  const d=$("dayDate").value;if(!d){showToast("Pick a date.",true);return;}
+  if(!confirm(`Close ALL slots for ${d}?\nExisting confirmed bookings are NOT cancelled.`))return;
+  const btn=$("closeDayBtn");btn.disabled=true;btn.textContent="Closing...";
+  try{await setSlots([d],true);showToast(`✓ Closed all slots for ${d}`);
+    if(getViewDate()===d)await loadSlotGrid(d);}
+  catch(e){console.error(e);showToast("Failed.",true);}
+  finally{btn.disabled=false;btn.textContent="✕ Close This Day";}
+});
+
+$("loadSlotsBtn").addEventListener("click",()=>{
+  const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}loadSlotGrid(d);
+});
+
+$("openAllBtn").addEventListener("click",async()=>{
+  const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}
+  const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now(),batch=writeBatch(db);
+  // Load current to only create missing ones
+  const snap=await getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)));
+  const existing=new Set();snap.forEach(x=>existing.add(x.data().startTime));
+  let count=0;
+  allH().forEach(h=>{
+    if(!existing.has(fH(h))){
+      batch.set(doc(db,"available_slots",slId(d,h)),{resourceId:RESOURCE_ID,date:d,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null});
+      count++;
+    }
+  });
+  if(count===0){showToast("All slots already set.");return;}
+  await batch.commit();showToast(`✓ Opened ${count} new slots for ${d}`);await loadSlotGrid(d);
+});
+
+$("closeUnbookedBtn").addEventListener("click",async()=>{
+  const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}
+  if(!confirm(`Close all UNBOOKED open slots for ${d}?`))return;
+  const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now();
+
+  const[avSnap,bkSnap]=await Promise.all([
+    getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID),where("status","==","open"))),
+    getDocs(query(collection(db,"booking_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)))
+  ]);
+  const booked=new Set();const now2=new Date();
+  bkSnap.forEach(x=>{const bd=x.data();if(bd.bookingStatus==="confirmed")booked.add(bd.hour);if(bd.bookingStatus==="pending_payment"){const exp=bd.expiresAt?.toDate?.();if(exp&&exp>now2)booked.add(bd.hour);}});
+  const batch=writeBatch(db);let count=0;
+  avSnap.forEach(x=>{if(!booked.has(x.data().startTime)){batch.update(x.ref,{status:"closed",closedAt:now,closedBy:admin});count++;}});
+  if(!count){showToast("No unbooked open slots to close.");return;}
+  await batch.commit();showToast(`✓ Closed ${count} unbooked slots`);await loadSlotGrid(d);
+});
+
+async function loadSlotGrid(dateISO){
+  $("slotGrid").innerHTML=`<div class="smload"><div class="spinner"></div><p>Loading...</p></div>`;
+  $("holidayBox").style.display="none";
+  try{
+    const[avSnap,bkSnap,holSnap]=await Promise.all([
+      getDocs(query(collection(db,"available_slots"),where("date","==",dateISO),where("resourceId","==",RESOURCE_ID))),
+      getDocs(query(collection(db,"booking_slots"),where("date","==",dateISO),where("resourceId","==",RESOURCE_ID))),
+      getDoc(doc(db,"holidays",dateISO)),
+    ]);
+    const avMap={};avSnap.forEach(d=>{avMap[d.data().startTime]={id:d.id,...d.data()};});
+    const booked=new Set();const now=new Date();
+    bkSnap.forEach(d=>{const bd=d.data();if(bd.bookingStatus==="confirmed")booked.add(bd.hour);if(bd.bookingStatus==="pending_payment"){const exp=bd.expiresAt?.toDate?.();if(exp&&exp>now)booked.add(bd.hour);}});
+
+    const rows=allH().map(h=>{
+      const time=fH(h),av=avMap[time],isB=booked.has(time);
+      let sHtml,tHtml;
+      if(!av){sHtml=`<span class="sstatus ss-none">Not Set</span>`;tHtml=`<button class="stoggle st-create" data-act="create" data-date="${dateISO}" data-h="${h}">Open</button>`;}
+      else if(av.status==="open"&&isB){sHtml=`<span class="sstatus ss-booked">Booked</span>`;tHtml=`<button class="stoggle st-dis" disabled>Can't Close</button>`;}
+      else if(av.status==="open"){sHtml=`<span class="sstatus ss-open">Open</span>`;tHtml=`<button class="stoggle st-close" data-act="close" data-id="${av.id}" data-date="${dateISO}" data-h="${h}">Close</button>`;}
+      else{sHtml=`<span class="sstatus ss-closed">Closed</span>`;tHtml=`<button class="stoggle st-open" data-act="reopen" data-id="${av.id}" data-date="${dateISO}" data-h="${h}">Reopen</button>`;}
+      return `<div class="srow"><span class="stime">${time} – ${fEnd(h)}</span>${sHtml}${tHtml}</div>`;
+    }).join("");
+
+    $("slotGrid").innerHTML=`<div class="sgrid">${rows}</div>`;
+    $("slotGrid").querySelectorAll("[data-act]").forEach(btn=>btn.addEventListener("click",()=>toggleSlot(btn,dateISO)));
+
+    // Holiday section
+    $("holidayBox").style.display="block";
+    const holData=holSnap.exists()?holSnap.data():null;
+    $("holCheck").checked=holData?.isHoliday===true;
+    $("holName").value=holData?.name||"";
+    $("holActiveTag").style.display=holData?.isHoliday?"inline-block":"none";
+
+  }catch(e){console.error(e);$("slotGrid").innerHTML=`<div class="smempty">❌ Failed to load.</div>`;}
+}
+
+async function toggleSlot(btn,dateISO){
+  const act=btn.dataset.act,h=Number(btn.dataset.h),existId=btn.dataset.id;
+  const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now();
+  btn.disabled=true;
+  try{
+    if(act==="create"||act==="reopen"){
+      const id=existId||slId(dateISO,h);
+      await setDoc(doc(db,"available_slots",id),{resourceId:RESOURCE_ID,date:dateISO,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null});
+    }else{await updateDoc(doc(db,"available_slots",existId),{status:"closed",closedAt:now,closedBy:admin});}
+    loadSlotGrid(dateISO);
+  }catch(e){console.error(e);showToast("Toggle failed.",true);btn.disabled=false;}
+}
+
+// Holiday save
+$("holSave").addEventListener("click",async()=>{
+  const d=getViewDate();if(!d){showToast("No date loaded.",true);return;}
+  const isHol=$("holCheck").checked,name=$("holName").value.trim();
+  const admin=sessionStorage.getItem("adminName")||"admin";
+  try{
+    await setDoc(doc(db,"holidays",d),{date:d,isHoliday:isHol,name,updatedBy:admin,updatedAt:serverTimestamp()});
+    $("holActiveTag").style.display=isHol?"inline-block":"none";
+    showToast(isHol?`✓ ${d} marked as holiday`:`✓ ${d} holiday removed`);
+  }catch(e){console.error(e);showToast("Failed to save holiday.",true);}
+});
+
+// ── ADD PASS ─────────────────────────────────────────────────────
+const PACKAGES = {
+  ultra_10:{ packageType:"ultra_10", packageName:"Ultra Pass 10 Hours",  totalMinutes:600,  validityDays:90,  weeklyLimitHours:null, monthlyLimitHours:null },
+  ultra_20:{ packageType:"ultra_20", packageName:"Ultra Pass 20 Hours",  totalMinutes:1200, validityDays:180, weeklyLimitHours:null, monthlyLimitHours:null },
+  offpeak: { packageType:"offpeak",  packageName:"Off-Peak Pass",         totalMinutes:null, validityDays:30,  weeklyLimitHours:5,    monthlyLimitHours:20   },
+};
+
+let foundCustomer = null;
+
+$("searchCustomerBtn").addEventListener("click", async()=>{
+  const phone=$("searchPhone").value.trim();
+  if(!phone){ showToast("Enter a phone number to search.",true); return; }
+  const btn=$("searchCustomerBtn"); btn.disabled=true; btn.textContent="Searching...";
+  $("searchResult").style.display="none"; $("notFound").style.display="none";
+  $("customerHistoryPanel").style.display="none";
+  foundCustomer=null;
+
+  try{
+    const normalized=normalizePhone(phone);
+    // Search bookings (normalized + raw fallback for legacy docs) PLUS all active
+    // packages — needed for the customer history panel below.
+    const [snapNorm, snapRaw, pkgSnap] = await Promise.all([
+      getDocs(query(collection(db,"bookings"),where("customerPhoneNormalized","==",normalized))),
+      getDocs(query(collection(db,"bookings"),where("customerPhone","==",phone))),
+      getDocs(query(collection(db,"customer_packages"),where("status","==","active"))),
+    ]);
+    const seen=new Set();
+    const docs=[];
+    [...snapNorm.docs, ...snapRaw.docs].forEach(d=>{
+      if(seen.has(d.id)) return;
+      seen.add(d.id);
+      docs.push(d.data());
+    });
+    docs.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    if(docs.length){
+      foundCustomer=docs[0];
+      $("foundName").textContent=foundCustomer.customerName||"—";
+      $("foundPhone").textContent=foundCustomer.customerPhone||"—";
+      $("foundLineId").textContent=foundCustomer.lineUserId||"Not linked yet";
+      $("foundLineName").textContent=foundCustomer.lineDisplayName||"—";
+      $("manualName").value=foundCustomer.customerName||"";
+      $("searchResult").style.display="block";
+    } else {
+      $("notFound").style.display="block";
+      foundCustomer={ lineUserId:"", lineDisplayName:"", customerName:"", customerPhone:phone };
+      $("manualName").value="";
+    }
+    // Render the customer history panel — runs whether or not a booking was found,
+    // because admin-added passes might exist for customers who haven't booked yet.
+    renderCustomerHistoryPanel(docs, pkgSnap.docs.map(d=>d.data()), normalized, foundCustomer.lineUserId);
+  }catch(e){ console.error(e); showToast("Search failed.",true); }
+  finally{ btn.disabled=false; btn.textContent="Search"; }
+});
+
+// ── CUSTOMER HISTORY PANEL (Phase 2.4) ──────────────────────────
+// Renders the aggregate stats for the searched phone. Matches active packages
+// by normalizedPhone first; falls back to lineUserId (when known) so packages
+// added before the customer LINE-linked still show up.
+function renderCustomerHistoryPanel(bookings, activePkgs, normalizedPhone, lineUserId){
+  const panel=$("customerHistoryPanel"), body=$("customerHistoryBody");
+  const matchedPkgs=activePkgs.filter(p=>{
+    const pnp=p.customerPhoneNormalized||normalizePhone(p.customerPhone);
+    if(pnp&&normalizedPhone&&pnp===normalizedPhone) return true;
+    if(lineUserId&&lineUserId!=="guest"&&lineUserId!=="manual"&&p.lineUserId===lineUserId) return true;
+    return false;
+  });
+
+  // No bookings AND no active packages → genuinely new customer.
+  if(!bookings.length && !matchedPkgs.length){
+    body.innerHTML=`<div><em>New customer — no previous booking history found.</em></div>`;
+    panel.style.display="block";
+    return;
+  }
+
+  const total     = bookings.length;
+  const confirmed = bookings.filter(b=>b.bookingStatus==="confirmed").length;
+  const cancelled = bookings.filter(b=>b.bookingStatus==="cancelled").length;
+  const pending   = bookings.filter(b=>b.bookingStatus==="pending_payment").length;
+  const lastDate  = bookings.reduce((m,b)=>(b.date||"")>m?(b.date||""):m,"");
+  const latest    = bookings[0]||null;
+
+  const passNames = matchedPkgs.map(p=>p.packageName||"").filter(Boolean);
+  const ultraRemaining = matchedPkgs
+    .filter(p=>String(p.packageType||"").includes("ultra"))
+    .reduce((s,p)=>s+(Number(p.remainingMinutes)||0),0);
+  const validUntilList = matchedPkgs
+    .map(p=>{ const d=p.validUntil?.toDate?.(); return d?d.toLocaleDateString("en-GB"):""; })
+    .filter(Boolean);
+
+  const lbl = (k,v) => `<div><span style="color:var(--m)">${k}:</span> ${v}</div>`;
+  const rows=[];
+  if(latest && latest.customerName)    rows.push(lbl("Latest name", `<strong>${esc(latest.customerName)}</strong>`));
+  if(latest && latest.lineDisplayName) rows.push(lbl("LINE name", esc(latest.lineDisplayName)));
+  rows.push(lbl("LINE userId", esc(latest&&latest.lineUserId ? latest.lineUserId : "Not linked yet")));
+  if(total>0){
+    let stats=`<strong>${total}</strong> total · <strong style="color:var(--ac)">${confirmed}</strong> confirmed · ${cancelled} cancelled`;
+    if(pending>0) stats+=` · ${pending} pending`;
+    rows.push(lbl("Bookings", stats));
+  } else {
+    rows.push(lbl("Bookings", `<em>No bookings yet</em>`));
+  }
+  if(lastDate) rows.push(lbl("Last visit", esc(lastDate)));
+  if(passNames.length){
+    rows.push(lbl("Active passes", `<strong>${esc(passNames.join(" · "))}</strong>`));
+    if(ultraRemaining>0) rows.push(lbl("Ultra remaining", `<strong>${ultraRemaining} min</strong>`));
+    if(validUntilList.length) rows.push(lbl("Valid until", esc(validUntilList.join(" · "))));
+  }
+
+  body.innerHTML=rows.join("");
+  panel.style.display="block";
+}
+
+$("addPassBtn").addEventListener("click", async()=>{
+  const pkgType=$("packageSelect").value;
+  const name=$("manualName").value.trim();
+  const validFrom=$("validFromDate").value;
+  if(!pkgType){ showToast("Please select a package.",true); return; }
+  if(!name){ showToast("Customer name is required.",true); return; }
+  if(!validFrom){ showToast("Please select a valid from date.",true); return; }
+  if(!foundCustomer){ showToast("Please search for a customer first.",true); return; }
+
+  const btn=$("addPassBtn"); btn.disabled=true; btn.textContent="Adding...";
+  try{
+    const pkg=PACKAGES[pkgType];
+    const admin=sessionStorage.getItem("adminName")||"admin";
+    const vFrom=new Date(validFrom+"T00:00:00");
+    const vUntil=new Date(vFrom.getTime()+pkg.validityDays*24*60*60*1000);
+
+    const phoneRaw=foundCustomer.customerPhone||$("searchPhone").value.trim();
+    await addDoc(collection(db,"customer_packages"),{
+      lineUserId:              foundCustomer.lineUserId||"",
+      lineDisplayName:         foundCustomer.lineDisplayName||"",
+      customerName:            name,
+      customerPhone:           phoneRaw,
+      customerPhoneNormalized: normalizePhone(phoneRaw),
+      packageType:             pkg.packageType,
+      packageName:             pkg.packageName,
+      totalMinutes:            pkg.totalMinutes,
+      remainingMinutes:        pkg.totalMinutes,
+      weeklyLimitHours:        pkg.weeklyLimitHours||null,
+      monthlyLimitHours:       pkg.monthlyLimitHours||null,
+      // Off-Peak quota counters — Maps keyed by ISO week / calendar month.
+      // Empty by default; booking transaction reads + increments these atomically.
+      weeklyUsage:             {},
+      monthlyUsage:            {},
+      validFrom:               Timestamp.fromDate(vFrom),
+      validUntil:              Timestamp.fromDate(vUntil),
+      status:                  "active",
+      addedByAdmin:            admin,
+      createdFromPurchaseCode: null,
+      createdAt:               serverTimestamp(),
+    });
+
+    // Fire-and-forget: notify the customer their pass is active. Must not block admin flow.
+    // If lineUserId is empty (customer not LINE-linked yet), the API logs it as skipped.
+    if (window.sendLineNotification) {
+      window.sendLineNotification({
+        eventId: `pass_${foundCustomer.lineUserId}_${pkgType}_${Date.now()}`,
+        type: "pass_activated_customer",
+        lineUserId: foundCustomer.lineUserId,
+        packageName: pkg.packageName,
+        remainingMinutes: pkg.totalMinutes,
+        validUntil: vUntil.toLocaleDateString("en-GB")
+      });
+    }
+
+    showToast(`✓ ${pkg.packageName} added for ${name}`);
+    // Reset form
+    $("searchPhone").value=""; $("packageSelect").value=""; $("manualName").value="";
+    $("searchResult").style.display="none"; $("notFound").style.display="none";
+    foundCustomer=null;
+    loadActivePasses();
+  }catch(e){ console.error(e); showToast("Failed to add pass.",true); }
+  finally{ btn.disabled=false; btn.textContent="✓ Add Pass for Customer"; }
+});
+
+async function loadActivePasses(){
+  $("activePassesList").innerHTML=`<div class="smload"><div class="spinner"></div><p>Loading...</p></div>`;
+  try{
+    const snap=await getDocs(query(collection(db,"customer_packages"),where("status","==","active")));
+    const passes=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    activePasses=passes; // cached for the minute-adjust modal lookup
+
+    if(!passes.length){ $("activePassesList").innerHTML=`<div class="smempty">No active passes.</div>`; return; }
+
+    $("activePassesList").innerHTML=passes.map(p=>{
+      const validUntil=p.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—";
+      const isUltra=p.packageType?.includes("ultra");
+      return `<div class="srow" style="grid-template-columns:1fr 1fr 1fr auto;padding:10px 12px;margin-bottom:5px">
+        <div><div class="fl">Customer</div><div class="fv">${esc(p.customerName||"—")} · ${esc(p.customerPhone||"—")}</div></div>
+        <div><div class="fl">Package</div><div class="fv">${esc(p.packageName||"—")}</div></div>
+        <div><div class="fl">${isUltra?"Remaining":"Valid Until"}</div><div class="fv">${isUltra?`${Number(p.remainingMinutes)||0} min`:esc(validUntil)}</div></div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">
+          ${isUltra?`<button class="stoggle st-open" data-adjust="${esc(p.id)}" style="padding:5px 10px;font-size:.7rem">⏱ Adjust</button>`:""}
+          <button class="stoggle st-close" data-deactivate="${esc(p.id)}" style="padding:5px 10px;font-size:.7rem">Deactivate</button>
+        </div>
+      </div>`;
+    }).join("");
+
+    $("activePassesList").querySelectorAll("[data-deactivate]").forEach(btn=>{
+      btn.addEventListener("click",async()=>{
+        if(!confirm("Deactivate this pass?")) return;
+        btn.disabled=true;
+        try{
+          await updateDoc(doc(db,"customer_packages",btn.dataset.deactivate),{status:"inactive",updatedAt:serverTimestamp()});
+          showToast("Pass deactivated.");loadActivePasses();
+        }catch(e){showToast("Failed.",true);btn.disabled=false;}
+      });
+    });
+    // Wire Adjust buttons (rendered for Ultra Pass rows only)
+    $("activePassesList").querySelectorAll("[data-adjust]").forEach(btn=>{
+      btn.addEventListener("click",()=>openMinModal(btn.dataset.adjust));
+    });
+  }catch(e){ console.error(e); $("activePassesList").innerHTML=`<div class="smempty">❌ Failed to load.</div>`; }
+}
+
+$("refreshPassesBtn").addEventListener("click",loadActivePasses);
+
+// ── ADJUST PASS MINUTES (Ultra Pass only) ───────────────────────
+// Opens the modal for a single Ultra pass. Off-Peak passes don't have a
+// minute counter — the Adjust button isn't rendered for them, but we
+// double-check here as defense-in-depth.
+function openMinModal(passId){
+  const p=activePasses.find(x=>x.id===passId);
+  if(!p){ showToast("Pass not found. Refresh and try again.",true); return; }
+  if(!String(p.packageType||"").includes("ultra")){
+    showToast("Minute controls apply to Ultra Pass only.",true); return;
+  }
+  minPass=p;
+  $("minCustomer").textContent=`${p.customerName||"—"} · ${p.customerPhone||"—"}`;
+  $("minPackage").textContent=p.packageName||"—";
+  $("minCurrent").textContent=`Current remaining: ${Number(p.remainingMinutes)||0} min`;
+  $("minAction").value="add_minutes";
+  $("minLabel").textContent="Minutes to add";
+  $("minValue").value="";
+  $("minReason").value="";
+  $("minPreview").textContent="";
+  $("minConfirm").disabled=false;
+  $("minConfirm").textContent="Save Adjustment";
+  $("minModal").style.display="flex";
+}
+function closeMinModal(){ $("minModal").style.display="none"; minPass=null; }
+$("minClose").addEventListener("click",closeMinModal);
+$("minCancel").addEventListener("click",closeMinModal);
+$("minModal").addEventListener("click",e=>{ if(e.target===$("minModal")) closeMinModal(); });
+
+function minNewRemaining(action,current,value){
+  if(action==="add_minutes")    return current+value;
+  if(action==="deduct_minutes") return current-value;
+  return value; // set_minutes
+}
+function updateMinPreview(){
+  if(!minPass) return;
+  const cur=Number(minPass.remainingMinutes)||0;
+  const raw=$("minValue").value.trim();
+  const val=Number(raw);
+  if(raw===""||!Number.isFinite(val)||val<0){ $("minPreview").textContent=""; return; }
+  const next=minNewRemaining($("minAction").value,cur,val);
+  $("minPreview").textContent = next<0
+    ? `⚠️ Result would be ${next} min — not allowed (cannot go below 0).`
+    : `Preview: ${cur} min → ${next} min`;
+}
+$("minAction").addEventListener("change",()=>{
+  const a=$("minAction").value;
+  $("minLabel").textContent = a==="add_minutes" ? "Minutes to add"
+    : a==="deduct_minutes" ? "Minutes to deduct"
+    : "New remaining minutes";
+  updateMinPreview();
+});
+$("minValue").addEventListener("input",updateMinPreview);
+
+$("minConfirm").addEventListener("click",async()=>{
+  if(!minPass) return;
+  const action=$("minAction").value;
+  const raw=$("minValue").value.trim();
+  const value=Number(raw);
+  const reason=$("minReason").value.trim();
+  // Validation: positive whole number of minutes.
+  if(raw===""||!Number.isFinite(value)||value<=0||!Number.isInteger(value)){
+    showToast("Enter a positive whole number of minutes.",true); return;
+  }
+  const oldRemaining=Number(minPass.remainingMinutes)||0;
+  const newRemaining=minNewRemaining(action,oldRemaining,value);
+  // Validation: remaining cannot go below 0.
+  if(newRemaining<0){ showToast("Remaining minutes cannot go below 0.",true); return; }
+  const deltaMinutes=newRemaining-oldRemaining;
+  const adminName=sessionStorage.getItem("adminName")||"admin";
+
+  const btn=$("minConfirm"); btn.disabled=true; btn.textContent="Saving...";
+  try{
+    // Atomic: update the pass + write the audit log together.
+    const batch=writeBatch(db);
+    batch.update(doc(db,"customer_packages",minPass.id),{
+      remainingMinutes:newRemaining,
+      updatedAt:serverTimestamp(),
+    });
+    batch.set(doc(collection(db,"customer_package_logs")),{
+      packageId:minPass.id,
+      lineUserId:minPass.lineUserId||"",
+      customerName:minPass.customerName||"",
+      customerPhone:minPass.customerPhone||"",
+      packageType:minPass.packageType||"",
+      packageName:minPass.packageName||"",
+      action,
+      oldRemainingMinutes:oldRemaining,
+      newRemainingMinutes:newRemaining,
+      deltaMinutes,
+      reason,
+      adminName,
+      createdAt:serverTimestamp(),
+    });
+    await batch.commit();
+    showToast(`✓ ${minPass.packageName||"Pass"} → ${newRemaining} min`);
+    closeMinModal();
+    loadActivePasses();
+  }catch(e){
+    console.error(e); showToast("Failed to adjust minutes.",true);
+  }finally{
+    btn.disabled=false; btn.textContent="Save Adjustment";
+  }
+});
+
+// Set valid from to today by default when tab opens
+document.querySelector("[data-tab='passes']").addEventListener("click",()=>{
+  if(!$("validFromDate").value) $("validFromDate").value=new Date().toISOString().slice(0,10);
+  loadActivePasses();
+});
+
+// ── DAILY VIEW (Phase 2.3) ──────────────────────────────────────
+// Per-day slot grid with bookings overlaid + customer history badges +
+// inline actions (Manual Book / Reschedule / Cancel reusing existing fns).
+// Data fetched per load: available_slots, booking_slots, bookings (this date
+// only), customer_packages (all), bookings (all — for visit count history).
+
+let dvLastLoad=null,dvSlotAlertData=null;
+
+function todayISOString(){
+  const d=new Date(),pad=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+function shiftDate(iso,days){
+  const [y,m,d]=iso.split("-").map(Number);
+  const dt=new Date(y,m-1,d); dt.setDate(dt.getDate()+days);
+  const pad=n=>String(n).padStart(2,"0");
+  return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}`;
+}
+
+async function loadDailyView(){
+  if(!$("dvDate").value) $("dvDate").value=todayISOString();
+  const date=$("dvDate").value;
+  dvLastLoad=date;
+  $("dvList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading ${esc(date)}...</p></div>`;
+  $("dvSlotAlertText").value="";
+
+  try{
+    const [avSnap,bkSnap,bookSnap,pkgSnap,allBookSnap]=await Promise.all([
+      getDocs(query(collection(db,"available_slots"),where("date","==",date),where("resourceId","==",RESOURCE_ID))),
+      getDocs(query(collection(db,"booking_slots"),where("date","==",date),where("resourceId","==",RESOURCE_ID))),
+      getDocs(query(collection(db,"bookings"),where("date","==",date))),
+      getDocs(collection(db,"customer_packages")),
+      getDocs(collection(db,"bookings")),
+    ]);
+
+    const avByTime={}; avSnap.forEach(d=>{ const dd=d.data(); avByTime[dd.startTime]=dd; });
+    const bsByHour={}; bkSnap.forEach(d=>{ const dd=d.data(); bsByHour[dd.hour]=dd; });
+    dvSlotAlertData={date,avByTime,bsByHour,loadedAt:new Date()};
+    const bookingsOnDay=bookSnap.docs.map(d=>({id:d.id,...d.data()}));
+    const bookingByCode={}; bookingsOnDay.forEach(b=>{ if(b.bookingCode) bookingByCode[b.bookingCode]=b; });
+    const allPkgs=pkgSnap.docs.map(d=>d.data());
+    const allBks=allBookSnap.docs.map(d=>d.data());
+
+    // Aggregate per phone: confirmed/cancelled counts, last visit, active passes.
+    function lookupHistory(phone,lineUid){
+      const np=normalizePhone(phone);
+      const matches=allBks.filter(x=>{
+        const xnp=x.customerPhoneNormalized||normalizePhone(x.customerPhone);
+        return xnp&&np&&xnp===np;
+      });
+      const confirmedCount=matches.filter(x=>x.bookingStatus==="confirmed").length;
+      const cancelledCount=matches.filter(x=>x.bookingStatus==="cancelled").length;
+      const lastDate=matches.reduce((m,x)=>(x.date||"")>m?(x.date||""):m,"");
+      const activePassNames=allPkgs.filter(p=>{
+        if(p.status!=="active") return false;
+        const pnp=p.customerPhoneNormalized||normalizePhone(p.customerPhone);
+        if(np&&pnp&&np===pnp) return true;
+        if(lineUid&&lineUid!=="guest"&&lineUid!=="manual"&&p.lineUserId&&p.lineUserId===lineUid) return true;
+        return false;
+      }).map(p=>p.packageName||"").filter(Boolean);
+      return { confirmedCount, cancelledCount, lastDate, activePassNames };
+    }
+
+    const now=new Date();
+    const rows=[];
+    let countConfirmed=0,countReview=0,countPending=0,countOpen=0,countClosed=0;
+
+    for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
+      const time=fH(h),endT=fEnd(h);
+      const av=avByTime[time]||null;
+      const bs=bsByHour[time]||null;
+      let status,booking=null;
+
+      // booking_slots takes precedence when it points to a live (confirmed or
+      // unexpired-pending) booking; otherwise fall back to available_slots status.
+      if(bs && bs.bookingStatus==="confirmed"){
+        status="booked";
+        booking=bookingByCode[bs.bookingCode]||null;
+        countConfirmed++;
+        if(booking?.paymentStatus==="pending_review") countReview++;
+      } else if(bs && bs.bookingStatus==="pending_payment"){
+        const exp=bs.expiresAt?.toDate?.();
+        if(exp&&exp>now){
+          status="pending"; booking=bookingByCode[bs.bookingCode]||null; countPending++;
+        } else if(av && av.status==="open"){ status="open"; countOpen++; }
+        else  if(av && av.status==="closed"){ status="closed"; countClosed++; }
+        else  { status="not_set"; }
+      } else if(av && av.status==="open"){ status="open"; countOpen++; }
+      else  if(av && av.status==="closed"){ status="closed"; countClosed++; }
+      else  { status="not_set"; }
+
+      rows.push({h,time,endT,status,booking});
+    }
+
+    $("dvStTotal").textContent     = countConfirmed+countPending;
+    $("dvStConfirmed").textContent = countConfirmed;
+    $("dvStReview").textContent    = countReview;
+    $("dvStPending").textContent   = countPending;
+    $("dvStOpen").textContent      = countOpen;
+    $("dvStClosed").textContent    = countClosed;
+
+    $("dvList").innerHTML = `<div>${rows.map(r=>renderDailyRow(r,lookupHistory)).join("")}</div>`;
+
+    // Wire row actions
+    $("dvList").querySelectorAll("[data-dv-manual]").forEach(b=>{
+      b.addEventListener("click",()=>openManualModal(date,b.dataset.dvManual));
+    });
+    $("dvList").querySelectorAll("[data-dv-resch]").forEach(b=>{
+      b.addEventListener("click",()=>{
+        const bk=bookingByCode[b.dataset.dvResch];
+        if(bk) openResch(bk); else showToast("Booking not found.",true);
+      });
+    });
+    $("dvList").querySelectorAll("[data-dv-cancel]").forEach(b=>{
+      b.addEventListener("click",()=>{
+        const bk=bookingByCode[b.dataset.dvCancel];
+        if(bk) cancelBooking(bk); else showToast("Booking not found.",true);
+      });
+    });
+  } catch(e){
+    console.error(e);
+    $("dvList").innerHTML=`<div class="estate">❌ Failed to load Daily View.</div>`;
+  }
+}
+
+function renderDailyRow(r,lookupHistory){
+  const {time,endT,status,booking}=r;
+  let pill,info,actions;
+
+  if((status==="booked"||status==="pending") && booking){
+    const phone=booking.customerPhone||"";
+    const hist=lookupHistory(phone,booking.lineUserId);
+    const visitLabel = hist.confirmedCount<=1
+      ? `<span class="dv-badge new">New customer</span>`
+      : `<span class="dv-badge rep">Visits: ${hist.confirmedCount} times</span>`;
+    const cancelledLabel = hist.cancelledCount>0 ? `<span class="dv-badge">Cancelled: ${hist.cancelledCount}</span>` : "";
+    const passLabel = hist.activePassNames.length
+      ? `<span class="dv-badge pass">${esc(hist.activePassNames[0])}</span>`
+      : "";
+    pill = status==="booked"
+      ? `<span class="sstatus ss-booked">${esc(booking.paymentStatus||"booked")}</span>`
+      : `<span class="sstatus ss-booked" style="background:#3d2e00;color:var(--warn)">pending</span>`;
+    info = `<div class="dv-info">
+      <strong>${esc(booking.customerName||"—")} · ${esc(phone||"—")}${visitLabel}${cancelledLabel}${passLabel}</strong>
+      <div class="dv-meta">${esc(booking.bookingCode||"—")} · ${esc(booking.bookingType||"—")} · ${esc(booking.bookingStatus||"—")}${hist.lastDate?` · last: ${esc(hist.lastDate)}`:""}</div>
+    </div>`;
+    const canResch=!["cancelled","expired","completed","no_show"].includes(booking.bookingStatus);
+    const canCancel=booking.bookingStatus!=="cancelled"&&booking.paymentStatus!=="paid";
+    actions = `<div class="dv-actions">
+      ${canResch?`<button class="stoggle st-open" data-dv-resch="${esc(booking.bookingCode)}" style="padding:4px 9px;font-size:.7rem">Reschedule</button>`:""}
+      ${canCancel?`<button class="stoggle st-close" data-dv-cancel="${esc(booking.bookingCode)}" style="padding:4px 9px;font-size:.7rem">Cancel</button>`:""}
+    </div>`;
+  } else if(status==="booked"||status==="pending"){
+    // booking_slot says reserved but matching booking doc not found (data drift)
+    pill = `<span class="sstatus ss-booked">${status}</span>`;
+    info = `<div class="dv-info"><strong>—</strong><div class="dv-meta">Slot reserved but booking doc not found.</div></div>`;
+    actions = `<div class="dv-actions"></div>`;
+  } else if(status==="open"){
+    pill = `<span class="sstatus ss-open">Open</span>`;
+    info = `<div class="dv-info"><div class="dv-meta">Available for booking</div></div>`;
+    actions = `<div class="dv-actions"><button class="stoggle st-create" data-dv-manual="${esc(time)}" style="padding:4px 9px;font-size:.7rem">+ Manual Book</button></div>`;
+  } else if(status==="closed"){
+    pill = `<span class="sstatus ss-closed">Closed</span>`;
+    info = `<div class="dv-info"><div class="dv-meta">Not available</div></div>`;
+    actions = `<div class="dv-actions"></div>`;
+  } else {
+    pill = `<span class="sstatus ss-none">Not set</span>`;
+    info = `<div class="dv-info"><div class="dv-meta">Open in Slot Manager first</div></div>`;
+    actions = `<div class="dv-actions"></div>`;
+  }
+
+  return `<div class="dvrow"><span class="stime">${esc(time)} – ${esc(endT)}</span>${pill}${info}${actions}</div>`;
+}
+
+// Date controls
+$("dvDate").addEventListener("change",loadDailyView);
+$("dvPrev").addEventListener("click",()=>{
+  $("dvDate").value=shiftDate($("dvDate").value||todayISOString(),-1); loadDailyView();
+});
+$("dvNext").addEventListener("click",()=>{
+  $("dvDate").value=shiftDate($("dvDate").value||todayISOString(),1); loadDailyView();
+});
+$("dvToday").addEventListener("click",()=>{
+  $("dvDate").value=todayISOString(); loadDailyView();
+});
+$("dvRefresh").addEventListener("click",loadDailyView);
+$("dvAddManualBtn").addEventListener("click",()=>{
+  if(!$("dvDate").value) $("dvDate").value=todayISOString();
+  openManualModal($("dvDate").value,null);
+});
+$("dvGenerateSlotAlert").addEventListener("click",generateDailySlotAlert);
+$("dvCopySlotAlert").addEventListener("click",copyDailySlotAlert);
+
+function isActiveBookingSlot(bs,now=new Date()){
+  if(!bs) return false;
+  if(bs.bookingStatus==="confirmed") return true;
+  if(bs.bookingStatus==="pending_payment"){
+    const exp=bs.expiresAt?.toDate?.();
+    return !exp || exp>now;
+  }
+  if(bs.bookingStatus==="rescheduled"){
+    return bs.active===true || bs.slotActive===true || bs.isActive===true;
+  }
+  return false;
+}
+
+function buildDailySlotAlertText(){
+  const date=$("dvDate").value||todayISOString();
+  if(!dvSlotAlertData || dvSlotAlertData.date!==date) return null;
+
+  const now=new Date();
+  const slots=[];
+  for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
+    const time=fH(h),av=dvSlotAlertData.avByTime[time]||null,bs=dvSlotAlertData.bsByHour[time]||null;
+    if(av?.status==="open" && !isActiveBookingSlot(bs,now)){
+      slots.push({h,label:`${time}–${fEnd(h)}`});
+    }
+  }
+
+  if(!slots.length){
+    return `🎾 Ultra Tennis วันที่ ${date} เต็มแล้วทุกช่วงเวลา\n\nสามารถเช็กวันถัดไป หรือทักสอบถามคิวหลุดได้ครับ`;
+  }
+
+  const offPeak=slots.filter(s=>s.h>=9&&s.h<=15).map(s=>s.label);
+  const prime=slots.filter(s=>s.h>=18&&s.h<22).map(s=>s.label);
+  const lines=[
+    "🎾 Ultra Tennis วันนี้ยังมีช่วงว่าง!",
+    "",
+    `วันที่: ${date}`,
+    "",
+    `ยังจองได้ ${slots.length} ช่วงเวลา:`,
+    ...slots.map(s=>`• ${s.label}`),
+    ""
+  ];
+  if(offPeak.length) lines.push(`ช่วง Off-Peak ยังว่าง: ${offPeak.join(", ")}`);
+  if(prime.length) lines.push(`ช่วงเย็น/หลังเลิกงานยังว่าง: ${prime.join(", ")}`);
+  if(offPeak.length||prime.length) lines.push("");
+  lines.push("เหมาะสำหรับซ้อมตี ซ้อมฟุตเวิร์ก หรือมาเก็บชั่วโมงแบบส่วนตัว","จองผ่าน LINE ได้เลยครับ");
+  return lines.join("\n");
+}
+
+function generateDailySlotAlert(){
+  const text=buildDailySlotAlertText();
+  if(text==null){ showToast("Load Daily View first.",true); return ""; }
+  $("dvSlotAlertText").value=text;
+  return text;
+}
+
+async function copyDailySlotAlert(){
+  const text=generateDailySlotAlert();
+  if(!text) return;
+  try{
+    await navigator.clipboard.writeText(text);
+  }catch(_){
+    $("dvSlotAlertText").focus();
+    $("dvSlotAlertText").select();
+    document.execCommand("copy");
+  }
+  showToast("Copied slot alert text");
+}
+
+// ── MANUAL BOOKING (Phase 2.3) ──────────────────────────────────
+// Admin creates a confirmed booking for a walk-in customer. Same booking_slots
+// + bookings shape as customer bookings, so the existing list, reschedule,
+// cancel, and Mark Paid all work on manual bookings too.
+// NOTE: We intentionally do NOT fire LINE notifications here — lineUserId is
+// "manual" (placeholder). Subsequent admin actions guard customer notifications
+// with canNotifyLine(), so manual rows never call the LINE notify helper.
+
+const MANUAL_PRICE = {
+  "Manual Single Use":350, "Paid Outside":350, "Pay at Counter":350,
+  "Ultra Pass Manual":0,   "Off-Peak Manual":0,
+};
+const MANUAL_PACKAGE_TYPES=new Set(["Ultra Pass Manual","Off-Peak Manual"]);
+function manualPaymentStatusForType(bookingType){
+  return MANUAL_PACKAGE_TYPES.has(bookingType) ? "package" : "unpaid";
+}
+function syncManualPaymentStatus(){
+  const status=manualPaymentStatusForType($("manType").value);
+  $("manPayStatus").value=status;
+  $("manHint").textContent=`Payment status will be saved as ${status}.`;
+}
+
+// Populate the start-time dropdown once at module load
+(function fillManTimes(){
+  const sel=$("manTime");
+  for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
+    const o=document.createElement("option");
+    o.value=fH(h); o.textContent=`${fH(h)} – ${fEnd(h)}`;
+    sel.append(o);
+  }
+})();
+
+function openManualModal(prefillDate,prefillTime){
+  $("manDate").value = prefillDate || $("dvDate").value || todayISOString();
+  $("manTime").value = prefillTime || fH(OPEN_HOUR);
+  $("manName").value="";
+  $("manPhone").value="";
+  $("manType").value="Manual Single Use";
+  $("manPayStatus").value="unpaid"; // safe default vs strict Firestore rules
+  $("manPayStatus").disabled=true;
+  $("manNote").value="";
+  $("manHistory").style.display="none";
+  $("manHistory").textContent="";
+  $("manHint").textContent="";
+  $("manConfirm").disabled=false;
+  $("manConfirm").textContent="Save Manual Booking";
+  syncManualPaymentStatus();
+  $("manModal").style.display="flex";
+}
+function closeManualModal(){ $("manModal").style.display="none"; }
+$("manClose").addEventListener("click",closeManualModal);
+$("manCancel").addEventListener("click",closeManualModal);
+$("manModal").addEventListener("click",e=>{ if(e.target===$("manModal")) closeManualModal(); });
+$("manType").addEventListener("change",syncManualPaymentStatus);
+
+// Debounced phone history lookup (350ms, min 4 digits)
+let manPhoneTimer=null;
+$("manPhone").addEventListener("input",()=>{
+  clearTimeout(manPhoneTimer);
+  const raw=$("manPhone").value.trim();
+  const np=normalizePhone(raw);
+  if(np.length<4){ $("manHistory").style.display="none"; return; }
+  manPhoneTimer=setTimeout(()=>doManualPhoneLookup(np),350);
+});
+
+async function doManualPhoneLookup(np){
+  try{
+    const [snapNorm,snapRaw,pkgSnap]=await Promise.all([
+      getDocs(query(collection(db,"bookings"),where("customerPhoneNormalized","==",np))),
+      getDocs(query(collection(db,"bookings"),where("customerPhone","==",$("manPhone").value.trim()))),
+      getDocs(query(collection(db,"customer_packages"),where("status","==","active"))),
+    ]);
+    const seen=new Set(); const docs=[];
+    [...snapNorm.docs,...snapRaw.docs].forEach(d=>{
+      if(seen.has(d.id)) return;
+      seen.add(d.id); docs.push(d.data());
+    });
+    if(!docs.length){
+      $("manHistory").style.display="block";
+      $("manHistory").innerHTML=`<strong>New customer</strong> — no previous bookings found.`;
+      return;
+    }
+    docs.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    const latest=docs[0];
+    const confirmed=docs.filter(x=>x.bookingStatus==="confirmed").length;
+    const cancelled=docs.filter(x=>x.bookingStatus==="cancelled").length;
+    const lastDate=docs.reduce((m,x)=>(x.date||"")>m?(x.date||""):m,"");
+    const activePasses=pkgSnap.docs.map(d=>d.data()).filter(p=>{
+      const pnp=p.customerPhoneNormalized||normalizePhone(p.customerPhone);
+      if(pnp&&pnp===np) return true;
+      if(latest.lineUserId&&latest.lineUserId!=="guest"&&latest.lineUserId!=="manual"&&p.lineUserId===latest.lineUserId) return true;
+      return false;
+    });
+    const passLabel=activePasses.length
+      ? ` · Active: ${activePasses.map(p=>p.packageName||"").filter(Boolean).join(", ")}`
+      : "";
+    $("manHistory").style.display="block";
+    $("manHistory").innerHTML=
+      `<strong>${esc(latest.customerName||"—")}</strong> · Visits ${confirmed} · Cancelled ${cancelled}`+
+      `${lastDate?` · Last: ${esc(lastDate)}`:""}${esc(passLabel)}`;
+    // Auto-fill customer name if empty
+    if(!$("manName").value.trim() && latest.customerName){
+      $("manName").value=latest.customerName;
+    }
+  } catch(e){
+    console.warn("Manual phone lookup failed:",e);
+  }
+}
+
+function genManualCode(){
+  return `MANUAL-${new Date().getFullYear()}-${Math.floor(1000+Math.random()*9000)}`;
+}
+
+$("manConfirm").addEventListener("click",async()=>{
+  const name=$("manName").value.trim();
+  const phone=$("manPhone").value.trim();
+  const date=$("manDate").value;
+  const time=$("manTime").value;
+  const bookingType=$("manType").value;
+  const paymentStatus=manualPaymentStatusForType(bookingType);
+  $("manPayStatus").value=paymentStatus;
+  const note=$("manNote").value.trim();
+
+  if(!name)  { $("manName").focus();  showToast("Customer name required.",true); return; }
+  if(!phone) { $("manPhone").focus(); showToast("Customer phone required.",true); return; }
+  if(!date)  { $("manDate").focus();  showToast("Date required.",true); return; }
+  if(!time)  { $("manTime").focus();  showToast("Start time required.",true); return; }
+
+  const startH=parseInt(time,10);
+  const endTime=fEnd(startH);
+  const code=genManualCode();
+  const adminName=sessionStorage.getItem("adminName")||"admin";
+  const price=MANUAL_PRICE[bookingType] ?? 350;
+  const slotId=`${RESOURCE_ID}_${date}_${time.replace(":","")}`;
+  const slotRef=doc(db,"booking_slots",slotId);
+  const availRef=doc(db,"available_slots",slotId);
+  const bookingRef=doc(collection(db,"bookings"));
+
+  const btn=$("manConfirm"); btn.disabled=true; btn.textContent="Saving...";
+  try{
+    await runTransaction(db,async t=>{
+      const [slotSnap,availSnap]=await Promise.all([t.get(slotRef),t.get(availRef)]);
+      if(!availSnap.exists())
+        throw new Error("Slot is not set. Open it in Slot Manager first.");
+      if(availSnap.data().status!=="open")
+        throw new Error("Slot is closed. Open it in Slot Manager first.");
+      if(slotSnap.exists()){
+        const sd=slotSnap.data();
+        if(sd.bookingStatus==="confirmed") throw new Error("Slot is already booked.");
+        if(sd.bookingStatus==="pending_payment"){
+          const exp=sd.expiresAt?.toDate?.();
+          if(!exp||exp>new Date()) throw new Error("Slot is held by a pending payment.");
+        }
+        // "rescheduled" and "cancelled" slot rows are released → allowed to overwrite.
+      }
+
+      t.set(bookingRef,{
+        bookingCode:             code,
+        resourceId:              RESOURCE_ID,
+        bookingType:             bookingType,
+        lineUserId:              "manual",
+        lineDisplayName:         "Manual Booking",
+        customerName:            name,
+        customerPhone:           phone,
+        customerPhoneNormalized: normalizePhone(phone),
+        customerNote:            note,
+        date:                    date,
+        startTime:               time,
+        endTime:                 endTime,
+        durationHours:           1,
+        price:                   price,
+        bookingStatus:           "confirmed",
+        paymentStatus:           paymentStatus,
+        source:                  "admin_manual",
+        createdBy:               adminName,
+        createdAt:               serverTimestamp(),
+        updatedAt:               serverTimestamp(),
+      });
+      t.set(slotRef,{
+        bookingCode:    code,
+        resourceId:     RESOURCE_ID,
+        date:           date,
+        hour:           time,
+        bookingStatus:  "confirmed",
+        paymentStatus:  paymentStatus,
+        source:         "admin_manual",
+        createdBy:      adminName,
+        createdAt:      serverTimestamp(),
+        updatedAt:      serverTimestamp(),
+      });
+    });
+
+    showToast(`✓ Manual booking ${code} saved`);
+    closeManualModal();
+    // Reload Daily View if currently looking at the same date
+    if(dvLastLoad===date) loadDailyView();
+    // Best-effort: refresh main bookings list if it's been loaded
+    try { loadBookings(); } catch(_) { /* non-fatal */ }
+  } catch(e){
+    console.error(e);
+    showToast(e.message||"Failed to save manual booking.",true);
+  } finally {
+    btn.disabled=false; btn.textContent="Save Manual Booking";
+  }
+});
+
+// ── RESCHEDULE ───────────────────────────────────────────────────
+function openResch(b){
+  reschBooking=b;reschTime=null;
+  const isPending=isPendingRescheduleBooking(b);
+  $("rCode").textContent=b.bookingCode;
+  $("rOldTime").textContent=`${isPending?"Original":"Current"}: ${b.pendingRescheduleFromDate||b.previousDate||b.date} · ${b.pendingRescheduleFromStartTime||b.previousStartTime||b.startTime}–${b.pendingRescheduleFromEndTime||b.previousEndTime||b.endTime}`;
+  $("rCust").textContent=`${b.customerName} · ${b.customerPhone}`;
+  $("rDate").value="";$("rTimeGrid").innerHTML="";$("rHint").textContent="";
+  $("mPendingResch").style.display=isPending?"none":"inline-block";
+  $("mConfirm").textContent=isPending?"Assign New Slot":"Confirm Reschedule";
+  $("mConfirm").disabled=true;$("reschModal").style.display="flex";
+}
+function closeModal(){$("reschModal").style.display="none";reschBooking=null;reschTime=null;}
+$("mClose").addEventListener("click",closeModal);$("mCancel").addEventListener("click",closeModal);
+$("reschModal").addEventListener("click",e=>{if(e.target===$("reschModal"))closeModal();});
+
+async function moveToPendingReschedule(){
+  if(!reschBooking) return;
+  if(isPendingRescheduleBooking(reschBooking)){showToast("Booking is already pending reschedule.",true);return;}
+  if(!reschBooking.date||!reschBooking.startTime){showToast("Booking date/time is missing.",true);return;}
+  if(!confirm(`Move ${reschBooking.bookingCode||"this booking"} to Pending Reschedule?\n\nThe original slot will be released and no new slot will be assigned yet.`)) return;
+  const btn=$("mPendingResch");btn.disabled=true;btn.textContent="Moving...";
+  const oldSlId=`${RESOURCE_ID}_${reschBooking.date}_${reschBooking.startTime.replace(":","")}`;
+  try{
+    const batch=writeBatch(db);
+    batch.update(doc(db,"bookings",reschBooking.id),{
+      bookingStatus:"rescheduled",
+      pendingReschedule:true,
+      pendingRescheduleStatus:"pending",
+      pendingRescheduleAt:serverTimestamp(),
+      pendingRescheduleBy:sessionStorage.getItem("adminName")||"admin",
+      pendingRescheduleFromDate:reschBooking.pendingRescheduleFromDate||reschBooking.previousDate||reschBooking.date,
+      pendingRescheduleFromStartTime:reschBooking.pendingRescheduleFromStartTime||reschBooking.previousStartTime||reschBooking.startTime,
+      pendingRescheduleFromEndTime:reschBooking.pendingRescheduleFromEndTime||reschBooking.previousEndTime||reschBooking.endTime,
+      updatedAt:serverTimestamp(),
+    });
+    batch.update(doc(db,"booking_slots",oldSlId),{
+      bookingStatus:"rescheduled",
+      paymentStatus:reschBooking.paymentStatus,
+      pendingRescheduleReleasedAt:serverTimestamp(),
+      updatedAt:serverTimestamp(),
+    });
+    await batch.commit();
+    showToast(`Pending reschedule: ${reschBooking.bookingCode||""}`);
+    closeModal();await loadBookings();
+    if($("tabDaily").style.display!=="none"&&$("dvDate").value===reschBooking.date) loadDailyView();
+  }catch(e){
+    console.error(e);showToast(e.message||"Move to pending reschedule failed.",true);
+    btn.disabled=false;btn.textContent="Move to Pending";
+  }
+}
+$("mPendingResch").addEventListener("click",moveToPendingReschedule);
+
+$("mLoadSlots").addEventListener("click",async()=>{
+  const d=$("rDate").value;if(!d){showToast("Pick a new date.",true);return;}
+  const btn=$("mLoadSlots");btn.disabled=true;btn.textContent="Loading...";
+  $("rTimeGrid").innerHTML="";$("rHint").textContent="";$("mConfirm").disabled=true;reschTime=null;
+  try{
+    const[avSnap,bkSnap]=await Promise.all([
+      getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID),where("status","==","open"))),
+      getDocs(query(collection(db,"booking_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)))
+    ]);
+    const openSet=new Set();avSnap.forEach(x=>openSet.add(x.data().startTime));
+    const blocked=new Set();const now=new Date();
+    bkSnap.forEach(x=>{const bd=x.data();if(bd.bookingCode===reschBooking?.bookingCode)return;if(bd.bookingStatus==="confirmed")blocked.add(bd.hour);if(bd.bookingStatus==="pending_payment"){const exp=bd.expiresAt?.toDate?.();if(exp&&exp>now)blocked.add(bd.hour);}});
+
+    if(!openSet.size){$("rTimeGrid").innerHTML=`<p style="color:var(--m);font-size:.78rem;grid-column:1/-1">No open slots. Open them in Slot Manager first.</p>`;return;}
+
+    $("rTimeGrid").innerHTML=allH().map(h=>{
+      const time=fH(h);
+      const dis=!openSet.has(time)||blocked.has(time)||(!isPendingRescheduleBooking(reschBooking)&&time===reschBooking?.startTime&&d===reschBooking?.date);
+      return `<button class="mtbtn${dis?" disabled":""}" data-time="${time}" ${dis?"disabled":""} title="${!openSet.has(time)?"Not opened":blocked.has(time)?"Booked":"Available"}">${time}</button>`;
+    }).join("");
+
+    $("rTimeGrid").querySelectorAll(".mtbtn:not(:disabled)").forEach(btn=>{
+      btn.addEventListener("click",()=>{
+        $("rTimeGrid").querySelectorAll(".mtbtn").forEach(b=>b.classList.remove("sel"));
+        btn.classList.add("sel");reschTime=btn.dataset.time;
+        const endH=Number(reschTime.split(":")[0])+1;
+        $("rHint").textContent=`Selected: ${reschTime} – ${endH>=24?"00:00":`${String(endH).padStart(2,"0")}:00`}`;
+        $("mConfirm").disabled=false;
+      });
+    });
+  }catch(e){console.error(e);showToast("Failed to load slots.",true);}
+  finally{btn.disabled=false;btn.textContent="Load Available Slots →";}
+});
+
+$("mConfirm").addEventListener("click",async()=>{
+  if(!reschBooking||!reschTime)return;
+  const newDate=$("rDate").value;
+  const endH=Number(reschTime.split(":")[0])+1;
+  const newEnd=endH>=24?"00:00":`${String(endH).padStart(2,"0")}:00`;
+  const oldSlId=`${RESOURCE_ID}_${reschBooking.date}_${reschBooking.startTime.replace(":","")}`; 
+  const newSlId=`${RESOURCE_ID}_${newDate}_${reschTime.replace(":","")}`; 
+  const avSlId =`${RESOURCE_ID}_${newDate}_${reschTime.replace(":","")}`; 
+  const wasPendingReschedule=isPendingRescheduleBooking(reschBooking);
+  const nextBookingStatus=wasPendingReschedule?"confirmed":reschBooking.bookingStatus;
+
+  const btn=$("mConfirm");btn.disabled=true;btn.textContent=wasPendingReschedule?"Assigning...":"Rescheduling...";
+  try{
+    await runTransaction(db,async t=>{
+      const[avSnap,newSnap]=await Promise.all([t.get(doc(db,"available_slots",avSlId)),t.get(doc(db,"booking_slots",newSlId))]);
+      if(!avSnap.exists()||avSnap.data().status!=="open") throw new Error("Selected slot is not open.");
+      if(newSnap.exists()){
+        const nd=newSnap.data();
+        if(nd.bookingCode!==reschBooking.bookingCode){
+          if(nd.bookingStatus==="confirmed") throw new Error("Slot is already booked.");
+          if(nd.bookingStatus==="pending_payment"){const exp=nd.expiresAt?.toDate?.();if(!exp||exp>new Date())throw new Error("Slot is temporarily held.");}
+        }
+      }
+      const bookingUpdate={
+        date:newDate,startTime:reschTime,endTime:newEnd,
+        bookingStatus:nextBookingStatus,
+        previousDate:reschBooking.pendingRescheduleFromDate||reschBooking.previousDate||reschBooking.date,
+        previousStartTime:reschBooking.pendingRescheduleFromStartTime||reschBooking.previousStartTime||reschBooking.startTime,
+        previousEndTime:reschBooking.pendingRescheduleFromEndTime||reschBooking.previousEndTime||reschBooking.endTime,
+        rescheduledAt:serverTimestamp(),
+        updatedAt:serverTimestamp(),
+      };
+      if(wasPendingReschedule){
+        bookingUpdate.pendingReschedule=false;
+        bookingUpdate.pendingRescheduleStatus="assigned";
+        bookingUpdate.assignedFromPendingRescheduleAt=serverTimestamp();
+      }
+      t.update(doc(db,"bookings",reschBooking.id),bookingUpdate);
+      t.update(doc(db,"booking_slots",oldSlId),{bookingStatus:"rescheduled",paymentStatus:reschBooking.paymentStatus});
+      t.set(doc(db,"booking_slots",newSlId),{bookingCode:reschBooking.bookingCode,resourceId:RESOURCE_ID,date:newDate,hour:reschTime,bookingStatus:nextBookingStatus,paymentStatus:reschBooking.paymentStatus,expiresAt:null});
+    });
+    // Fire-and-forget: notify the customer their booking was rescheduled. Must not block admin flow.
+    if (canNotifyLine(reschBooking.lineUserId) && window.sendLineNotification) {
+      window.sendLineNotification({
+        eventId: `${reschBooking.bookingCode}_booking_rescheduled_customer_${newDate}_${reschTime}`,
+        type: "booking_rescheduled_customer",
+        lineUserId: reschBooking.lineUserId,
+        bookingCode: reschBooking.bookingCode,
+        previousDate: reschBooking.date,
+        previousStartTime: reschBooking.startTime,
+        previousEndTime: reschBooking.endTime,
+        date: newDate,
+        startTime: reschTime,
+        endTime: newEnd
+      });
+    }
+    showToast(`📅 ${reschBooking.bookingCode} → ${newDate} ${reschTime}`);
+    closeModal();await loadBookings();
+  }catch(e){console.error(e);showToast(e.message||"Reschedule failed.",true);btn.disabled=false;btn.textContent=wasPendingReschedule?"Assign New Slot":"Confirm Reschedule";}
+});
+
+// ── TOAST ────────────────────────────────────────────────────────
+function showToast(msg,isErr=false){
+  const t=$("toast");t.textContent=msg;t.className=`toast show${isErr?" err":""}`;
+  setTimeout(()=>t.classList.remove("show"),3200);
+}
+
+// ── BOOT ─────────────────────────────────────────────────────────
+const todayISO=new Date().toISOString().slice(0,10);
+["weekDate","dayDate","viewDate"].forEach(id=>{const el=$(id);if(el)el.value=todayISO;});
+if(!checkSession()){/* show login */}else{loadBookings();}
+</script>
+</body>
+</html>
