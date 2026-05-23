@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Ultra Tennis — ห้องซ้อมเทนนิส Indoor ที่กว้าง คุ้ม จองง่าย 350 บาท/ชั่วโมง พร้อมไม้ฟรี น้ำฟรี โค้ชนอกเข้าฟรี" />
+  <meta property="og:title" content="Ultra Tennis — ห้องซ้อมเทนนิส Indoor" />
+  <meta property="og:description" content="ห้องซ้อมเทนนิส Indoor ที่กว้าง คุ้ม จองง่าย 350 บาท/ชั่วโมง พร้อมไม้ฟรี น้ำฟรี โค้ชนอกเข้าฟรี เปิดทุกวัน 06:00–00:00" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="Ultra Tennis Dark BG.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <title>Ultra Tennis — ห้องซ้อมเทนนิส Indoor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:ital,wght@0,400;0,500;0,600;0,700;0,800;1,700;1,800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --navy:       #071A33;
+      --navy-mid:   #0D2545;
+      --navy-light: #112D55;
+      --blue:       #1DA9FF;
+      --blue-2:     #2F80ED;
+      --yellow:     #FFC72C;
+      --lime:       #C9FF2E;
+      --white:      #FFFFFF;
+      --gray:       #D9E2F1;
+      --gray-dim:   #9AAFCD;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Prompt', sans-serif;
+      background: var(--navy);
+      color: var(--white);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ===== NAV ===== */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(7, 26, 51, 0.96);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(29, 169, 255, 0.15);
+    }
+
+    .nav-inner {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 10px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .nav-logo { height: 50px; width: auto; display: block; flex-shrink: 0; }
+
+    .nav-right {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--gray-dim);
+      text-decoration: none;
+      font-size: 0.88rem;
+      font-weight: 500;
+      transition: color 0.2s;
+      white-space: nowrap;
+    }
+
+    .nav-links a:hover { color: var(--white); }
+
+    .nav-actions { display: flex; align-items: center; gap: 10px; }
+
+    /* ===== BUTTONS ===== */
+    .btn {
+      display: inline-block;
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-family: 'Prompt', sans-serif;
+      font-weight: 700;
+      font-size: 0.9rem;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+      transition: transform 0.15s, box-shadow 0.15s, background 0.15s;
+      white-space: nowrap;
+      text-align: center;
+    }
+
+    .btn:active { transform: scale(0.97); }
+
+    .btn-yellow { background: var(--yellow); color: var(--navy); }
+    .btn-yellow:hover {
+      background: #FFD657;
+      box-shadow: 0 4px 22px rgba(255, 199, 44, 0.45);
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--white);
+      border: 2px solid rgba(29,169,255,0.55);
+    }
+    .btn-outline:hover {
+      border-color: var(--blue);
+      background: rgba(29,169,255,0.1);
+      box-shadow: 0 0 18px rgba(29,169,255,0.25);
+    }
+
+    .btn-lg {
+      padding: 14px 34px;
+      font-size: 1.05rem;
+      border-radius: 10px;
+    }
+
+    /* ===== HERO ===== */
+    #hero {
+      position: relative;
+      overflow: hidden;
+      padding: 88px 24px 96px;
+      background: linear-gradient(155deg, #0C2647 0%, #071A33 55%, #071A33 100%);
+      text-align: center;
+    }
+
+    /* diagonal streaks — brand visual language */
+    #hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(126deg, transparent 22%, rgba(29,169,255,0.07) 38%, transparent 54%),
+        linear-gradient(126deg, transparent 52%, rgba(29,169,255,0.04) 66%, transparent 80%);
+      pointer-events: none;
+    }
+
+    #hero::after {
+      content: '';
+      position: absolute;
+      top: -80px;
+      right: -80px;
+      width: 420px;
+      height: 420px;
+      background: radial-gradient(circle, rgba(29,169,255,0.11) 0%, transparent 68%);
+      pointer-events: none;
+    }
+
+    .hero-inner {
+      position: relative;
+      z-index: 1;
+      max-width: 740px;
+      margin: 0 auto;
+    }
+
+    .hero-badge {
+      display: inline-block;
+      background: rgba(29,169,255,0.12);
+      border: 1px solid rgba(29,169,255,0.38);
+      color: var(--blue);
+      font-size: 0.78rem;
+      font-weight: 700;
+      padding: 5px 14px;
+      border-radius: 20px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 22px;
+    }
+
+    .hero-title {
+      font-size: clamp(2.4rem, 6.5vw, 3.8rem);
+      font-weight: 800;
+      line-height: 1.12;
+      color: var(--white);
+      margin-bottom: 16px;
+    }
+
+    .hero-title .accent { color: var(--yellow); }
+
+    .hero-sub {
+      font-size: clamp(1rem, 2.4vw, 1.18rem);
+      color: var(--gray-dim);
+      margin-bottom: 28px;
+      font-weight: 400;
+    }
+
+    .hero-price-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255,199,44,0.1);
+      border: 1px solid rgba(255,199,44,0.32);
+      color: var(--yellow);
+      font-size: 1.05rem;
+      font-weight: 700;
+      padding: 9px 22px;
+      border-radius: 8px;
+      margin-bottom: 36px;
+    }
+
+    .hero-price-pill .dot {
+      width: 5px; height: 5px;
+      background: var(--yellow);
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .hero-ctas {
+      display: flex;
+      gap: 14px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .hero-perks {
+      margin-top: 40px;
+      display: flex;
+      justify-content: center;
+      gap: 8px 28px;
+      flex-wrap: wrap;
+    }
+
+    .perk {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--gray-dim);
+      font-size: 0.86rem;
+    }
+
+    .perk .tick { color: var(--lime); font-weight: 800; font-size: 0.9rem; }
+
+    /* ===== SHARED SECTION STYLES ===== */
+    .sec { padding: 80px 24px; }
+
+    .sec-inner {
+      max-width: 1120px;
+      margin: 0 auto;
+    }
+
+    .sec-label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: 10px;
+    }
+
+    .sec-title {
+      font-size: clamp(1.7rem, 4vw, 2.5rem);
+      font-weight: 800;
+      color: var(--white);
+      line-height: 1.18;
+      margin-bottom: 10px;
+    }
+
+    .sec-title .accent { color: var(--yellow); }
+
+    .sec-sub {
+      color: var(--gray-dim);
+      font-size: 0.98rem;
+      max-width: 540px;
+      line-height: 1.7;
+    }
+
+    .stripe {
+      width: 44px; height: 3px;
+      background: linear-gradient(90deg, var(--blue), var(--yellow));
+      border-radius: 2px;
+      margin: 18px 0 36px;
+    }
+
+    /* ===== WHAT IS ===== */
+    #what { background: var(--navy-mid); }
+
+    .note-subtle {
+      margin-top: 24px;
+      font-size: 0.8rem;
+      color: rgba(154,175,205,0.6);
+      padding: 10px 14px;
+      border-left: 2px solid rgba(29,169,255,0.2);
+      line-height: 1.5;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+      gap: 18px;
+    }
+
+    .feat-card {
+      background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(29,169,255,0.16);
+      border-radius: 14px;
+      padding: 28px 24px;
+      transition: border-color 0.22s, transform 0.22s;
+    }
+
+    .feat-card:hover {
+      border-color: rgba(29,169,255,0.42);
+      transform: translateY(-3px);
+    }
+
+    .feat-icon { font-size: 2rem; margin-bottom: 14px; display: block; }
+
+    .feat-title {
+      font-size: 1.02rem;
+      font-weight: 700;
+      color: var(--white);
+      margin-bottom: 6px;
+    }
+
+    .feat-desc {
+      font-size: 0.88rem;
+      color: var(--gray-dim);
+      line-height: 1.65;
+    }
+
+    /* ===== PRICING ===== */
+    #pricing { background: var(--navy); }
+
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 16px;
+    }
+
+    .price-card {
+      background: var(--navy-mid);
+      border: 1px solid rgba(29,169,255,0.18);
+      border-radius: 16px;
+      padding: 28px 20px 24px;
+      position: relative;
+      transition: border-color 0.22s, transform 0.22s, box-shadow 0.22s;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .price-card:hover {
+      border-color: var(--blue);
+      transform: translateY(-4px);
+      box-shadow: 0 10px 36px rgba(29,169,255,0.14);
+    }
+
+    .price-card.hot {
+      border-color: var(--yellow);
+      background: linear-gradient(148deg, #0F2D56 0%, #0D2545 100%);
+    }
+
+    .price-card.hot:hover {
+      border-color: #FFD657;
+      box-shadow: 0 10px 36px rgba(255,199,44,0.18);
+    }
+
+    .price-badge {
+      position: absolute;
+      top: -11px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--yellow);
+      color: var(--navy);
+      font-size: 0.68rem;
+      font-weight: 800;
+      padding: 3px 12px;
+      border-radius: 20px;
+      white-space: nowrap;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .price-name {
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--gray-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 12px;
+    }
+
+    .price-amount {
+      font-size: 2.1rem;
+      font-weight: 800;
+      color: var(--white);
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+
+    .price-amount sup {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--yellow);
+      vertical-align: super;
+      margin-right: 2px;
+    }
+
+    .price-period {
+      font-size: 0.8rem;
+      color: var(--gray-dim);
+      margin-bottom: 18px;
+    }
+
+    .price-perks {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      margin-top: auto;
+    }
+
+    .price-perks li {
+      font-size: 0.84rem;
+      color: var(--gray);
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      line-height: 1.5;
+    }
+
+    .price-perks li::before {
+      content: '✓';
+      color: var(--lime);
+      font-weight: 800;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    /* ===== HOW IT WORKS ===== */
+    #how { background: var(--navy-mid); }
+
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 24px;
+    }
+
+    .step { text-align: center; padding: 8px 8px 0; }
+
+    .step-num {
+      width: 54px; height: 54px;
+      background: linear-gradient(135deg, var(--blue-2), var(--blue));
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.35rem;
+      font-weight: 800;
+      color: var(--white);
+      margin: 0 auto 18px;
+      box-shadow: 0 0 24px rgba(29,169,255,0.35);
+    }
+
+    .step-title {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--white);
+      margin-bottom: 8px;
+    }
+
+    .step-desc {
+      font-size: 0.87rem;
+      color: var(--gray-dim);
+      line-height: 1.65;
+    }
+
+    /* ===== CTA SECTION ===== */
+    #cta {
+      background: linear-gradient(148deg, #0C2849 0%, #0D2545 100%);
+      position: relative;
+      overflow: hidden;
+      text-align: center;
+    }
+
+    #cta::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(128deg, transparent 28%, rgba(29,169,255,0.06) 46%, transparent 62%);
+      pointer-events: none;
+    }
+
+    #cta::after {
+      content: '';
+      position: absolute;
+      bottom: -90px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 600px; height: 220px;
+      background: radial-gradient(ellipse, rgba(29,169,255,0.09) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .cta-inner {
+      position: relative;
+      z-index: 1;
+      max-width: 620px;
+      margin: 0 auto;
+    }
+
+    .cta-title {
+      font-size: clamp(1.9rem, 5vw, 2.9rem);
+      font-weight: 800;
+      color: var(--white);
+      line-height: 1.18;
+      margin-bottom: 12px;
+    }
+
+    .cta-title .accent { color: var(--yellow); }
+
+    .cta-sub {
+      color: var(--gray-dim);
+      font-size: 0.98rem;
+      margin-bottom: 36px;
+    }
+
+    .cta-buttons {
+      display: flex;
+      gap: 14px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 28px;
+    }
+
+    .line-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: #06C755;
+      color: var(--white);
+      font-family: 'Prompt', sans-serif;
+      font-weight: 700;
+      font-size: 1rem;
+      padding: 14px 28px;
+      border-radius: 10px;
+      text-decoration: none;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+
+    .line-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 26px rgba(6,199,85,0.42);
+    }
+
+    .line-icon {
+      width: 24px; height: 24px;
+      background: var(--white);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.78rem;
+      font-weight: 900;
+      color: #06C755;
+      flex-shrink: 0;
+    }
+
+    .tel-link {
+      display: block;
+      margin-top: 16px;
+      color: var(--gray-dim);
+      font-size: 0.9rem;
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .tel-link:hover { color: var(--white); }
+
+    /* ===== FOOTER ===== */
+    footer {
+      background: #040F1E;
+      padding: 40px 24px;
+      border-top: 1px solid rgba(29,169,255,0.1);
+    }
+
+    .footer-inner {
+      max-width: 1120px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 24px;
+    }
+
+    .footer-logo { height: 64px; width: auto; }
+
+    .footer-right { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+
+    .footer-right a {
+      color: var(--gray-dim);
+      text-decoration: none;
+      font-size: 0.88rem;
+      transition: color 0.2s;
+    }
+
+    .footer-right a:hover { color: var(--white); }
+
+    .footer-copy {
+      font-size: 0.75rem;
+      color: rgba(217,226,241,0.35);
+      margin-top: 8px;
+    }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 768px) {
+      .nav-links { display: none; }
+
+      .feature-grid { grid-template-columns: 1fr; }
+
+      .steps-grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 520px) {
+      .pricing-grid { grid-template-columns: 1fr; }
+
+      .steps-grid { grid-template-columns: 1fr; }
+
+      .hero-ctas .btn-lg { width: 100%; }
+
+      .footer-inner { flex-direction: column; align-items: flex-start; }
+      .footer-right { align-items: flex-start; }
+    }
+
+    @media (max-width: 420px) {
+      .nav-actions .btn:first-child { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ===== NAV ===== -->
+  <nav>
+    <div class="nav-inner">
+      <img src="Ultra Tennis Dark BG.png" alt="Ultra Tennis" class="nav-logo" />
+      <div class="nav-right">
+        <ul class="nav-links">
+          <li><a href="#what">เกี่ยวกับ</a></li>
+          <li><a href="#pricing">ราคา</a></li>
+          <li><a href="#how">วิธีจอง</a></li>
+        </ul>
+        <div class="nav-actions">
+          <!-- CTA LINK 1: Check Availability -->
+          <a href="availability.html" class="btn btn-outline">เช็กเวลาว่าง</a>
+          <!-- CTA LINK 2: Book Now -->
+          <a href="booking.html" class="btn btn-yellow">จองเลย</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ===== HERO ===== -->
+  <section id="hero">
+    <div class="hero-inner">
+      <span class="hero-badge">Indoor Tennis Practice Room</span>
+      <h1 class="hero-title">
+        ห้องกว้าง ให้ครบ<br />
+        <span class="accent">ราคาเดียว</span>
+      </h1>
+      <p class="hero-sub">ห้องซ้อมเทนนิส Indoor ส่วนตัว ที่กว้าง คุ้ม และจองง่าย</p>
+      <div class="hero-price-pill">
+        <span class="dot"></span>
+        <span>เริ่มต้น 350 บาท / ชั่วโมง</span>
+        <span class="dot"></span>
+      </div>
+      <div class="hero-ctas">
+        <!-- CTA LINK 3: Book Now (hero) -->
+        <a href="booking.html" class="btn btn-yellow btn-lg">จองเลย — Book Now</a>
+        <!-- CTA LINK 4: Check Availability (hero) -->
+        <a href="availability.html" class="btn btn-outline btn-lg">เช็กเวลาว่าง</a>
+      </div>
+      <div class="hero-perks">
+        <span class="perk"><span class="tick">✓</span> ไม้ฟรี</span>
+        <span class="perk"><span class="tick">✓</span> น้ำฟรี</span>
+        <span class="perk"><span class="tick">✓</span> โค้ชนอกเข้าฟรี</span>
+        <span class="perk"><span class="tick">✓</span> ไม่มีค่าใช้จ่ายซ่อน</span>
+        <span class="perk"><span class="tick">✓</span> เปิดทุกวัน 06:00–00:00</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== WHAT IS ULTRA TENNIS ===== -->
+  <section id="what" class="sec">
+    <div class="sec-inner">
+      <p class="sec-label">About</p>
+      <h2 class="sec-title">Ultra Tennis <span class="accent">คืออะไร?</span></h2>
+      <p class="sec-sub">ห้องซ้อมเทนนิส Indoor ส่วนตัว สำหรับคนที่อยากซ้อมตี ฝึกฟอร์ม และจังหวะอย่างจริงจัง ไม่ใช่สนามเต็มหรือคอร์ตสาธารณะ — แต่เป็นพื้นที่ซ้อมที่กว้าง สะอาด และพร้อมสำหรับคุณโดยเฉพาะ</p>
+      <div class="stripe"></div>
+      <div class="feature-grid">
+        <div class="feat-card">
+          <span class="feat-icon">🎾</span>
+          <div class="feat-title">ห้องกว้าง พื้นที่จริง</div>
+          <div class="feat-desc">พื้นที่ซ้อมประมาณ 5×8 เมตร กว้างพอสำหรับการซ้อมตี ฝึกฟอร์ม จังหวะ และ footwork เบื้องต้น</div>
+        </div>
+        <div class="feat-card">
+          <span class="feat-icon">🎾</span>
+          <div class="feat-title">ไม้ฟรี + น้ำฟรี</div>
+          <div class="feat-desc">ไม่ต้องพกอุปกรณ์มาเอง เราเตรียมไม้และน้ำดื่มให้พร้อม มาถือตัวเปล่าได้เลย</div>
+        </div>
+        <div class="feat-card">
+          <span class="feat-icon">👨‍🏫</span>
+          <div class="feat-title">โค้ชนอกเข้าฟรี</div>
+          <div class="feat-desc">มีโค้ชส่วนตัวอยู่แล้ว? พาเข้ามาซ้อมด้วยกันได้เลย ไม่คิดค่าเข้าเพิ่ม</div>
+        </div>
+        <div class="feat-card">
+          <span class="feat-icon">📱</span>
+          <div class="feat-title">จองง่าย ผ่าน LINE</div>
+          <div class="feat-desc">ดูตารางว่าง จองห้อง และยืนยัน — ทำได้ง่ายๆ ผ่าน LINE OA ทักได้ทันที</div>
+        </div>
+        <div class="feat-card">
+          <span class="feat-icon">❄️</span>
+          <div class="feat-title">Indoor ปรับอากาศ</div>
+          <div class="feat-desc">ซ้อมได้สบายทุกเวลา ไม่ว่าจะร้อน ฝน หรือแดดจัด ห้องเราพร้อมเสมอ</div>
+        </div>
+        <div class="feat-card">
+          <span class="feat-icon">🏆</span>
+          <div class="feat-title">เหมาะทุกระดับ</div>
+          <div class="feat-desc">ไม่ว่าจะเพิ่งเริ่มต้น หรือเล่นมาสักพักแล้ว ห้องเราเปิดรับทุกคนที่อยากซ้อมเทนนิสอย่างจริงจัง</div>
+        </div>
+      </div>
+      <p class="note-subtle">หมายเหตุ: ห้องซ้อมนี้ไม่รองรับการซ้อมเสิร์ฟ เหมาะสำหรับการซ้อมตี ฝึกฟอร์ม จังหวะ และ footwork</p>
+    </div>
+  </section>
+
+  <!-- ===== PRICING ===== -->
+  <section id="pricing" class="sec">
+    <div class="sec-inner">
+      <p class="sec-label">Pricing</p>
+      <h2 class="sec-title">ราคา / <span class="accent">แพ็กเกจ</span></h2>
+      <p class="sec-sub">เลือกแพ็กเกจที่เหมาะกับคุณ ราคาชัด ไม่มีค่าซ่อน</p>
+      <div class="stripe"></div>
+      <div class="pricing-grid">
+
+        <div class="price-card">
+          <div class="price-name">Single Use</div>
+          <div class="price-amount"><sup>฿</sup>350</div>
+          <div class="price-period">ต่อชั่วโมง / per hour</div>
+          <ul class="price-perks">
+            <li>เหมาะสำหรับซ้อมเดี่ยวหรือกับเพื่อน</li>
+            <li>ไม้ฟรี + น้ำฟรี</li>
+            <li>โค้ชนอกเข้าฟรี</li>
+          </ul>
+        </div>
+
+        <div class="price-card hot">
+          <div class="price-badge">ยอดนิยม</div>
+          <div class="price-name">Ultra Pass 10 Hrs</div>
+          <div class="price-amount"><sup>฿</sup>3,100</div>
+          <div class="price-period">310 บาท/ชม. · ใช้ได้ 3 เดือน</div>
+          <ul class="price-perks">
+            <li>10 ชั่วโมง รวมในราคาเดียว</li>
+            <li>ไม้ฟรี + น้ำฟรี</li>
+            <li>โค้ชนอกเข้าฟรี</li>
+            <li>ใช้ได้ภายใน 3 เดือน</li>
+          </ul>
+        </div>
+
+        <div class="price-card">
+          <div class="price-name">Ultra Pass 20 Hrs</div>
+          <div class="price-amount"><sup>฿</sup>5,900</div>
+          <div class="price-period">295 บาท/ชม. · ใช้ได้ 6 เดือน</div>
+          <ul class="price-perks">
+            <li>20 ชั่วโมง ประหยัดสุด</li>
+            <li>ไม้ฟรี + น้ำฟรี</li>
+            <li>โค้ชนอกเข้าฟรี</li>
+            <li>ใช้ได้ภายใน 6 เดือน</li>
+          </ul>
+        </div>
+
+        <div class="price-card">
+          <div class="price-name">Off-Peak Member</div>
+          <div class="price-amount"><sup>฿</sup>3,500</div>
+          <div class="price-period">จ.–ศ. 09:00–15:00</div>
+          <ul class="price-perks">
+            <li>วันธรรมดา ช่วงเช้าถึงบ่าย</li>
+            <li>ยกเว้นวันหยุดนักขัตฤกษ์</li>
+            <li>ใช้ได้สูงสุด 5 ชม./สัปดาห์</li>
+            <li>สูงสุด 20 ชม./เดือน</li>
+            <li>ไม้ฟรี + น้ำฟรี</li>
+            <li>โค้ชนอกเข้าฟรี</li>
+          </ul>
+        </div>
+
+        <div class="price-card">
+          <div class="price-name">Beginner Coaching</div>
+          <div class="price-amount"><sup>฿</sup>3,500</div>
+          <div class="price-period">5 ชั่วโมง · รวมห้องและอุปกรณ์</div>
+          <ul class="price-perks">
+            <li>สำหรับผู้เริ่มต้นและมือใหม่</li>
+            <li>โค้ชสอนพื้นฐาน ฝึกฟอร์ม จังหวะ</li>
+            <li>รวมค่าห้องและอุปกรณ์ครบ</li>
+            <li>5 ชั่วโมง ราคาพิเศษ</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== HOW IT WORKS ===== -->
+  <section id="how" class="sec">
+    <div class="sec-inner">
+      <p class="sec-label">How It Works</p>
+      <h2 class="sec-title">วิธีจอง<span class="accent"> ง่ายแค่ 4 ขั้นตอน</span></h2>
+      <div class="stripe"></div>
+      <div class="steps-grid">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-title">เช็กเวลาว่าง</div>
+          <div class="step-desc">ดูตาราง Slot ที่ยังว่างอยู่ผ่านระบบออนไลน์ หรือทักถามแอดมินได้เลย</div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-title">เลือกแพ็กเกจ</div>
+          <div class="step-desc">Single หรือ Ultra Pass — ยิ่งซ้อมบ่อย ยิ่งคุ้ม เลือกตามความถี่ที่ซ้อม</div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-title">จองและยืนยัน</div>
+          <div class="step-desc">แจ้งจองผ่าน LINE OA หรือระบบจองออนไลน์ รับข้อมูลการจองและยืนยันผ่าน LINE</div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-title">มาซ้อมได้เลย</div>
+          <div class="step-desc">มาตามเวลา เปิดห้อง หยิบไม้ ซ้อมได้เลย ง่ายแค่นั้น</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== CTA SECTION ===== -->
+  <section id="cta" class="sec">
+    <div class="cta-inner">
+      <p class="sec-label" style="text-align:center;">Ready to Book</p>
+      <h2 class="cta-title">
+        พร้อมซ้อมแล้วใช่ไหม?<br />
+        <span class="accent">จองห้องเลยวันนี้</span>
+      </h2>
+      <p class="cta-sub">ดู Slot วันนี้ หรือทักหาเราผ่าน LINE ได้เลย ไม่ต้องรอ</p>
+      <div class="cta-buttons">
+        <!-- CTA LINK 5: Book Now (cta section) -->
+        <a href="booking.html" class="btn btn-yellow btn-lg">จองเลย — Book Now</a>
+        <!-- CTA LINK 6: Check Availability (cta section) -->
+        <a href="availability.html" class="btn btn-outline btn-lg">ดู Slot วันนี้</a>
+      </div>
+      <!-- CTA LINK 7: LINE OA — update href when LINE deep link is available -->
+      <a href="#" class="line-btn">
+        <span class="line-icon">L</span>
+        ติดต่อ LINE OA: @ultratennis
+      </a>
+      <a href="tel:0649649222" class="tel-link">โทร: 064-964-9222</a>
+    </div>
+  </section>
+
+  <!-- ===== FOOTER ===== -->
+  <footer>
+    <div class="footer-inner">
+      <img src="Ultra Tennis Dark BG.png" alt="Ultra Tennis" class="footer-logo" />
+      <div class="footer-right">
+        <!-- CTA LINK 8: LINE OA footer — update href when LINE deep link is available -->
+        <a href="#">LINE OA: @ultratennis</a>
+        <a href="tel:0649649222">Tel: 064-964-9222</a>
+        <span style="font-size:0.82rem;color:var(--gray-dim);">เปิดทุกวัน 06:00–00:00</span>
+        <a href="booking.html">จองห้องซ้อม</a>
+        <a href="availability.html">เช็กเวลาว่าง</a>
+        <p class="footer-copy">© Ultra Tennis. All rights reserved.</p>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>
