@@ -120,6 +120,58 @@ async function createCalendarEvent(booking) {
   return { eventId: data.id, htmlLink: data.htmlLink };
 }
 
+// PATCH an existing Calendar event to a new date/time.
+// Uses sendUpdates=all so BaiMon receives a changed-time notification.
+async function updateCalendarEvent(eventId, booking) {
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+  if (!calendarId) throw new Error('GOOGLE_CALENDAR_ID not configured');
+
+  const accessToken = await getAccessToken();
+  const event       = buildEvent(booking);   // reuse privacy-safe builder
+
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=all`;
+  const res = await fetch(url, {
+    method:  'PATCH',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type':  'application/json',
+    },
+    body: JSON.stringify(event),
+  });
+
+  if (!res.ok) {
+    const preview = await res.text().catch(() => '');
+    console.error('[gcal] update event failed — status:', res.status, preview.slice(0, 200));
+    throw new Error(`calendar_api_${res.status}`);
+  }
+
+  const data = await res.json();
+  return { eventId: data.id, htmlLink: data.htmlLink };
+}
+
+// DELETE an existing Calendar event.
+// sendUpdates=all ensures BaiMon receives a cancellation notification.
+// 404 is treated as a safe success — the event is already gone.
+async function deleteCalendarEvent(eventId) {
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+  if (!calendarId) throw new Error('GOOGLE_CALENDAR_ID not configured');
+
+  const accessToken = await getAccessToken();
+
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=all`;
+  const res = await fetch(url, {
+    method:  'DELETE',
+    headers: { 'Authorization': `Bearer ${accessToken}` },
+  });
+
+  // 204 No Content = deleted. 404 = already gone. Both are success.
+  if (res.status === 204 || res.status === 404) return;
+
+  const preview = await res.text().catch(() => '');
+  console.error('[gcal] delete event failed — status:', res.status, preview.slice(0, 200));
+  throw new Error(`calendar_api_${res.status}`);
+}
+
 function validateBooking(b) {
   if (!b || typeof b !== 'object')                  return 'Missing booking data';
   if (!b.bookingCode)                               return 'Missing bookingCode';
@@ -151,26 +203,51 @@ export default async function handler(req, res) {
     return res.status(401).json({ ok: false, error: 'Unauthorized' });
   }
 
-  const body           = parseBody(req);
-  const { action, booking } = body ?? {};
+  const body = parseBody(req);
+  const { action, booking, eventId } = body ?? {};
 
-  if (action !== 'create') {
-    return res.status(400).json({ ok: false, error: `Unsupported action "${action}"` });
+  // ── action: "create" ─────────────────────────────────────────────
+  if (action === 'create') {
+    const validationError = validateBooking(booking);
+    if (validationError) return res.status(400).json({ ok: false, error: validationError });
+    try {
+      const result = await createCalendarEvent(booking);
+      console.log(`[gcal] created — admin:${adminName} booking:${booking.bookingCode} eventId:${result.eventId}`);
+      return res.status(200).json({ ok: true, eventId: result.eventId, htmlLink: result.htmlLink });
+    } catch (e) {
+      console.error('[gcal] createCalendarEvent error:', e.message);
+      return res.status(200).json({ ok: false, error: safeError(e.message) });
+    }
   }
 
-  const validationError = validateBooking(booking);
-  if (validationError) {
-    return res.status(400).json({ ok: false, error: validationError });
+  // ── action: "update" ─────────────────────────────────────────────
+  if (action === 'update') {
+    if (!eventId) return res.status(400).json({ ok: false, error: 'Missing Google Calendar event ID.' });
+    const validationError = validateBooking(booking);
+    if (validationError) return res.status(400).json({ ok: false, error: validationError });
+    try {
+      const result = await updateCalendarEvent(eventId, booking);
+      console.log(`[gcal] updated — admin:${adminName} booking:${booking.bookingCode} eventId:${eventId}`);
+      return res.status(200).json({ ok: true, eventId: result.eventId, htmlLink: result.htmlLink });
+    } catch (e) {
+      console.error('[gcal] updateCalendarEvent error:', e.message);
+      return res.status(200).json({ ok: false, error: safeError(e.message) });
+    }
   }
 
-  try {
-    const { eventId, htmlLink } = await createCalendarEvent(booking);
-    console.log(`[gcal] event created — admin: ${adminName}, booking: ${booking.bookingCode}, eventId: ${eventId}`);
-    return res.status(200).json({ ok: true, eventId, htmlLink });
-  } catch (e) {
-    // Always return HTTP 200 so the caller can read the JSON body.
-    // The caller is responsible for writing syncStatus: "failed" to Firestore.
-    console.error('[gcal] createCalendarEvent error:', e.message);
-    return res.status(200).json({ ok: false, error: safeError(e.message) });
+  // ── action: "delete" ─────────────────────────────────────────────
+  if (action === 'delete') {
+    // No eventId = nothing to delete — safe no-op.
+    if (!eventId) return res.status(200).json({ ok: true });
+    try {
+      await deleteCalendarEvent(eventId);
+      console.log(`[gcal] deleted — admin:${adminName} eventId:${eventId}`);
+      return res.status(200).json({ ok: true });
+    } catch (e) {
+      console.error('[gcal] deleteCalendarEvent error:', e.message);
+      return res.status(200).json({ ok: false, error: safeError(e.message) });
+    }
   }
+
+  return res.status(400).json({ ok: false, error: `Unsupported action "${action}"` });
 }
