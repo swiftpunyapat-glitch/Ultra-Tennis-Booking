@@ -512,15 +512,10 @@ import {
   runTransaction,setDoc,query,where,orderBy,serverTimestamp,Timestamp
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 
-// ── CONFIG ── ⚠️ Change ADMIN_CREDENTIALS before going live!
-const ADMIN_CREDENTIALS = {
-  Art: "7879",
-  Aoy: "8816",
-  Mon: "2106",
-  Ano: "6619",
-  Stam: "6369",
-};
-const ADMIN_NAMES = Object.keys(ADMIN_CREDENTIALS);
+// ── CONFIG ────────────────────────────────────────────────────────
+// Names only — no PINs. PINs live in ADMIN_USERS_JSON on the server.
+const ADMIN_NAMES = ["Art", "Aoy", "BaiMon", "Ano", "Stam"];
+let currentAdminName = null;  // set by checkSession / login; never stored in sessionStorage
 const RESOURCE_ID="room1";
 const OPEN_HOUR=6,CLOSE_HOUR=24;
 
@@ -544,22 +539,38 @@ function canNotifyLine(lineUserId) {
   return !!lineUserId && lineUserId !== "guest" && lineUserId !== "manual";
 }
 
-// ── ADMIN NAMES ──────────────────────────────────────────────────
+// ── ADMIN NAMES (display only — no PINs) ─────────────────────────
 ADMIN_NAMES.forEach(n=>{const o=document.createElement("option");o.value=o.textContent=n;$("adminSel").append(o);});
 
 // ── AUTH ─────────────────────────────────────────────────────────
-function checkSession(){const n=sessionStorage.getItem("adminName");if(n){showApp(n);return true;}return false;}
+async function checkSession(){
+  try{
+    const res=await fetch('/api/admin-check');
+    if(!res.ok)return false;
+    const data=await res.json();
+    if(data.ok&&data.name){currentAdminName=data.name;showApp(data.name);return true;}
+  }catch{}
+  return false;
+}
 function showApp(n){$("loginScreen").style.display="none";$("mainApp").style.display="block";$("adminBadge").textContent=n;}
 $("pinEye").addEventListener("click",()=>{const p=$("pinIn");p.type=p.type==="password"?"text":"password";});
 $("pinIn").addEventListener("keydown",e=>{if(e.key==="Enter")$("loginBtn").click();});
-$("loginBtn").addEventListener("click",()=>{
-  const n=$("adminSel").value,p=$("pinIn").value,err=$("loginErr");
-  if(!n){err.textContent="Please select your name.";err.style.display="block";return;}
-  if(p!==ADMIN_CREDENTIALS[n]){err.style.display="block";$("pinIn").value="";$("pinIn").focus();return;}
-  err.style.display="none";sessionStorage.setItem("adminName",n);showApp(n);loadBookings();
+$("loginBtn").addEventListener("click",async()=>{
+  const n=$("adminSel").value.trim(),p=$("pinIn").value,err=$("loginErr");
+  if(!n){err.textContent="Please enter your name.";err.style.display="block";return;}
+  const btn=$("loginBtn");btn.disabled=true;btn.textContent="Logging in...";
+  try{
+    const res=await fetch('/api/admin-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,pin:p})});
+    const data=await res.json();
+    if(data.ok){currentAdminName=data.name;err.style.display="none";showApp(data.name);loadBookings();}
+    else{err.textContent="Incorrect name or PIN.";err.style.display="block";$("pinIn").value="";$("pinIn").focus();}
+  }catch{err.textContent="Login failed. Please try again.";err.style.display="block";}
+  finally{btn.disabled=false;btn.textContent="Login";}
 });
-$("logoutBtn").addEventListener("click",()=>{
-  sessionStorage.removeItem("adminName");$("mainApp").style.display="none";$("loginScreen").style.display="flex";
+$("logoutBtn").addEventListener("click",async()=>{
+  try{await fetch('/api/admin-logout',{method:'POST'});}catch{}
+  currentAdminName=null;
+  $("mainApp").style.display="none";$("loginScreen").style.display="flex";
   $("adminSel").value="";$("pinIn").value="";
 });
 
@@ -950,7 +961,7 @@ const fEnd=h=>h+1>=24?"00:00":`${String(h+1).padStart(2,"0")}:00`;
 function dateRange(s,n){const d=[],b=new Date(s+"T00:00:00");for(let i=0;i<n;i++){const x=new Date(b);x.setDate(b.getDate()+i);d.push(x.toISOString().slice(0,10));}return d;}
 
 async function setSlots(dates,close=false){
-  const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now(),batch=writeBatch(db);
+  const admin=currentAdminName||"admin",now=Timestamp.now(),batch=writeBatch(db);
   dates.forEach(date=>{
     allH().forEach(h=>{
       const ref=doc(db,"available_slots",slId(date,h));
@@ -999,7 +1010,7 @@ $("loadSlotsBtn").addEventListener("click",()=>{
 
 $("openAllBtn").addEventListener("click",async()=>{
   const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}
-  const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now(),batch=writeBatch(db);
+  const admin=currentAdminName||"admin",now=Timestamp.now(),batch=writeBatch(db);
   // Load current to only create missing ones
   const snap=await getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)));
   const existing=new Set();snap.forEach(x=>existing.add(x.data().startTime));
@@ -1017,7 +1028,7 @@ $("openAllBtn").addEventListener("click",async()=>{
 $("closeUnbookedBtn").addEventListener("click",async()=>{
   const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}
   if(!confirm(`Close all UNBOOKED open slots for ${d}?`))return;
-  const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now();
+  const admin=currentAdminName||"admin",now=Timestamp.now();
 
   const[avSnap,bkSnap]=await Promise.all([
     getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID),where("status","==","open"))),
@@ -1069,7 +1080,7 @@ async function loadSlotGrid(dateISO){
 
 async function toggleSlot(btn,dateISO){
   const act=btn.dataset.act,h=Number(btn.dataset.h),existId=btn.dataset.id;
-  const admin=sessionStorage.getItem("adminName")||"admin",now=Timestamp.now();
+  const admin=currentAdminName||"admin",now=Timestamp.now();
   btn.disabled=true;
   try{
     if(act==="create"||act==="reopen"){
@@ -1084,7 +1095,7 @@ async function toggleSlot(btn,dateISO){
 $("holSave").addEventListener("click",async()=>{
   const d=getViewDate();if(!d){showToast("No date loaded.",true);return;}
   const isHol=$("holCheck").checked,name=$("holName").value.trim();
-  const admin=sessionStorage.getItem("adminName")||"admin";
+  const admin=currentAdminName||"admin";
   try{
     await setDoc(doc(db,"holidays",d),{date:d,isHoliday:isHol,name,updatedBy:admin,updatedAt:serverTimestamp()});
     $("holActiveTag").style.display=isHol?"inline-block":"none";
@@ -1216,7 +1227,7 @@ $("addPassBtn").addEventListener("click", async()=>{
   const btn=$("addPassBtn"); btn.disabled=true; btn.textContent="Adding...";
   try{
     const pkg=PACKAGES[pkgType];
-    const admin=sessionStorage.getItem("adminName")||"admin";
+    const admin=currentAdminName||"admin";
     const vFrom=new Date(validFrom+"T00:00:00");
     const vUntil=new Date(vFrom.getTime()+pkg.validityDays*24*60*60*1000);
 
@@ -1379,7 +1390,7 @@ $("minConfirm").addEventListener("click",async()=>{
   // Validation: remaining cannot go below 0.
   if(newRemaining<0){ showToast("Remaining minutes cannot go below 0.",true); return; }
   const deltaMinutes=newRemaining-oldRemaining;
-  const adminName=sessionStorage.getItem("adminName")||"admin";
+  const adminName=currentAdminName||"admin";
 
   const btn=$("minConfirm"); btn.disabled=true; btn.textContent="Saving...";
   try{
@@ -1813,7 +1824,7 @@ $("manConfirm").addEventListener("click",async()=>{
   const startH=parseInt(time,10);
   const endTime=fEnd(startH);
   const code=genManualCode();
-  const adminName=sessionStorage.getItem("adminName")||"admin";
+  const adminName=currentAdminName||"admin";
   const price=MANUAL_PRICE[bookingType] ?? 350;
   const slotId=`${RESOURCE_ID}_${date}_${time.replace(":","")}`;
   const slotRef=doc(db,"booking_slots",slotId);
@@ -1918,7 +1929,7 @@ async function moveToPendingReschedule(){
       pendingReschedule:true,
       pendingRescheduleStatus:"pending",
       pendingRescheduleAt:serverTimestamp(),
-      pendingRescheduleBy:sessionStorage.getItem("adminName")||"admin",
+      pendingRescheduleBy:currentAdminName||"admin",
       pendingRescheduleFromDate:reschBooking.pendingRescheduleFromDate||reschBooking.previousDate||reschBooking.date,
       pendingRescheduleFromStartTime:reschBooking.pendingRescheduleFromStartTime||reschBooking.previousStartTime||reschBooking.startTime,
       pendingRescheduleFromEndTime:reschBooking.pendingRescheduleFromEndTime||reschBooking.previousEndTime||reschBooking.endTime,
@@ -2045,7 +2056,7 @@ function showToast(msg,isErr=false){
 // ── BOOT ─────────────────────────────────────────────────────────
 const todayISO=new Date().toISOString().slice(0,10);
 ["weekDate","dayDate","viewDate"].forEach(id=>{const el=$(id);if(el)el.value=todayISO;});
-if(!checkSession()){/* show login */}else{loadBookings();}
+(async()=>{if(await checkSession()){loadBookings();}})();
 </script>
 </body>
 </html>
