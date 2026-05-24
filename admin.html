@@ -670,10 +670,12 @@ function renderBookings(){
     const c=document.querySelector(`[data-cancel="${b.id}"]`);
     const r=document.querySelector(`[data-resch="${b.id}"]`);
     const gr=document.querySelector(`[data-gcal-retry="${b.id}"]`);
+    const d=document.querySelector(`[data-delete="${b.id}"]`);
     if(p)  p.addEventListener("click",()=>markPaid(b));
     if(c)  c.addEventListener("click",()=>cancelBooking(b));
     if(r)  r.addEventListener("click",()=>openResch(b));
     if(gr) gr.addEventListener("click",()=>retrySyncGcal(b));
+    if(d)  d.addEventListener("click",()=>permanentDeleteBooking(b));
   });
 }
 
@@ -722,11 +724,17 @@ function cardHTML(b){
 
   // Show paid badge separately + reschedule button even when paid
   const paidBadge=isPaid?`<span class="sp s-paid">✓ Paid</span>`:"";
+  // Art-only: permanent delete button — frontend visibility gate only;
+  // the backend /api/admin-delete-booking enforces the same restriction.
+  const artDelete=currentAdminName==="Art"
+    ?`<button class="bc" style="background:#5a0a0a" data-delete="${esc(b.id)}">🗑 Delete Permanently</button>`
+    :"";
   const actions=isCancelled
-    ?`<button class="bdone">✗ Cancelled</button>`
+    ?`<button class="bdone">✗ Cancelled</button>${artDelete}`
     :`${canMarkPaid?`<button class="bp" data-paid="${esc(b.id)}">✓ Mark as Paid</button>`:""}
       ${canResch?`<button class="br" data-resch="${esc(b.id)}">📅 Reschedule</button>`:""}
-      ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}`;
+      ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}
+      ${artDelete}`;
 
   return `<div class="bcard" id="card-${esc(b.id)}">
     <div class="bcard-hdr"><span class="bcode">${esc(b.bookingCode||"—")}</span><div style="display:flex;gap:5px;align-items:center">${paidBadge}<span class="tbadge ${tc}">${esc(b.bookingType||"—")}</span></div></div>
@@ -816,6 +824,45 @@ async function cancelBooking(b){
     showToast(`✗ ${b.bookingCode} cancelled`);await loadBookings();
   }catch(e){console.error(e);showToast("Failed.",true);if(btn){btn.disabled=false;btn.textContent="✗ Cancel";}}
 }
+
+// ── PERMANENT DELETE (Art only) ───────────────────────────────────
+// Deletes: Google Calendar event → booking_slot doc → booking doc.
+// Two-step confirmation required. Backend enforces the Art-only restriction
+// independently of the frontend visibility gate.
+async function permanentDeleteBooking(b){
+  if(currentAdminName!=="Art") return; // frontend guard — backend also enforces
+  const step1=confirm(
+    `⚠ Permanently delete this booking?\n\n`+
+    `${b.bookingCode||"—"} · ${b.customerName||"—"} · ${b.date||"—"} ${b.startTime||"—"}–${b.endTime||"—"}\n\n`+
+    `This cannot be undone.\n`+
+    `The booking record and its Google Calendar event will be permanently removed.`
+  );
+  if(!step1) return;
+  const typed=prompt("Type  DELETE  (all caps) to confirm permanent deletion:");
+  if(typed!=="DELETE"){showToast("Cancelled — type DELETE exactly to confirm.",true);return;}
+  const btn=document.querySelector(`[data-delete="${b.id}"]`);
+  if(btn){btn.disabled=true;btn.textContent="Deleting…";}
+  try{
+    const res=await fetch("/api/admin-delete-booking",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({bookingId:b.id}),
+    });
+    const data=await res.json();
+    if(data.ok){
+      showToast(`🗑 ${b.bookingCode||"Booking"} permanently deleted`);
+      await loadBookings();
+    }else{
+      showToast(data.error||"Delete failed.",true);
+      if(btn){btn.disabled=false;btn.textContent="🗑 Delete Permanently";}
+    }
+  }catch(e){
+    console.error(e);
+    showToast("Delete failed — network error.",true);
+    if(btn){btn.disabled=false;btn.textContent="🗑 Delete Permanently";}
+  }
+}
+// ─────────────────────────────────────────────────────────────────
 
 document.querySelectorAll(".fbtn[data-filter]").forEach(btn=>{
   btn.addEventListener("click",()=>{activeFilter=btn.dataset.filter;document.querySelectorAll(".fbtn[data-filter]").forEach(b=>b.classList.remove("on"));btn.classList.add("on");renderBookings();});
