@@ -209,6 +209,15 @@
     .dv-alertbox textarea:focus{outline:none;border-color:var(--g);}
     .dv-alert-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:9px;}
 
+    /* GOOGLE CALENDAR SYNC STATUS */
+    .gcal-sync{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:9px;}
+    .gcal-chip{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.67rem;font-weight:800;}
+    .gcal-ok{background:#0d3320;color:var(--g);}
+    .gcal-err{background:#3d2e00;color:var(--warn);}
+    .gcal-link{color:var(--g);font-size:.68rem;text-decoration:underline;}
+    .gcal-retry{padding:3px 10px;border-radius:6px;background:#0f2d3a;border:1px solid var(--bl);color:var(--bl);font-size:.7rem;font-weight:800;}
+    .gcal-retry:hover{background:#0f2d3a99;}
+
     @media(max-width:600px){
       .main{padding:12px 13px;}
       .bfields{grid-template-columns:1fr 1fr;}
@@ -629,10 +638,12 @@ function renderBookings(){
     const c=document.querySelector(`[data-cancel="${b.id}"]`);
     const r=document.querySelector(`[data-resch="${b.id}"]`);
     const g=document.querySelector(`[data-gcal="${b.id}"]`);
-    if(p) p.addEventListener("click",()=>markPaid(b));
-    if(c) c.addEventListener("click",()=>cancelBooking(b));
-    if(r) r.addEventListener("click",()=>openResch(b));
-    if(g) g.addEventListener("click",()=>openGoogleCalendarBooking(b));
+    const gr=document.querySelector(`[data-gcal-retry="${b.id}"]`);
+    if(p)  p.addEventListener("click",()=>markPaid(b));
+    if(c)  c.addEventListener("click",()=>cancelBooking(b));
+    if(r)  r.addEventListener("click",()=>openResch(b));
+    if(g)  g.addEventListener("click",()=>openGoogleCalendarBooking(b));
+    if(gr) gr.addEventListener("click",()=>retrySyncGcal(b));
   });
 }
 
@@ -749,31 +760,52 @@ function cardHTML(b){
         ${b.customerNote?`<div style="grid-column:1/-1"><div class="fl">Note</div><div class="fv dim">${esc(b.customerNote)}</div></div>`:""}
       </div>
       ${slip}
+      ${gcalChip(b)}
       <div class="acts">${actions}</div>
     </div></div>`;
 }
 
 async function markPaid(b){
   const btn=document.querySelector(`[data-paid="${b.id}"]`);if(btn){btn.disabled=true;btn.textContent="Saving...";}
+
+  // ── Phase A: Firestore payment update (must succeed before anything else) ──
   try{
     const batch=writeBatch(db);
     batch.update(doc(db,"bookings",b.id),{paymentStatus:"paid",bookingStatus:"confirmed",adminReviewedAt:serverTimestamp(),updatedAt:serverTimestamp()});
     batch.update(doc(db,"booking_slots",`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`),{paymentStatus:"paid",bookingStatus:"confirmed"});
     await batch.commit();
-    // Fire-and-forget: notify the customer their booking is paid. Must not block admin flow.
-    if (canNotifyLine(b.lineUserId) && window.sendLineNotification) {
-      window.sendLineNotification({
-        eventId: `${b.bookingCode}_booking_paid_customer`,
-        type: "booking_paid_customer",
-        lineUserId: b.lineUserId,
-        bookingCode: b.bookingCode,
-        date: b.date,
-        startTime: b.startTime,
-        endTime: b.endTime
-      });
+  }catch(e){console.error(e);showToast("Failed to save payment.",true);if(btn){btn.disabled=false;btn.textContent="✓ Mark as Paid";}return;}
+
+  // ── Phase B: fire-and-forget LINE notification (does not block) ──
+  if (canNotifyLine(b.lineUserId) && window.sendLineNotification) {
+    window.sendLineNotification({
+      eventId: `${b.bookingCode}_booking_paid_customer`,
+      type: "booking_paid_customer",
+      lineUserId: b.lineUserId,
+      bookingCode: b.bookingCode,
+      date: b.date,
+      startTime: b.startTime,
+      endTime: b.endTime
+    });
+  }
+
+  // ── Phase C: Google Calendar sync (separate try/catch — payment is already confirmed) ──
+  // Idempotency: skip if a Calendar event already exists for this booking.
+  if(!b.googleCalendarEventId){
+    try{
+      const gcalResult=await callGcal({action:"create",booking:b});
+      const syncFields=gcalResult.ok
+        ?{googleCalendarEventId:gcalResult.eventId,googleCalendarHtmlLink:gcalResult.htmlLink,googleCalendarSyncStatus:"created",googleCalendarSyncedAt:serverTimestamp()}
+        :{googleCalendarSyncStatus:"failed",googleCalendarSyncError:gcalResult.error??"Sync failed",googleCalendarSyncedAt:serverTimestamp()};
+      await updateDoc(doc(db,"bookings",b.id),syncFields);
+    }catch(e){
+      // Payment is already confirmed in Firestore — a gcal error must never revert that.
+      // The booking will surface with the "Sync to Calendar" retry button.
+      console.error("[markPaid] gcal sync error (payment already saved):",e);
     }
-    showToast(`✓ ${b.bookingCode} marked as paid`);await loadBookings();
-  }catch(e){console.error(e);showToast("Failed.",true);if(btn){btn.disabled=false;btn.textContent="✓ Mark as Paid";}}
+  }
+
+  showToast(`✓ ${b.bookingCode} marked as paid`);await loadBookings();
 }
 
 async function cancelBooking(b){
@@ -806,16 +838,48 @@ document.querySelectorAll(".fbtn[data-filter]").forEach(btn=>{
 });
 $("refreshBtn").addEventListener("click",loadBookings);
 
-// ── TODO(phase-3): GOOGLE CALENDAR SYNC — NOT IMPLEMENTED YET ────
-// When built:
-//  • Sync a calendar event after Admin "Mark as Paid" succeeds (inside markPaid()).
-//  • Prefer ONE shared "Ultra Tennis Bookings" calendar for the whole shop,
-//    not per-admin calendars.
-//  • Persist the created event id on the booking doc as `googleCalendarEventId`
-//    so reschedule (mConfirm) and cancel (cancelBooking) can patch / delete the
-//    same event later.
-//  • Needs a backend route (service account or OAuth) — do NOT put Google
-//    credentials in this client file.
+// ── GOOGLE CALENDAR SYNC ─────────────────────────────────────────
+
+// callGcal: backend-only — credentials never touch the frontend.
+// The admin session cookie is sent automatically by the browser.
+async function callGcal(payload){
+  const res=await fetch('/api/gcal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  return res.json();
+}
+
+// gcalChip: renders the calendar sync status row for a booking card.
+// Shown only for paid bookings; returns "" for all other states.
+function gcalChip(b){
+  if(b.paymentStatus!=="paid") return "";
+  if(b.googleCalendarSyncStatus==="created"){
+    const link=b.googleCalendarHtmlLink
+      ?` <a class="gcal-link" href="${esc(b.googleCalendarHtmlLink)}" target="_blank" rel="noopener noreferrer">View</a>`:"";
+    return `<div class="gcal-sync"><span class="gcal-chip gcal-ok">📅 Synced to Calendar</span>${link}</div>`;
+  }
+  if(b.googleCalendarSyncStatus==="failed"){
+    const errMsg=b.googleCalendarSyncError?` · ${esc(b.googleCalendarSyncError)}`:"";
+    return `<div class="gcal-sync"><span class="gcal-chip gcal-err">⚠ Calendar sync failed${errMsg}</span><button class="gcal-retry" data-gcal-retry="${esc(b.id)}">Retry</button></div>`;
+  }
+  // paid but no sync attempted (e.g., booking was paid before Phase 1 deployed)
+  return `<div class="gcal-sync"><button class="gcal-retry" data-gcal-retry="${esc(b.id)}">📅 Sync to Calendar</button></div>`;
+}
+
+// retrySyncGcal: manual retry for failed or missing calendar sync.
+async function retrySyncGcal(b){
+  // Idempotency: if the event was already created, reload to show current state
+  if(b.googleCalendarEventId){showToast("Already synced to Calendar.");await loadBookings();return;}
+  const btn=document.querySelector(`[data-gcal-retry="${b.id}"]`);
+  if(btn){btn.disabled=true;btn.textContent="Syncing...";}
+  try{
+    const gcalResult=await callGcal({action:"create",booking:b});
+    const syncFields=gcalResult.ok
+      ?{googleCalendarEventId:gcalResult.eventId,googleCalendarHtmlLink:gcalResult.htmlLink,googleCalendarSyncStatus:"created",googleCalendarSyncedAt:serverTimestamp()}
+      :{googleCalendarSyncStatus:"failed",googleCalendarSyncError:gcalResult.error??"Sync failed",googleCalendarSyncedAt:serverTimestamp()};
+    await updateDoc(doc(db,"bookings",b.id),syncFields);
+    showToast(gcalResult.ok?"📅 Calendar synced":"⚠ Sync failed — try again",!gcalResult.ok);
+    await loadBookings();
+  }catch(e){console.error(e);showToast("Calendar sync failed.",true);if(btn){btn.disabled=false;btn.textContent="Retry";}}
+}
 // ─────────────────────────────────────────────────────────────────
 
 // ── CSV EXPORT (client-side only, no backend route) ─────────────
