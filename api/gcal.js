@@ -98,7 +98,9 @@ async function createCalendarEvent(booking) {
   const accessToken = await getAccessToken();
   const event       = buildEvent(booking);
 
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
+  // sendUpdates=all — ensures attendees (e.g. BaiMon) receive an email/calendar invite.
+  // Without this param Google defaults to no notification for internal Gmail attendees.
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?sendUpdates=all`;
   const res = await fetch(url, {
     method:  'POST',
     headers: {
