@@ -215,6 +215,7 @@
     .gcal-ok{background:#0d3320;color:var(--g);}
     .gcal-err{background:#3d2e00;color:var(--warn);}
     .gcal-link{color:var(--g);font-size:.68rem;text-decoration:underline;}
+    .gcal-dim{background:var(--s2);color:var(--m);border:1px solid var(--bd);}
     .gcal-retry{padding:3px 10px;border-radius:6px;background:#0f2d3a;border:1px solid var(--bl);color:var(--bl);font-size:.7rem;font-weight:800;}
     .gcal-retry:hover{background:#0f2d3a99;}
 
@@ -847,38 +848,104 @@ async function callGcal(payload){
   return res.json();
 }
 
-// gcalChip: renders the calendar sync status row for a booking card.
-// Shown only for paid bookings; returns "" for all other states.
+// gcalChip: renders the calendar sync status row on a booking card.
+// Status field is the source of truth; booking state is used to decide
+// whether to surface the "Sync to Calendar" button for unsynced paid bookings.
 function gcalChip(b){
-  if(b.paymentStatus!=="paid") return "";
-  if(b.googleCalendarSyncStatus==="created"){
+  const ss=b.googleCalendarSyncStatus;
+  const isPR=isPendingRescheduleBooking(b);
+  const isCancelled=b.bookingStatus==="cancelled";
+  const isPaid=b.paymentStatus==="paid";
+
+  // ── Synced successfully (initial create or reschedule update) ──────
+  if(ss==="created"||ss==="updated"){
     const link=b.googleCalendarHtmlLink
       ?` <a class="gcal-link" href="${esc(b.googleCalendarHtmlLink)}" target="_blank" rel="noopener noreferrer">View</a>`:"";
     return `<div class="gcal-sync"><span class="gcal-chip gcal-ok">📅 Synced to Calendar</span>${link}</div>`;
   }
-  if(b.googleCalendarSyncStatus==="failed"){
+
+  // ── Any failed sync — show warning + retry regardless of booking state ─
+  if(ss==="failed"||ss==="update_failed"||ss==="delete_failed"){
     const errMsg=b.googleCalendarSyncError?` · ${esc(b.googleCalendarSyncError)}`:"";
     return `<div class="gcal-sync"><span class="gcal-chip gcal-err">⚠ Calendar sync failed${errMsg}</span><button class="gcal-retry" data-gcal-retry="${esc(b.id)}">Retry</button></div>`;
   }
-  // paid but no sync attempted (e.g., booking was paid before Phase 1 deployed)
-  return `<div class="gcal-sync"><button class="gcal-retry" data-gcal-retry="${esc(b.id)}">📅 Sync to Calendar</button></div>`;
+
+  // ── Neutral: event removed because booking moved to pending reschedule ─
+  if(ss==="pending_reschedule_removed"){
+    return `<div class="gcal-sync"><span class="gcal-chip gcal-dim">📅 Calendar removed during reschedule</span></div>`;
+  }
+
+  // ── Neutral: event removed because booking was cancelled ──────────────
+  if(ss==="cancelled"){
+    return `<div class="gcal-sync"><span class="gcal-chip gcal-dim">📅 Calendar event cancelled</span></div>`;
+  }
+
+  // ── Paid + confirmed with no sync yet → offer Sync button ────────────
+  // (covers: paid before Phase 1; or pending-reschedule just got new slot)
+  if(isPaid&&!isPR&&!isCancelled){
+    return `<div class="gcal-sync"><button class="gcal-retry" data-gcal-retry="${esc(b.id)}">📅 Sync to Calendar</button></div>`;
+  }
+
+  return "";
 }
 
 // retrySyncGcal: manual retry for failed or missing calendar sync.
+// Routes the correct action based on booking state:
+//   • Pending reschedule or cancelled with existing event → delete it
+//   • Confirmed paid with existing event → update it (reschedule case)
+//   • Confirmed paid with no event → create it
 async function retrySyncGcal(b){
-  // Idempotency: if the event was already created, reload to show current state
-  if(b.googleCalendarEventId){showToast("Already synced to Calendar.");await loadBookings();return;}
   const btn=document.querySelector(`[data-gcal-retry="${b.id}"]`);
   if(btn){btn.disabled=true;btn.textContent="Syncing...";}
+  const isPR=isPendingRescheduleBooking(b);
+  const isCancelled=b.bookingStatus==="cancelled";
+
   try{
-    const gcalResult=await callGcal({action:"create",booking:b});
-    const syncFields=gcalResult.ok
-      ?{googleCalendarEventId:gcalResult.eventId,googleCalendarHtmlLink:gcalResult.htmlLink,googleCalendarSyncStatus:"created",googleCalendarSyncedAt:serverTimestamp()}
-      :{googleCalendarSyncStatus:"failed",googleCalendarSyncError:gcalResult.error??"Sync failed",googleCalendarSyncedAt:serverTimestamp()};
-    await updateDoc(doc(db,"bookings",b.id),syncFields);
-    showToast(gcalResult.ok?"📅 Calendar synced":"⚠ Sync failed — try again",!gcalResult.ok);
+    // ── Delete: booking moved to pending reschedule or cancelled ──
+    if((isPR||isCancelled)&&b.googleCalendarEventId){
+      const gcalResult=await callGcal({action:"delete",eventId:b.googleCalendarEventId});
+      const syncFields=gcalResult.ok
+        ?{googleCalendarEventId:null,googleCalendarHtmlLink:null,
+          googleCalendarSyncStatus:isCancelled?"cancelled":"pending_reschedule_removed",
+          googleCalendarSyncedAt:serverTimestamp()}
+        :{googleCalendarSyncStatus:"delete_failed",
+          googleCalendarSyncError:gcalResult.error??"Sync failed",
+          googleCalendarSyncedAt:serverTimestamp()};
+      await updateDoc(doc(db,"bookings",b.id),syncFields);
+      showToast(gcalResult.ok?"📅 Calendar event removed":"⚠ Sync failed — try again",!gcalResult.ok);
+
+    // ── Update: confirmed paid with existing event (rescheduled) ──
+    }else if(b.googleCalendarEventId){
+      const gcalResult=await callGcal({action:"update",eventId:b.googleCalendarEventId,booking:b});
+      const syncFields=gcalResult.ok
+        ?{googleCalendarEventId:gcalResult.eventId,googleCalendarHtmlLink:gcalResult.htmlLink,
+          googleCalendarSyncStatus:"updated",googleCalendarSyncedAt:serverTimestamp(),
+          googleCalendarSyncError:null}
+        :{googleCalendarSyncStatus:"update_failed",
+          googleCalendarSyncError:gcalResult.error??"Sync failed",
+          googleCalendarSyncedAt:serverTimestamp()};
+      await updateDoc(doc(db,"bookings",b.id),syncFields);
+      showToast(gcalResult.ok?"📅 Calendar updated":"⚠ Sync failed — try again",!gcalResult.ok);
+
+    // ── Create: confirmed paid with no event yet ──────────────────
+    }else{
+      const gcalResult=await callGcal({action:"create",booking:b});
+      const syncFields=gcalResult.ok
+        ?{googleCalendarEventId:gcalResult.eventId,googleCalendarHtmlLink:gcalResult.htmlLink,
+          googleCalendarSyncStatus:"created",googleCalendarSyncedAt:serverTimestamp(),
+          googleCalendarSyncError:null}
+        :{googleCalendarSyncStatus:"failed",
+          googleCalendarSyncError:gcalResult.error??"Sync failed",
+          googleCalendarSyncedAt:serverTimestamp()};
+      await updateDoc(doc(db,"bookings",b.id),syncFields);
+      showToast(gcalResult.ok?"📅 Calendar synced":"⚠ Sync failed — try again",!gcalResult.ok);
+    }
+
     await loadBookings();
-  }catch(e){console.error(e);showToast("Calendar sync failed.",true);if(btn){btn.disabled=false;btn.textContent="Retry";}}
+  }catch(e){
+    console.error(e);showToast("Calendar sync failed.",true);
+    if(btn){btn.disabled=false;btn.textContent="Retry";}
+  }
 }
 // ─────────────────────────────────────────────────────────────────
 
@@ -2006,6 +2073,25 @@ async function moveToPendingReschedule(){
       updatedAt:serverTimestamp(),
     });
     await batch.commit();
+
+    // ── Phase C: remove Calendar event since original slot is released ──
+    if(reschBooking.googleCalendarEventId){
+      try{
+        const gcalResult=await callGcal({action:"delete",eventId:reschBooking.googleCalendarEventId});
+        const gcalFields=gcalResult.ok
+          ?{googleCalendarEventId:null,googleCalendarHtmlLink:null,
+            googleCalendarSyncStatus:"pending_reschedule_removed",
+            googleCalendarSyncedAt:serverTimestamp()}
+          :{googleCalendarSyncStatus:"delete_failed",
+            googleCalendarSyncError:gcalResult.error??"Sync failed",
+            googleCalendarSyncedAt:serverTimestamp()};
+        await updateDoc(doc(db,"bookings",reschBooking.id),gcalFields);
+      }catch(e){
+        // Batch commit already done — calendar error must not revert the reschedule.
+        console.error("[moveToPendingReschedule] gcal delete error:",e);
+      }
+    }
+
     showToast(`Pending reschedule: ${reschBooking.bookingCode||""}`);
     closeModal();await loadBookings();
     if($("tabDaily").style.display!=="none"&&$("dvDate").value===reschBooking.date) loadDailyView();
@@ -2106,6 +2192,40 @@ $("mConfirm").addEventListener("click",async()=>{
         endTime: newEnd
       });
     }
+
+    // ── Phase C: Google Calendar sync for paid bookings ──────────
+    // Reschedule Firestore is already committed — calendar error must not revert it.
+    if(reschBooking.paymentStatus==="paid"){
+      try{
+        const calBooking={...reschBooking,date:newDate,startTime:reschTime,endTime:newEnd};
+        let gcalResult,gcalFields;
+        if(reschBooking.googleCalendarEventId){
+          // Existing event → update it to the new date/time
+          gcalResult=await callGcal({action:"update",eventId:reschBooking.googleCalendarEventId,booking:calBooking});
+          gcalFields=gcalResult.ok
+            ?{googleCalendarEventId:gcalResult.eventId,googleCalendarHtmlLink:gcalResult.htmlLink,
+              googleCalendarSyncStatus:"updated",googleCalendarSyncedAt:serverTimestamp(),
+              googleCalendarSyncError:null}
+            :{googleCalendarSyncStatus:"update_failed",
+              googleCalendarSyncError:gcalResult.error??"Sync failed",
+              googleCalendarSyncedAt:serverTimestamp()};
+        }else{
+          // No existing event → create a fresh one
+          gcalResult=await callGcal({action:"create",booking:calBooking});
+          gcalFields=gcalResult.ok
+            ?{googleCalendarEventId:gcalResult.eventId,googleCalendarHtmlLink:gcalResult.htmlLink,
+              googleCalendarSyncStatus:"created",googleCalendarSyncedAt:serverTimestamp(),
+              googleCalendarSyncError:null}
+            :{googleCalendarSyncStatus:"failed",
+              googleCalendarSyncError:gcalResult.error??"Sync failed",
+              googleCalendarSyncedAt:serverTimestamp()};
+        }
+        await updateDoc(doc(db,"bookings",reschBooking.id),gcalFields);
+      }catch(e){
+        console.error("[mConfirm] gcal sync error (reschedule already saved):",e);
+      }
+    }
+
     showToast(`📅 ${reschBooking.bookingCode} → ${newDate} ${reschTime}`);
     closeModal();await loadBookings();
   }catch(e){console.error(e);showToast(e.message||"Reschedule failed.",true);btn.disabled=false;btn.textContent=wasPendingReschedule?"Assign New Slot":"Confirm Reschedule";}
