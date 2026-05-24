@@ -219,6 +219,22 @@
     .gcal-retry{padding:3px 10px;border-radius:6px;background:#0f2d3a;border:1px solid var(--bl);color:var(--bl);font-size:.7rem;font-weight:800;}
     .gcal-retry:hover{background:#0f2d3a99;}
 
+    /* PAID SUMMARY */
+    .psum-section{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;}
+    .psum-hdr{padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid var(--bd);background:var(--s2);flex-wrap:wrap;}
+    .psum-hdr h2{font-size:.78rem;font-weight:800;color:var(--mid);text-transform:uppercase;letter-spacing:.8px;margin:0;}
+    .psum-controls{display:flex;align-items:center;gap:7px;}
+    .psum-body{padding:8px 14px;}
+    .psum-row{padding:6px 0;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:.78rem;line-height:1.6;}
+    .psum-row:last-child{border-bottom:0;}
+    .psum-name{font-weight:800;color:var(--t);}
+    .psum-meta{color:var(--m);}
+    .psum-code{color:var(--ac);font-weight:700;}
+    .psum-ok{color:var(--g);font-weight:800;}
+    .psum-warn{color:var(--warn);font-weight:800;}
+    .psum-dim{color:var(--m);}
+    .psum-empty{font-size:.78rem;color:var(--m);font-style:italic;padding:4px 0;}
+
     @media(max-width:600px){
       .main{padding:12px 13px;}
       .bfields{grid-template-columns:1fr 1fr;}
@@ -289,6 +305,20 @@
       <button class="fbtn" id="exportBookingsBtn">Bookings</button>
       <button class="fbtn" id="exportPassesBtn">Passes</button>
     </div>
+    <!-- PAID SUMMARY -->
+    <div class="main" style="padding-bottom:6px">
+      <div class="psum-section">
+        <div class="psum-hdr">
+          <h2>📋 Paid Summary / ยืนยันชำระแล้ว</h2>
+          <div class="psum-controls">
+            <input type="date" id="paidSummaryDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:5px 9px;font-size:.78rem"/>
+            <button class="rfbtn" id="paidSummaryToday">Today</button>
+          </div>
+        </div>
+        <div class="psum-body"><div id="paidSummaryList"><p class="psum-empty">Loading…</p></div></div>
+      </div>
+    </div>
+
     <div class="main" id="pendingReschedulePanel" style="display:none"></div>
     <div class="main"><div id="bookingsList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
   </div>
@@ -628,6 +658,7 @@ function bookingStatusDisplay(b){
 
 function renderBookings(){
   renderPendingRescheduleList();
+  renderPaidSummary();
   const list=activeFilter==="all"?allBookings:allBookings.filter(b=>{
     if(activeFilter==="pending_reschedule") return isPendingRescheduleBooking(b);
     return b.bookingStatus===activeFilter||b.paymentStatus===activeFilter;
@@ -638,12 +669,10 @@ function renderBookings(){
     const p=document.querySelector(`[data-paid="${b.id}"]`);
     const c=document.querySelector(`[data-cancel="${b.id}"]`);
     const r=document.querySelector(`[data-resch="${b.id}"]`);
-    const g=document.querySelector(`[data-gcal="${b.id}"]`);
     const gr=document.querySelector(`[data-gcal-retry="${b.id}"]`);
     if(p)  p.addEventListener("click",()=>markPaid(b));
     if(c)  c.addEventListener("click",()=>cancelBooking(b));
     if(r)  r.addEventListener("click",()=>openResch(b));
-    if(g)  g.addEventListener("click",()=>openGoogleCalendarBooking(b));
     if(gr) gr.addEventListener("click",()=>retrySyncGcal(b));
   });
 }
@@ -674,51 +703,6 @@ function renderPendingRescheduleList(){
   });
 }
 
-function buildGoogleCalendarUrl(b){
-  if(!b?.date||!b?.startTime||!b?.endTime) return "";
-  const parseBangkokDate=(date,time)=>{
-    const m=String(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    const tm=String(time).match(/^(\d{2}):(\d{2})$/);
-    if(!m||!tm) return null;
-    const y=Number(m[1]),mo=Number(m[2]),d=Number(m[3]);
-    const h=Number(tm[1]),mi=Number(tm[2]);
-    if(h>23||mi>59) return null;
-    return new Date(Date.UTC(y,mo-1,d,h-7,mi,0));
-  };
-  const fmtCalDate=dt=>dt.toISOString().replace(/[-:]/g,"").replace(/\.\d{3}Z$/,"Z");
-  const start=parseBangkokDate(b.date,b.startTime);
-  let end=parseBangkokDate(b.date,b.endTime);
-  if(!start||!end||Number.isNaN(start.getTime())||Number.isNaN(end.getTime())) return "";
-  if(end<=start) end=new Date(end.getTime()+24*60*60*1000);
-  const details=[
-    `Booking Code: ${b.bookingCode||"—"}`,
-    `Customer Name: ${b.customerName||"—"}`,
-    `Phone: ${b.customerPhone||"—"}`,
-    `Date: ${b.date||"—"}`,
-    `Time: ${b.startTime||"—"}–${b.endTime||"—"}`,
-    `Booking Type: ${b.bookingType||"—"}`,
-    `Booking Status: ${b.bookingStatus||"—"}`,
-    `Payment Status: ${b.paymentStatus||"—"}`,
-    `Price: ฿${Number(b.price)||0}`,
-  ];
-  if(b.customerNote) details.push(`Customer Note: ${b.customerNote}`);
-  const params=new URLSearchParams({
-    action:"TEMPLATE",
-    text:`Ultra Tennis Booking - ${b.customerName||b.bookingCode||"Booking"}`,
-    dates:`${fmtCalDate(start)}/${fmtCalDate(end)}`,
-    details:details.join("\n"),
-    location:"Ultra Tennis",
-    ctz:"Asia/Bangkok",
-  });
-  return `https://calendar.google.com/calendar/render?${params.toString()}`;
-}
-
-function openGoogleCalendarBooking(b){
-  const url=buildGoogleCalendarUrl(b);
-  if(!url){alert("Booking date/time is missing or invalid.");return;}
-  window.open(url,"_blank","noopener");
-}
-
 function cardHTML(b){
   const tc=b.bookingType?.includes("Ultra")?"tu":b.bookingType?.includes("Off")?"to":"ts";
   const statusText=bookingStatusDisplay(b);
@@ -741,7 +725,6 @@ function cardHTML(b){
   const actions=isCancelled
     ?`<button class="bdone">✗ Cancelled</button>`
     :`${canMarkPaid?`<button class="bp" data-paid="${esc(b.id)}">✓ Mark as Paid</button>`:""}
-      <button class="br" data-gcal="${esc(b.id)}">📅 Calendar</button>
       ${canResch?`<button class="br" data-resch="${esc(b.id)}">📅 Reschedule</button>`:""}
       ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}`;
 
@@ -946,6 +929,56 @@ async function retrySyncGcal(b){
     console.error(e);showToast("Calendar sync failed.",true);
     if(btn){btn.disabled=false;btn.textContent="Retry";}
   }
+}
+// ─────────────────────────────────────────────────────────────────
+
+// ── PAID SUMMARY ─────────────────────────────────────────────────
+// Shows all bookings confirmed as paid on the selected date.
+// Date filter uses adminReviewedAt (set by markPaid → serverTimestamp).
+// Time display uses the browser's local timezone — admin is in Bangkok (UTC+7).
+
+// Return HH:MM in the browser's local timezone (Bangkok for admin use).
+function tsPaidTime(ts){
+  const d=ts?.toDate?.();
+  if(!d) return "—";
+  const pad=n=>String(n).padStart(2,"0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function renderPaidSummary(){
+  const el=$("paidSummaryList");
+  if(!el) return;
+  const selDate=$("paidSummaryDate")?.value;
+  if(!selDate){el.innerHTML=`<p class="psum-empty">Select a date.</p>`;return;}
+
+  // Filter: paid bookings whose adminReviewedAt falls on the selected local date.
+  // tsToDate() uses local time — matches what Bangkok admins see on their clocks.
+  const rows=allBookings
+    .filter(b=>b.paymentStatus==="paid"&&tsToDate(b.adminReviewedAt)===selDate)
+    .sort((a,b)=>(a.adminReviewedAt?.seconds||0)-(b.adminReviewedAt?.seconds||0));
+
+  if(!rows.length){
+    el.innerHTML=`<p class="psum-empty">No paid bookings confirmed on this date.</p>`;
+    return;
+  }
+
+  const syncLabel=ss=>{
+    if(ss==="created"||ss==="updated")                           return `<span class="psum-ok">✓ Synced</span>`;
+    if(ss==="failed"||ss==="update_failed"||ss==="delete_failed") return `<span class="psum-warn">⚠ Sync Failed</span>`;
+    return `<span class="psum-dim">— Not synced</span>`;
+  };
+
+  el.innerHTML=rows.map(b=>{
+    const typeOrSrc=b.bookingType||b.source||"";
+    return `<div class="psum-row">
+      <span class="psum-name">${esc(b.customerName||"—")}</span>
+      <span class="psum-meta">· Paid ${esc(tsPaidTime(b.adminReviewedAt))}</span>
+      <span class="psum-meta">· Plays ${esc(b.date||"—")} ${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</span>
+      <span class="psum-code">${esc(b.bookingCode||"—")}</span>
+      ${typeOrSrc?`<span class="psum-meta">· ${esc(typeOrSrc)}</span>`:""}
+      · ${syncLabel(b.googleCalendarSyncStatus)}
+    </div>`;
+  }).join("");
 }
 // ─────────────────────────────────────────────────────────────────
 
@@ -2239,7 +2272,9 @@ function showToast(msg,isErr=false){
 
 // ── BOOT ─────────────────────────────────────────────────────────
 const todayISO=new Date().toISOString().slice(0,10);
-["weekDate","dayDate","viewDate"].forEach(id=>{const el=$(id);if(el)el.value=todayISO;});
+["weekDate","dayDate","viewDate","paidSummaryDate"].forEach(id=>{const el=$(id);if(el)el.value=todayISO;});
+$("paidSummaryDate").addEventListener("change",renderPaidSummary);
+$("paidSummaryToday").addEventListener("click",()=>{$("paidSummaryDate").value=new Date().toISOString().slice(0,10);renderPaidSummary();});
 (async()=>{if(await checkSession()){loadBookings();}})();
 </script>
 </body>
