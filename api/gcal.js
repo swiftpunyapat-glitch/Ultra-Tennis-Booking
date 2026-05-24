@@ -49,6 +49,26 @@ async function getAccessToken() {
   return data.access_token;
 }
 
+// Add N days to a YYYY-MM-DD string without relying on local timezone.
+function addDaysToISODate(dateISO, days) {
+  const [y, m, d] = dateISO.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  const pad = n => String(n).padStart(2, '0');
+  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+}
+
+// Build RFC 3339 Bangkok start/end datetimes.
+// For midnight-crossing slots (e.g. 23:00–00:00) endTime <= startTime lexically,
+// so the end date is advanced by one day.
+// Lexical HH:mm comparison is safe because times are always zero-padded.
+function buildBangkokEventTimes(date, startTime, endTime) {
+  const endDate = endTime <= startTime ? addDaysToISODate(date, 1) : date;
+  return {
+    startDT: `${date}T${startTime}:00+07:00`,
+    endDT:   `${endDate}T${endTime}:00+07:00`,
+  };
+}
+
 // Build the Calendar event object from booking fields.
 // Only privacy-safe fields are included (no customer name, phone, or LINE ID).
 function buildEvent(booking) {
@@ -57,9 +77,9 @@ function buildEvent(booking) {
   // Privacy-safe title: slot time only, no PII
   const summary = `Ultra Tennis Booking | ${startTime}-${endTime}`;
 
-  // RFC 3339 with Bangkok offset — avoids UTC conversion entirely
-  const startDT = `${date}T${startTime}:00+07:00`;
-  const endDT   = `${date}T${endTime}:00+07:00`;
+  // RFC 3339 with Bangkok offset — avoids UTC conversion entirely.
+  // For midnight-crossing slots (e.g. 23:00–00:00) the end datetime uses the next calendar day.
+  const { startDT, endDT } = buildBangkokEventTimes(date, startTime, endTime);
 
   const descLines = [
     `Booking Code: ${bookingCode || '—'}`,
