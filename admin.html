@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
@@ -532,6 +532,7 @@
           <label>Payment Status</label>
           <select id="manPayStatus">
             <option value="unpaid">unpaid</option>
+            <option value="paid">paid</option>
             <option value="package">package</option>
           </select>
         </div>
@@ -577,6 +578,16 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const normalizePhone = p => String(p||"").replace(/\D/g,"");
 function canNotifyLine(lineUserId) {
   return !!lineUserId && lineUserId !== "guest" && lineUserId !== "manual";
+}
+
+function isLiveBookedSlot(slotData, now = new Date()) {
+  if (!slotData) return false;
+  if (slotData.bookingStatus === "confirmed") return true;
+  if (slotData.bookingStatus === "pending_payment") {
+    const exp = slotData.expiresAt?.toDate?.();
+    return !!exp && exp > now;
+  }
+  return false;
 }
 
 // ── ADMIN NAMES (display only — no PINs) ─────────────────────────
@@ -671,7 +682,9 @@ function renderBookings(){
     const r=document.querySelector(`[data-resch="${b.id}"]`);
     const gr=document.querySelector(`[data-gcal-retry="${b.id}"]`);
     const d=document.querySelector(`[data-delete="${b.id}"]`);
+    const ns=document.querySelector(`[data-paid-noslip="${b.id}"]`);
     if(p)  p.addEventListener("click",()=>markPaid(b));
+    if(ns) ns.addEventListener("click",()=>markPaid(b,{withoutSlip:true}));
     if(c)  c.addEventListener("click",()=>cancelBooking(b));
     if(r)  r.addEventListener("click",()=>openResch(b));
     if(gr) gr.addEventListener("click",()=>retrySyncGcal(b));
@@ -711,6 +724,8 @@ function cardHTML(b){
   // canReschedule = not cancelled/expired/completed/no_show (paid bookings CAN reschedule)
   const canResch=!["cancelled","expired","completed","no_show"].includes(b.bookingStatus);
   const isCancelled=b.bookingStatus==="cancelled";
+  const isTerminal=["cancelled","expired","completed","no_show"].includes(b.bookingStatus);
+  const isConfirmed=b.bookingStatus==="confirmed";
   const isPaid=b.paymentStatus==="paid";
   const canMarkPaid=b.paymentStatus==="pending_review"&&!isCancelled;
   const canCancel=!isCancelled&&!isPaid;
@@ -718,6 +733,8 @@ function cardHTML(b){
   const prevRow=b.previousDate?`<div><div class="fl">Previously</div><div class="fv dim">${esc(b.previousDate)} ${esc(b.previousStartTime)}–${esc(b.previousEndTime)}</div></div>`:"";
   // slipUrl comes from Firebase Storage getDownloadURL — escape for safety; only render if it begins with http(s).
   const safeSlip=(typeof b.slipUrl==="string"&&/^https?:\/\//.test(b.slipUrl))?b.slipUrl:"";
+  const hasPaymentProof=!!safeSlip||!!b.paymentProofUrl||!!b.proofUrl||!!b.paymentSlipUrl;
+  const canConfirmNoSlip=!canMarkPaid&&!isConfirmed&&!isTerminal&&!isPaid&&!hasPaymentProof;
   const slip=safeSlip
     ?`<div class="slip-sec"><div class="slbl">Payment Slip</div><a href="${esc(safeSlip)}" target="_blank" rel="noopener noreferrer"><img class="simg" src="${esc(safeSlip)}" alt="Slip"/></a></div>`
     :`<div class="slip-sec"><div class="slbl">Payment Slip</div><p class="noslip">No slip yet</p></div>`;
@@ -732,6 +749,7 @@ function cardHTML(b){
   const actions=isCancelled
     ?`<button class="bdone">✗ Cancelled</button>${artDelete}`
     :`${canMarkPaid?`<button class="bp" data-paid="${esc(b.id)}">✓ Mark as Paid</button>`:""}
+      ${canConfirmNoSlip?`<button class="bp" data-paid-noslip="${esc(b.id)}">✅ Confirm Paid (No Slip)</button>`:""}
       ${canResch?`<button class="br" data-resch="${esc(b.id)}">📅 Reschedule</button>`:""}
       ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}
       ${artDelete}`;
@@ -757,16 +775,26 @@ function cardHTML(b){
     </div></div>`;
 }
 
-async function markPaid(b){
-  const btn=document.querySelector(`[data-paid="${b.id}"]`);if(btn){btn.disabled=true;btn.textContent="Saving...";}
+async function markPaid(b,opts={}){
+  const withoutSlip=opts.withoutSlip===true;
+  if(withoutSlip&&!confirm("ยืนยันว่ารับเงินแล้ว แม้ลูกค้าไม่ได้แนบสลิป?")) return;
+  const btn=document.querySelector(withoutSlip?`[data-paid-noslip="${b.id}"]`:`[data-paid="${b.id}"]`);
+  const originalText=btn?.textContent||"";
+  if(btn){btn.disabled=true;btn.textContent="Saving...";}
 
   // ── Phase A: Firestore payment update (must succeed before anything else) ──
   try{
     const batch=writeBatch(db);
-    batch.update(doc(db,"bookings",b.id),{paymentStatus:"paid",bookingStatus:"confirmed",adminReviewedAt:serverTimestamp(),updatedAt:serverTimestamp()});
+    const bookingUpdate={paymentStatus:"paid",bookingStatus:"confirmed",status:"confirmed",adminReviewedAt:serverTimestamp(),confirmedAt:serverTimestamp(),updatedAt:serverTimestamp()};
+    if(withoutSlip){
+      bookingUpdate.confirmedByAdmin=true;
+      bookingUpdate.confirmedWithoutSlip=true;
+      bookingUpdate.paymentNote="Admin confirmed payment without slip";
+    }
+    batch.update(doc(db,"bookings",b.id),bookingUpdate);
     batch.update(doc(db,"booking_slots",`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`),{paymentStatus:"paid",bookingStatus:"confirmed"});
     await batch.commit();
-  }catch(e){console.error(e);showToast("Failed to save payment.",true);if(btn){btn.disabled=false;btn.textContent="✓ Mark as Paid";}return;}
+  }catch(e){console.error(e);showToast("Failed to save payment.",true);if(btn){btn.disabled=false;btn.textContent=originalText||"✓ Mark as Paid";}return;}
 
   // ── Phase B: fire-and-forget LINE notification (does not block) ──
   if (canNotifyLine(b.lineUserId) && window.sendLineNotification) {
@@ -1234,6 +1262,7 @@ $("openAllBtn").addEventListener("click",async()=>{
   });
   if(count===0){showToast("All slots already set.");return;}
   await batch.commit();showToast(`✓ Opened ${count} new slots for ${d}`);await loadSlotGrid(d);
+  if(dvLastLoad===d) loadDailyView();
 });
 
 $("closeUnbookedBtn").addEventListener("click",async()=>{
@@ -1246,11 +1275,12 @@ $("closeUnbookedBtn").addEventListener("click",async()=>{
     getDocs(query(collection(db,"booking_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)))
   ]);
   const booked=new Set();const now2=new Date();
-  bkSnap.forEach(x=>{const bd=x.data();if(bd.bookingStatus==="confirmed")booked.add(bd.hour);if(bd.bookingStatus==="pending_payment"){const exp=bd.expiresAt?.toDate?.();if(exp&&exp>now2)booked.add(bd.hour);}});
+  bkSnap.forEach(x=>{const bd=x.data();if(isLiveBookedSlot(bd,now2)) booked.add(bd.hour);});
   const batch=writeBatch(db);let count=0;
   avSnap.forEach(x=>{if(!booked.has(x.data().startTime)){batch.update(x.ref,{status:"closed",closedAt:now,closedBy:admin});count++;}});
   if(!count){showToast("No unbooked open slots to close.");return;}
   await batch.commit();showToast(`✓ Closed ${count} unbooked slots`);await loadSlotGrid(d);
+  if(dvLastLoad===d) loadDailyView();
 });
 
 async function loadSlotGrid(dateISO){
@@ -1264,7 +1294,7 @@ async function loadSlotGrid(dateISO){
     ]);
     const avMap={};avSnap.forEach(d=>{avMap[d.data().startTime]={id:d.id,...d.data()};});
     const booked=new Set();const now=new Date();
-    bkSnap.forEach(d=>{const bd=d.data();if(bd.bookingStatus==="confirmed")booked.add(bd.hour);if(bd.bookingStatus==="pending_payment"){const exp=bd.expiresAt?.toDate?.();if(exp&&exp>now)booked.add(bd.hour);}});
+    bkSnap.forEach(d=>{const bd=d.data();if(isLiveBookedSlot(bd,now)) booked.add(bd.hour);});
 
     const rows=allH().map(h=>{
       const time=fH(h),av=avMap[time],isB=booked.has(time);
@@ -1299,6 +1329,7 @@ async function toggleSlot(btn,dateISO){
       await setDoc(doc(db,"available_slots",id),{resourceId:RESOURCE_ID,date:dateISO,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null});
     }else{await updateDoc(doc(db,"available_slots",existId),{status:"closed",closedAt:now,closedBy:admin});}
     loadSlotGrid(dateISO);
+    if(dvLastLoad===dateISO) loadDailyView();
   }catch(e){console.error(e);showToast("Toggle failed.",true);btn.disabled=false;}
 }
 
@@ -1718,18 +1749,12 @@ async function loadDailyView(){
 
       // booking_slots takes precedence when it points to a live (confirmed or
       // unexpired-pending) booking; otherwise fall back to available_slots status.
-      if(bs && bs.bookingStatus==="confirmed"){
+      if(bs && isLiveBookedSlot(bs,now)){
         status="booked";
         booking=bookingByCode[bs.bookingCode]||null;
-        countConfirmed++;
+        if(bs.bookingStatus==="pending_payment") countPending++;
+        else countConfirmed++;
         if(booking?.paymentStatus==="pending_review") countReview++;
-      } else if(bs && bs.bookingStatus==="pending_payment"){
-        const exp=bs.expiresAt?.toDate?.();
-        if(exp&&exp>now){
-          status="pending"; booking=bookingByCode[bs.bookingCode]||null; countPending++;
-        } else if(av && av.status==="open"){ status="open"; countOpen++; }
-        else  if(av && av.status==="closed"){ status="closed"; countClosed++; }
-        else  { status="not_set"; }
       } else if(av && av.status==="open"){ status="open"; countOpen++; }
       else  if(av && av.status==="closed"){ status="closed"; countClosed++; }
       else  { status="not_set"; }
@@ -1837,16 +1862,7 @@ $("dvGenerateSlotAlert").addEventListener("click",generateDailySlotAlert);
 $("dvCopySlotAlert").addEventListener("click",copyDailySlotAlert);
 
 function isActiveBookingSlot(bs,now=new Date()){
-  if(!bs) return false;
-  if(bs.bookingStatus==="confirmed") return true;
-  if(bs.bookingStatus==="pending_payment"){
-    const exp=bs.expiresAt?.toDate?.();
-    return !exp || exp>now;
-  }
-  if(bs.bookingStatus==="rescheduled"){
-    return bs.active===true || bs.slotActive===true || bs.isActive===true;
-  }
-  return false;
+  return isLiveBookedSlot(bs,now);
 }
 
 function buildDailySlotAlertText(){
@@ -1918,12 +1934,14 @@ const MANUAL_PRICE = {
 };
 const MANUAL_PACKAGE_TYPES=new Set(["Ultra Pass Manual","Off-Peak Manual"]);
 function manualPaymentStatusForType(bookingType){
-  return MANUAL_PACKAGE_TYPES.has(bookingType) ? "package" : "unpaid";
+  if(MANUAL_PACKAGE_TYPES.has(bookingType)) return "package";
+  if(bookingType==="Paid Outside") return "paid";
+  return "unpaid";
 }
 function syncManualPaymentStatus(){
   const status=manualPaymentStatusForType($("manType").value);
   $("manPayStatus").value=status;
-  $("manHint").textContent=`Payment status will be saved as ${status}.`;
+  $("manHint").textContent=`Payment status defaults to ${status}. You can change it before saving.`;
 }
 
 // Populate the start-time dropdown once at module load
@@ -1942,8 +1960,8 @@ function openManualModal(prefillDate,prefillTime){
   $("manName").value="";
   $("manPhone").value="";
   $("manType").value="Manual Single Use";
-  $("manPayStatus").value="unpaid"; // safe default vs strict Firestore rules
-  $("manPayStatus").disabled=true;
+  $("manPayStatus").value="unpaid";
+  $("manPayStatus").disabled=false;
   $("manNote").value="";
   $("manHistory").style.display="none";
   $("manHistory").textContent="";
@@ -2023,8 +2041,7 @@ $("manConfirm").addEventListener("click",async()=>{
   const date=$("manDate").value;
   const time=$("manTime").value;
   const bookingType=$("manType").value;
-  const paymentStatus=manualPaymentStatusForType(bookingType);
-  $("manPayStatus").value=paymentStatus;
+  const paymentStatus=$("manPayStatus").value;
   const note=$("manNote").value.trim();
 
   if(!name)  { $("manName").focus();  showToast("Customer name required.",true); return; }
@@ -2041,6 +2058,9 @@ $("manConfirm").addEventListener("click",async()=>{
   const slotRef=doc(db,"booking_slots",slotId);
   const availRef=doc(db,"available_slots",slotId);
   const bookingRef=doc(collection(db,"bookings"));
+  const paidMeta=paymentStatus==="paid"
+    ?{paidAt:serverTimestamp(),paidByAdmin:true,paymentNote:note||"Manual booking marked paid by admin"}
+    :{};
 
   const btn=$("manConfirm"); btn.disabled=true; btn.textContent="Saving...";
   try{
@@ -2052,11 +2072,7 @@ $("manConfirm").addEventListener("click",async()=>{
         throw new Error("Slot is closed. Open it in Slot Manager first.");
       if(slotSnap.exists()){
         const sd=slotSnap.data();
-        if(sd.bookingStatus==="confirmed") throw new Error("Slot is already booked.");
-        if(sd.bookingStatus==="pending_payment"){
-          const exp=sd.expiresAt?.toDate?.();
-          if(!exp||exp>new Date()) throw new Error("Slot is held by a pending payment.");
-        }
+        if(isLiveBookedSlot(sd)) throw new Error(sd.bookingStatus==="pending_payment"?"Slot is held by a pending payment.":"Slot is already booked.");
         // "rescheduled" and "cancelled" slot rows are released → allowed to overwrite.
       }
 
@@ -2081,6 +2097,7 @@ $("manConfirm").addEventListener("click",async()=>{
         createdBy:               adminName,
         createdAt:               serverTimestamp(),
         updatedAt:               serverTimestamp(),
+        ...paidMeta,
       });
       t.set(slotRef,{
         bookingCode:    code,
@@ -2093,13 +2110,15 @@ $("manConfirm").addEventListener("click",async()=>{
         createdBy:      adminName,
         createdAt:      serverTimestamp(),
         updatedAt:      serverTimestamp(),
+        ...paidMeta,
       });
     });
 
     showToast(`✓ Manual booking ${code} saved`);
     closeManualModal();
-    // Reload Daily View if currently looking at the same date
+    // Reload Daily View / Slot Manager if currently looking at the same date
     if(dvLastLoad===date) loadDailyView();
+    if(getViewDate && getViewDate()===date) loadSlotGrid(date);
     // Best-effort: refresh main bookings list if it's been loaded
     try { loadBookings(); } catch(_) { /* non-fatal */ }
   } catch(e){
@@ -2193,7 +2212,7 @@ $("mLoadSlots").addEventListener("click",async()=>{
     ]);
     const openSet=new Set();avSnap.forEach(x=>openSet.add(x.data().startTime));
     const blocked=new Set();const now=new Date();
-    bkSnap.forEach(x=>{const bd=x.data();if(bd.bookingCode===reschBooking?.bookingCode)return;if(bd.bookingStatus==="confirmed")blocked.add(bd.hour);if(bd.bookingStatus==="pending_payment"){const exp=bd.expiresAt?.toDate?.();if(exp&&exp>now)blocked.add(bd.hour);}});
+    bkSnap.forEach(x=>{const bd=x.data();if(bd.bookingCode===reschBooking?.bookingCode)return;if(isLiveBookedSlot(bd,now))blocked.add(bd.hour);});
 
     if(!openSet.size){$("rTimeGrid").innerHTML=`<p style="color:var(--m);font-size:.78rem;grid-column:1/-1">No open slots. Open them in Slot Manager first.</p>`;return;}
 
@@ -2234,10 +2253,7 @@ $("mConfirm").addEventListener("click",async()=>{
       if(!avSnap.exists()||avSnap.data().status!=="open") throw new Error("Selected slot is not open.");
       if(newSnap.exists()){
         const nd=newSnap.data();
-        if(nd.bookingCode!==reschBooking.bookingCode){
-          if(nd.bookingStatus==="confirmed") throw new Error("Slot is already booked.");
-          if(nd.bookingStatus==="pending_payment"){const exp=nd.expiresAt?.toDate?.();if(!exp||exp>new Date())throw new Error("Slot is temporarily held.");}
-        }
+        if(nd.bookingCode!==reschBooking.bookingCode && isLiveBookedSlot(nd)) throw new Error(nd.bookingStatus==="pending_payment"?"Slot is temporarily held.":"Slot is already booked.");
       }
       const bookingUpdate={
         date:newDate,startTime:reschTime,endTime:newEnd,
@@ -2326,3 +2342,4 @@ $("paidSummaryToday").addEventListener("click",()=>{$("paidSummaryDate").value=n
 </script>
 </body>
 </html>
+
