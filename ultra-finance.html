@@ -1,0 +1,981 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Ultra Tennis · Finance</title>
+  <style>
+    :root{--bg:#07111d;--s:#0d1b2a;--s2:#12263a;--bd:#20384f;--g:#FFD700;--gd:#FFD70022;--gh:#FFD70038;--t:#FFFFFF;--m:#9fb3c8;--mid:#c7d6e5;--dan:#f87171;--warn:#FFD700;--ac:#4A90E2;--bl:#4A90E2;--grn:#4ade80;--r:10px;}
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:var(--bg);color:var(--t);font-family:Inter,ui-sans-serif,system-ui,sans-serif;min-height:100vh;}
+    button{border:0;font:inherit;cursor:pointer;}
+    input,select,textarea{font:inherit;}
+    a{color:inherit;text-decoration:none;}
+
+    /* ── LOGIN ── */
+    .lwrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+    .lcard{width:100%;max-width:360px;background:var(--s);border:1px solid var(--bd);border-radius:16px;padding:32px 28px;text-align:center;}
+    .llogo{font-size:2.4rem;margin-bottom:8px;}
+    .lcard h1{font-size:1.25rem;font-weight:900;}
+    .lcard p{font-size:.8rem;color:var(--m);margin-top:3px;}
+    .lfields{display:flex;flex-direction:column;gap:12px;margin:22px 0 16px;text-align:left;}
+    .lfields label{font-size:.7rem;color:var(--m);font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:4px;}
+    .lfields select,.lfields input{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:8px;color:var(--t);padding:10px 12px;font-size:.88rem;}
+    .lfields select:focus,.lfields input:focus{outline:none;border-color:var(--g);}
+    .pinwrap{position:relative;}
+    .pinwrap input{padding-right:38px;}
+    .pineye{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;color:var(--m);font-size:.8rem;}
+    .lbtn{width:100%;padding:12px;border-radius:8px;background:var(--g);color:#0a1a0c;font-weight:900;font-size:.95rem;}
+    .lbtn:hover{background:#e6c200;}
+    .lerr{color:var(--dan);font-size:.8rem;margin-top:10px;display:none;}
+
+    /* ── HEADER ── */
+    .ahdr{background:var(--s);border-bottom:1px solid var(--bd);padding:13px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;gap:12px;flex-wrap:wrap;}
+    .ahdr-l h1{font-size:.95rem;font-weight:900;}
+    .ahdr-l span{font-size:.68rem;color:var(--m);}
+    .ahdr-r{display:flex;align-items:center;gap:8px;}
+    .abadge{background:var(--gd);border:1px solid var(--g);color:var(--g);padding:3px 9px;border-radius:999px;font-size:.72rem;font-weight:700;}
+    .loutbtn{background:var(--s2);border:1px solid var(--bd);color:var(--m);padding:5px 11px;border-radius:8px;font-size:.72rem;font-weight:700;}
+    .loutbtn:hover{border-color:var(--dan);color:var(--dan);}
+    .backbtn{background:var(--s2);border:1px solid var(--bd);color:var(--m);padding:5px 11px;border-radius:8px;font-size:.72rem;font-weight:700;display:inline-flex;align-items:center;gap:4px;}
+    .backbtn:hover{border-color:var(--ac);color:var(--ac);}
+
+    /* ── MONTH BAR ── */
+    .monthbar{background:var(--s);border-bottom:1px solid var(--bd);padding:10px 18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+    .monthbar label{font-size:.72rem;color:var(--m);font-weight:700;text-transform:uppercase;letter-spacing:.4px;}
+    .monthbar input[type=month]{background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:6px 10px;font-size:.85rem;min-width:150px;}
+    .monthbar input[type=month]:focus{outline:none;border-color:var(--g);}
+    .mnav{padding:5px 11px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--mid);font-size:.82rem;font-weight:700;}
+    .mnav:hover{border-color:var(--g);color:var(--g);}
+    .mstate{font-size:.72rem;color:var(--m);margin-left:auto;}
+
+    /* ── SUMMARY CARDS ── */
+    .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));border-bottom:1px solid var(--bd);}
+    .card{padding:12px 14px;background:var(--s);border-right:1px solid var(--bd);}
+    .card:last-child{border-right:0;}
+    .cn{font-size:1.1rem;font-weight:900;}
+    .cl{font-size:.6rem;color:var(--m);text-transform:uppercase;letter-spacing:.4px;margin-top:2px;}
+    .csub{font-size:.63rem;color:var(--m);margin-top:1px;}
+    .cg{color:var(--g);}.cgrn{color:var(--grn);}.cr{color:var(--dan);}.cy{color:var(--warn);}.cac{color:var(--ac);}
+
+    /* ── TABS ── */
+    .tabbar{display:flex;background:var(--s);border-bottom:1px solid var(--bd);}
+    .tab{flex:1;padding:11px 6px;font-size:.8rem;font-weight:800;color:var(--m);background:none;border-bottom:2px solid transparent;transition:all .15s;}
+    .tab.on{color:var(--g);border-bottom-color:var(--g);}
+
+    /* ── MAIN ── */
+    .main{padding:14px 18px;max-width:1100px;margin:0 auto;}
+
+    /* ── SECTION CARDS ── */
+    .sec{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;margin-bottom:13px;}
+    .sec-hdr{padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid var(--bd);background:var(--s2);flex-wrap:wrap;}
+    .sec-hdr h2{font-size:.78rem;font-weight:800;color:var(--mid);text-transform:uppercase;letter-spacing:.8px;margin:0;}
+    .sec-body{padding:12px 14px;}
+
+    /* ── FORMS ── */
+    .fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:12px;}
+    .ff{display:flex;flex-direction:column;gap:4px;}
+    .ff label{font-size:.67rem;color:var(--m);font-weight:700;text-transform:uppercase;letter-spacing:.4px;}
+    .ff input,.ff select,.ff textarea{background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%;}
+    .ff input:focus,.ff select:focus,.ff textarea:focus{outline:none;border-color:var(--g);}
+    .ff textarea{min-height:58px;resize:vertical;}
+    .ff-wide{grid-column:1/-1;}
+    .form-editing .sec-hdr{border-color:var(--g);}
+    .form-editing .sec{border-color:var(--g);}
+    .form-actions{display:flex;gap:8px;flex-wrap:wrap;}
+    .btn-g{padding:8px 16px;border-radius:7px;background:var(--gd);border:1px solid var(--g);color:var(--g);font-size:.8rem;font-weight:800;}
+    .btn-g:hover{background:var(--gh);}
+    .btn-g:disabled{opacity:.5;cursor:not-allowed;}
+    .btn-d{padding:8px 16px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--m);font-size:.8rem;font-weight:800;}
+    .btn-d:hover{border-color:var(--m);color:var(--t);}
+    .btn-r{padding:5px 10px;border-radius:6px;background:#3d101010;border:1px solid var(--dan);color:var(--dan);font-size:.72rem;font-weight:800;}
+    .btn-r:hover{background:#3d101030;}
+    .btn-e{padding:5px 10px;border-radius:6px;background:var(--s2);border:1px solid var(--bd);color:var(--mid);font-size:.72rem;font-weight:800;}
+    .btn-e:hover{border-color:var(--ac);color:var(--ac);}
+
+    /* ── TABLES ── */
+    .tscroll{overflow-x:auto;}
+    .ftable{width:100%;border-collapse:collapse;font-size:.78rem;min-width:600px;}
+    .ftable th{text-align:left;padding:7px 10px;font-size:.63rem;color:var(--m);font-weight:700;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--bd);white-space:nowrap;}
+    .ftable td{padding:7px 10px;border-bottom:1px solid var(--bd);vertical-align:middle;}
+    .ftable tr:last-child td{border-bottom:0;}
+    .ftable tr:hover td{background:var(--s2);}
+    .tnum{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+    .tact{text-align:right;white-space:nowrap;}
+    .tot-row td{font-weight:900;background:var(--s2) !important;border-top:2px solid var(--bd);border-bottom:0 !important;}
+    .tot-row .tnum{color:var(--g);}
+
+    /* ── STATUS BADGES ── */
+    .sp{display:inline-block;padding:2px 7px;border-radius:999px;font-size:.64rem;font-weight:800;}
+    .sp-paid{background:#0d3320;color:var(--g);}
+    .sp-unpaid{background:#3d2e00;color:var(--warn);}
+    .sp-pending{background:#3d2e00;color:var(--warn);}
+    .sp-package{background:#1e1e3d;color:#a78bfa;}
+    .sp-cancelled{background:#3d1010;color:var(--dan);}
+    .sp-rejected{background:#3d1010;color:var(--dan);}
+
+    /* ── FILTER BAR ── */
+    .fbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;}
+    .fbar label{font-size:.7rem;color:var(--m);font-weight:700;}
+    .fbar select{background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:5px 9px;font-size:.78rem;}
+    .fbar select:focus{outline:none;border-color:var(--g);}
+
+    /* ── CATEGORY TOTALS ── */
+    .cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:7px;margin-top:12px;}
+    .cat-item{background:var(--s2);border:1px solid var(--bd);border-radius:7px;padding:8px 11px;display:flex;justify-content:space-between;align-items:center;}
+    .cat-name{font-size:.75rem;font-weight:700;color:var(--mid);}
+    .cat-amt{font-size:.82rem;font-weight:900;color:var(--warn);}
+    .cat-item-total{border-color:var(--dan);background:var(--bg);}
+    .cat-item-total .cat-name{color:var(--dan);}
+    .cat-item-total .cat-amt{color:var(--dan);}
+
+    /* ── MISC ── */
+    .empty{text-align:center;padding:28px;color:var(--m);font-size:.82rem;font-style:italic;}
+    .lstate{text-align:center;padding:36px;color:var(--m);font-size:.82rem;}
+    .spinner{width:24px;height:24px;border:2px solid var(--bd);border-top-color:var(--g);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 8px;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+    .toast{position:fixed;left:50%;bottom:18px;width:min(calc(100% - 32px),400px);padding:10px 13px;border-radius:8px;background:#0d1b2a;color:#fff;font-weight:750;text-align:center;transform:translate(-50%,120px);opacity:0;transition:opacity 180ms,transform 180ms;z-index:500;}
+    .toast.show{opacity:1;transform:translate(-50%,0);}
+    .toast.err{background:var(--dan);}
+    .divider{height:1px;background:var(--bd);margin:14px 0;}
+
+    @media(max-width:640px){
+      .main{padding:11px 12px;}
+      .cards{grid-template-columns:1fr 1fr;}
+      .fgrid{grid-template-columns:1fr 1fr;}
+      .ftable{font-size:.72rem;}
+      .ftable th,.ftable td{padding:5px 6px;}
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════ LOGIN ═══════════════ -->
+<div id="loginScreen" class="lwrap">
+  <div class="lcard">
+    <div class="llogo">💰</div>
+    <h1>Ultra Tennis · Finance</h1>
+    <p>Admin Access Required</p>
+    <div class="lfields">
+      <div><label>Your Name</label><select id="adminSel"><option value="">Select name...</option></select></div>
+      <div><label>PIN</label><div class="pinwrap"><input type="password" id="pinIn" placeholder="Enter PIN" maxlength="8"/><button class="pineye" id="pinEye">👁</button></div></div>
+    </div>
+    <button class="lbtn" id="loginBtn">Login</button>
+    <p class="lerr" id="loginErr">Incorrect PIN. Please try again.</p>
+  </div>
+</div>
+
+<!-- ═══════════════ MAIN APP ═══════════════ -->
+<div id="mainApp" style="display:none">
+
+  <header class="ahdr">
+    <div class="ahdr-l">
+      <h1>💰 Ultra Tennis · Finance Tracker</h1>
+      <span id="lastUpd">—</span>
+    </div>
+    <div class="ahdr-r">
+      <a href="/admin.html" class="backbtn">← Admin</a>
+      <span class="abadge" id="adminBadge">—</span>
+      <button class="loutbtn" id="logoutBtn">Logout</button>
+    </div>
+  </header>
+
+  <!-- MONTH SELECTOR -->
+  <div class="monthbar">
+    <label>Month</label>
+    <button class="mnav" id="prevMonth">‹</button>
+    <input type="month" id="monthPicker"/>
+    <button class="mnav" id="nextMonth">›</button>
+    <span class="mstate" id="mState"></span>
+  </div>
+
+  <!-- SUMMARY CARDS -->
+  <div class="cards">
+    <div class="card">
+      <div class="cn cgrn" id="cRevTotal">฿—</div>
+      <div class="cl">Total Revenue</div>
+      <div class="csub" id="cRevSub">—</div>
+    </div>
+    <div class="card">
+      <div class="cn cg" id="cBookRev">฿—</div>
+      <div class="cl">Booking Revenue</div>
+      <div class="csub" id="cBookSub">—</div>
+    </div>
+    <div class="card">
+      <div class="cn cac" id="cManIncome">฿—</div>
+      <div class="cl">Manual Income</div>
+      <div class="csub" id="cManSub">—</div>
+    </div>
+    <div class="card">
+      <div class="cn cy" id="cExpenses">฿—</div>
+      <div class="cl">Total Expenses</div>
+      <div class="csub" id="cExpSub">—</div>
+    </div>
+    <div class="card">
+      <div class="cn" id="cNetPL">฿—</div>
+      <div class="cl">Net Profit / Loss</div>
+      <div class="csub" id="cNetSub">Revenue − Expenses</div>
+    </div>
+    <div class="card">
+      <div class="cn cac" id="cPaidHrs">—</div>
+      <div class="cl">Paid Booking Hours</div>
+      <div class="csub" id="cPaidHrsSub">—</div>
+    </div>
+    <div class="card">
+      <div class="cn cr" id="cUnpaid">฿—</div>
+      <div class="cl">Unpaid Amount</div>
+      <div class="csub" id="cUnpaidSub">— bookings</div>
+    </div>
+  </div>
+
+  <!-- TAB BAR -->
+  <div class="tabbar">
+    <button class="tab on" data-tab="bookings">📋 Booking Revenue</button>
+    <button class="tab"    data-tab="income">➕ Manual Income</button>
+    <button class="tab"    data-tab="expenses">💸 Expenses</button>
+  </div>
+
+  <!-- ─── BOOKINGS TAB ─── -->
+  <div id="tabBookings">
+    <div class="main">
+      <div class="sec">
+        <div class="sec-hdr">
+          <h2>📋 All Bookings — <span id="bookMonthLabel">—</span></h2>
+          <span id="bookTotalLabel" style="font-size:.75rem;color:var(--m)"></span>
+        </div>
+        <div class="sec-body">
+          <div id="bookingTableWrap"><div class="lstate"><div class="spinner"></div><p>Loading…</p></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── MANUAL INCOME TAB ─── -->
+  <div id="tabIncome" style="display:none">
+    <div class="main">
+
+      <!-- Add / Edit Income Form -->
+      <div class="sec" id="incFormSec">
+        <div class="sec-hdr">
+          <h2 id="incFormTitle">➕ Add Manual Income</h2>
+        </div>
+        <div class="sec-body">
+          <div class="fgrid">
+            <div class="ff">
+              <label>Date</label>
+              <input type="date" id="incDate"/>
+            </div>
+            <div class="ff">
+              <label>Category</label>
+              <select id="incCategory">
+                <option value="Pass Sale">Pass Sale</option>
+                <option value="Lesson">Lesson</option>
+                <option value="Event">Event</option>
+                <option value="Membership">Membership</option>
+                <option value="Misc">Misc</option>
+              </select>
+            </div>
+            <div class="ff">
+              <label>Amount (฿)</label>
+              <input type="number" id="incAmount" min="0" step="1" placeholder="e.g. 5400"/>
+            </div>
+            <div class="ff ff-wide">
+              <label>Description</label>
+              <input type="text" id="incDesc" maxlength="300" placeholder="e.g. Ultra Pass 10H sold to Somchai"/>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-g" id="incSubmitBtn">+ Add Income</button>
+            <button class="btn-d" id="incCancelBtn" style="display:none">✕ Cancel Edit</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Income Table -->
+      <div class="sec">
+        <div class="sec-hdr">
+          <h2>Manual Income — <span id="incMonthLabel">—</span></h2>
+          <span id="incTotalLabel" style="font-size:.78rem;color:var(--g);font-weight:800;"></span>
+        </div>
+        <div class="sec-body">
+          <div id="incTableWrap"><div class="empty">No manual income recorded this month.</div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─── EXPENSES TAB ─── -->
+  <div id="tabExpenses" style="display:none">
+    <div class="main">
+
+      <!-- Add / Edit Expense Form -->
+      <div class="sec" id="expFormSec">
+        <div class="sec-hdr">
+          <h2 id="expFormTitle">💸 Add Expense</h2>
+        </div>
+        <div class="sec-body">
+          <div class="fgrid">
+            <div class="ff">
+              <label>Date</label>
+              <input type="date" id="expDate"/>
+            </div>
+            <div class="ff">
+              <label>Category</label>
+              <select id="expCategory">
+                <option value="Rent">Rent</option>
+                <option value="Staff">Staff</option>
+                <option value="Utility">Utility</option>
+                <option value="Equipment">Equipment</option>
+                <option value="Maintenance">Maintenance</option>
+                <option value="Marketing">Marketing</option>
+                <option value="Software">Software</option>
+                <option value="Supplies">Supplies</option>
+                <option value="Refund">Refund</option>
+                <option value="Misc">Misc</option>
+              </select>
+            </div>
+            <div class="ff">
+              <label>Amount (฿)</label>
+              <input type="number" id="expAmount" min="0" step="1" placeholder="e.g. 15000"/>
+            </div>
+            <div class="ff">
+              <label>Payment Method</label>
+              <select id="expPayMethod">
+                <option value="Transfer">Transfer</option>
+                <option value="Cash">Cash</option>
+                <option value="Credit Card">Credit Card</option>
+                <option value="Online">Online</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div class="ff">
+              <label>Vendor / Payee</label>
+              <input type="text" id="expVendor" maxlength="200" placeholder="e.g. BKK Property Co."/>
+            </div>
+            <div class="ff ff-wide">
+              <label>Note (optional)</label>
+              <input type="text" id="expNote" maxlength="400" placeholder="Any details…"/>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-g" id="expSubmitBtn">+ Add Expense</button>
+            <button class="btn-d" id="expCancelBtn" style="display:none">✕ Cancel Edit</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Expense Table -->
+      <div class="sec">
+        <div class="sec-hdr">
+          <h2>Expenses — <span id="expMonthLabel">—</span></h2>
+          <span id="expTotalLabel" style="font-size:.78rem;color:var(--warn);font-weight:800;"></span>
+        </div>
+        <div class="sec-body">
+          <div class="fbar">
+            <label>Filter:</label>
+            <select id="expCatFilter">
+              <option value="all">All Categories</option>
+              <option value="Rent">Rent</option>
+              <option value="Staff">Staff</option>
+              <option value="Utility">Utility</option>
+              <option value="Equipment">Equipment</option>
+              <option value="Maintenance">Maintenance</option>
+              <option value="Marketing">Marketing</option>
+              <option value="Software">Software</option>
+              <option value="Supplies">Supplies</option>
+              <option value="Refund">Refund</option>
+              <option value="Misc">Misc</option>
+            </select>
+          </div>
+          <div id="expTableWrap"><div class="empty">No expenses recorded this month.</div></div>
+          <div class="divider"></div>
+          <div style="font-size:.72rem;color:var(--m);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Total by Category</div>
+          <div id="catTotalsWrap"><div class="empty" style="padding:12px">No data.</div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+
+const ADMIN_NAMES = ["Art","Aoy","BaiMon","Ano","Stam"];
+
+// ── STATE ─────────────────────────────────────────────────────────
+let currentAdminName = null;
+let allBookings      = [];
+let allExpenses      = [];
+let allManualIncome  = [];
+let expCatFilter     = "all";
+let expEditId        = null;
+let incEditId        = null;
+
+// ── UTILITIES ─────────────────────────────────────────────────────
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function calcHours(s, e) {
+  if (!s || !e) return 0;
+  const [sh, sm] = s.split(":").map(Number);
+  const [eh, em] = e.split(":").map(Number);
+  return Math.max(0, (eh * 60 + em - sh * 60 - sm) / 60);
+}
+
+function baht(n) {
+  const v = Math.abs(Number(n) || 0);
+  return "฿" + v.toLocaleString("en-US", {maximumFractionDigits: 0});
+}
+
+function todayISO() {
+  const d = new Date(), pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
+function currentMonthValue() {
+  const d = new Date(), pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}`;
+}
+
+function monthLabel(val) {
+  if (!val) return "—";
+  const [y, m] = val.split("-");
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${months[parseInt(m,10)-1]} ${y}`;
+}
+
+function shiftMonth(val, delta) {
+  if (!val) return val;
+  const [y, m] = val.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}`;
+}
+
+// ── TOAST ─────────────────────────────────────────────────────────
+let _toastTimer;
+function showToast(msg, isErr = false) {
+  const el = $("toast");
+  el.textContent = msg;
+  el.className = "toast show" + (isErr ? " err" : "");
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove("show"), 2800);
+}
+
+// ── LOGIN NAMES ───────────────────────────────────────────────────
+ADMIN_NAMES.forEach(n => {
+  const o = document.createElement("option"); o.value = o.textContent = n;
+  $("adminSel").append(o);
+});
+
+// ── AUTH ──────────────────────────────────────────────────────────
+async function checkSession() {
+  try {
+    const res = await fetch("/api/admin-check");
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data.ok && data.name) { currentAdminName = data.name; showApp(data.name); return true; }
+  } catch {}
+  return false;
+}
+
+function showApp(name) {
+  $("loginScreen").style.display = "none";
+  $("mainApp").style.display = "block";
+  $("adminBadge").textContent = name;
+  $("monthPicker").value = currentMonthValue();
+  loadMonthData();
+}
+
+$("pinEye").addEventListener("click", () => {
+  const p = $("pinIn"); p.type = p.type === "password" ? "text" : "password";
+});
+$("pinIn").addEventListener("keydown", e => { if (e.key === "Enter") $("loginBtn").click(); });
+
+$("loginBtn").addEventListener("click", async () => {
+  const n = $("adminSel").value.trim(), p = $("pinIn").value, err = $("loginErr");
+  if (!n) { err.textContent = "Please select your name."; err.style.display = "block"; return; }
+  const btn = $("loginBtn"); btn.disabled = true; btn.textContent = "Logging in…";
+  try {
+    const res = await fetch("/api/admin-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:n, pin:p})});
+    const data = await res.json();
+    if (data.ok) {
+      currentAdminName = data.name; err.style.display = "none"; showApp(data.name);
+    } else {
+      err.textContent = "Incorrect name or PIN."; err.style.display = "block";
+      $("pinIn").value = ""; $("pinIn").focus();
+    }
+  } catch { err.textContent = "Login failed. Try again."; err.style.display = "block"; }
+  finally { btn.disabled = false; btn.textContent = "Login"; }
+});
+
+$("logoutBtn").addEventListener("click", async () => {
+  try { await fetch("/api/admin-logout", {method:"POST"}); } catch {}
+  currentAdminName = null;
+  $("mainApp").style.display = "none"; $("loginScreen").style.display = "flex";
+  $("adminSel").value = ""; $("pinIn").value = "";
+});
+
+// ── TABS ──────────────────────────────────────────────────────────
+document.querySelectorAll(".tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(b => b.classList.remove("on"));
+    btn.classList.add("on");
+    $("tabBookings").style.display = btn.dataset.tab === "bookings" ? "block" : "none";
+    $("tabIncome").style.display   = btn.dataset.tab === "income"   ? "block" : "none";
+    $("tabExpenses").style.display = btn.dataset.tab === "expenses" ? "block" : "none";
+  });
+});
+
+// ── MONTH NAVIGATION ──────────────────────────────────────────────
+$("prevMonth").addEventListener("click", () => {
+  $("monthPicker").value = shiftMonth($("monthPicker").value, -1);
+  loadMonthData();
+});
+$("nextMonth").addEventListener("click", () => {
+  $("monthPicker").value = shiftMonth($("monthPicker").value, 1);
+  loadMonthData();
+});
+$("monthPicker").addEventListener("change", loadMonthData);
+
+// ── LOAD DATA FOR SELECTED MONTH ──────────────────────────────────
+async function loadMonthData() {
+  const mv = $("monthPicker").value;
+  if (!mv) return;
+  $("mState").textContent = "Loading…";
+  try {
+    const res = await fetch(`/api/finance-data?month=${encodeURIComponent(mv)}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Failed to load");
+    allBookings     = data.bookings;
+    allExpenses     = data.expenses;
+    allManualIncome = data.income;
+    $("lastUpd").textContent = `Updated ${new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}`;
+    $("mState").textContent = "";
+    renderAll();
+  } catch (e) {
+    console.error("[finance] loadMonthData error:", e);
+    $("mState").textContent = "Load error — check console.";
+    showToast("Failed to load data.", true);
+  }
+}
+
+// ── RENDER ALL ────────────────────────────────────────────────────
+function renderAll() {
+  renderSummaryCards();
+  renderBookingTable();
+  renderIncomeTable();
+  renderExpenseTable();
+  renderCategoryTotals();
+  updateMonthLabels();
+}
+
+function updateMonthLabels() {
+  const mv = $("monthPicker").value;
+  const lbl = monthLabel(mv);
+  $("bookMonthLabel").textContent = lbl;
+  $("incMonthLabel").textContent  = lbl;
+  $("expMonthLabel").textContent  = lbl;
+}
+
+// ── SUMMARY CARDS ─────────────────────────────────────────────────
+function renderSummaryCards() {
+  const paidBookings = allBookings.filter(b => b.paymentStatus === "paid");
+  const unpaidBookings = allBookings.filter(b =>
+    (b.paymentStatus === "unpaid" || b.paymentStatus === "pending_review") &&
+    b.bookingStatus !== "cancelled"
+  );
+
+  const bookRev    = paidBookings.reduce((s, b) => s + (Number(b.price) || 0), 0);
+  const manInc     = allManualIncome.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+  const totalRev   = bookRev + manInc;
+  const totalExp   = allExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const netPL      = totalRev - totalExp;
+  const paidHrs    = paidBookings.reduce((s, b) => s + calcHours(b.startTime, b.endTime), 0);
+  const unpaidAmt  = unpaidBookings.reduce((s, b) => s + (Number(b.price) || 0), 0);
+
+  $("cRevTotal").textContent  = baht(totalRev);
+  $("cRevSub").textContent    = `Bookings + Income`;
+  $("cBookRev").textContent   = baht(bookRev);
+  $("cBookSub").textContent   = `${paidBookings.length} paid booking${paidBookings.length!==1?"s":""}`;
+  $("cManIncome").textContent = baht(manInc);
+  $("cManSub").textContent    = `${allManualIncome.length} entr${allManualIncome.length!==1?"ies":"y"}`;
+  $("cExpenses").textContent  = baht(totalExp);
+  $("cExpSub").textContent    = `${allExpenses.length} item${allExpenses.length!==1?"s":""}`;
+
+  const netEl = $("cNetPL");
+  netEl.textContent = (netPL >= 0 ? "+" : "−") + baht(Math.abs(netPL));
+  netEl.className   = "cn " + (netPL >= 0 ? "cgrn" : "cr");
+
+  $("cPaidHrs").textContent    = paidHrs % 1 === 0 ? `${paidHrs} hrs` : `${paidHrs.toFixed(1)} hrs`;
+  $("cPaidHrsSub").textContent = `from paid bookings`;
+  $("cUnpaid").textContent     = baht(unpaidAmt);
+  $("cUnpaidSub").textContent  = `${unpaidBookings.length} unpaid booking${unpaidBookings.length!==1?"s":""}`;
+}
+
+// ── BOOKING TABLE ─────────────────────────────────────────────────
+function renderBookingTable() {
+  const wrap = $("bookingTableWrap");
+  if (!allBookings.length) {
+    wrap.innerHTML = `<div class="empty">No bookings found for this month.</div>`;
+    $("bookTotalLabel").textContent = "";
+    return;
+  }
+
+  const paidCount = allBookings.filter(b => b.paymentStatus === "paid").length;
+  const paidRev   = allBookings.filter(b => b.paymentStatus === "paid").reduce((s,b)=>s+(Number(b.price)||0),0);
+  $("bookTotalLabel").textContent = `${allBookings.length} total · ${paidCount} paid · ${baht(paidRev)} revenue`;
+
+  const rows = allBookings.map(b => {
+    const hrs   = calcHours(b.startTime, b.endTime);
+    const isPaid = b.paymentStatus === "paid";
+    const ps     = b.paymentStatus || "—";
+    const psBadge = `<span class="sp sp-${esc(ps)}">${esc(ps)}</span>`;
+    const source = abbrevSource(b.bookingType || b.source || "—");
+    return `<tr>
+      <td>${esc(b.date||"—")}</td>
+      <td style="white-space:nowrap">${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</td>
+      <td>${esc(b.customerName||"—")}</td>
+      <td class="tnum">${hrs > 0 ? hrs : "—"}</td>
+      <td class="tnum" style="color:${isPaid?"var(--g)":"var(--m)"}">${isPaid?baht(b.price||0):`<span style="color:var(--m)">${baht(b.price||0)}</span>`}</td>
+      <td>${psBadge}</td>
+      <td style="color:var(--m);font-size:.72rem">${esc(source)}</td>
+    </tr>`;
+  }).join("");
+
+  const paidTotalHrs = allBookings.filter(b=>b.paymentStatus==="paid").reduce((s,b)=>s+calcHours(b.startTime,b.endTime),0);
+
+  wrap.innerHTML = `<div class="tscroll"><table class="ftable">
+    <thead><tr>
+      <th>Date</th><th>Time</th><th>Customer</th>
+      <th class="tnum">Hours</th><th class="tnum">Amount</th>
+      <th>Payment</th><th>Source</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr class="tot-row">
+      <td colspan="3"><strong>Paid Revenue Total</strong></td>
+      <td class="tnum"><strong>${paidTotalHrs}</strong></td>
+      <td class="tnum"><strong>${baht(paidRev)}</strong></td>
+      <td colspan="2"></td>
+    </tr></tfoot>
+  </table></div>`;
+}
+
+function abbrevSource(s) {
+  const map = {
+    "Manual Single Use":"Manual",
+    "Paid Outside":"Paid Outside",
+    "Pay at Counter":"Counter",
+    "Ultra Pass Manual":"Ultra Pass",
+    "Off-Peak Manual":"Off-Peak",
+  };
+  return map[s] || s;
+}
+
+// ── MANUAL INCOME TABLE ───────────────────────────────────────────
+function renderIncomeTable() {
+  const wrap = $("incTableWrap");
+  const total = allManualIncome.reduce((s,i)=>s+(Number(i.amount)||0),0);
+  $("incTotalLabel").textContent = allManualIncome.length ? `Total: ${baht(total)}` : "";
+
+  if (!allManualIncome.length) {
+    wrap.innerHTML = `<div class="empty">No manual income recorded this month.</div>`;
+    return;
+  }
+
+  const rows = allManualIncome.map(i => `<tr>
+    <td>${esc(i.date||"—")}</td>
+    <td>${esc(i.category||"—")}</td>
+    <td class="tnum" style="color:var(--ac)">${baht(i.amount||0)}</td>
+    <td style="color:var(--m);font-size:.75rem">${esc(i.description||"—")}</td>
+    <td class="tact">
+      <button class="btn-e" data-inc-edit="${esc(i.id)}">Edit</button>
+      <button class="btn-r" data-inc-del="${esc(i.id)}" style="margin-left:5px">Del</button>
+    </td>
+  </tr>`).join("");
+
+  wrap.innerHTML = `<div class="tscroll"><table class="ftable">
+    <thead><tr><th>Date</th><th>Category</th><th class="tnum">Amount</th><th>Description</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr class="tot-row">
+      <td colspan="2"><strong>Total</strong></td>
+      <td class="tnum"><strong>${baht(total)}</strong></td>
+      <td colspan="2"></td>
+    </tr></tfoot>
+  </table></div>`;
+
+  wrap.querySelectorAll("[data-inc-edit]").forEach(btn =>
+    btn.addEventListener("click", () => startEditIncome(btn.dataset.incEdit)));
+  wrap.querySelectorAll("[data-inc-del]").forEach(btn =>
+    btn.addEventListener("click", () => deleteIncome(btn.dataset.incDel)));
+}
+
+// ── EXPENSE TABLE ─────────────────────────────────────────────────
+function renderExpenseTable() {
+  const wrap = $("expTableWrap");
+  const filtered = expCatFilter === "all"
+    ? allExpenses
+    : allExpenses.filter(e => e.category === expCatFilter);
+  const total = allExpenses.reduce((s,e)=>s+(Number(e.amount)||0),0);
+  $("expTotalLabel").textContent = allExpenses.length ? `Total: ${baht(total)}` : "";
+
+  if (!filtered.length) {
+    wrap.innerHTML = `<div class="empty">No expenses for this month${expCatFilter!=="all"?` in category "${expCatFilter}"`:""}.</div>`;
+    return;
+  }
+
+  const filtTotal = filtered.reduce((s,e)=>s+(Number(e.amount)||0),0);
+  const rows = filtered.map(e => `<tr>
+    <td>${esc(e.date||"—")}</td>
+    <td>${esc(e.category||"—")}</td>
+    <td class="tnum" style="color:var(--warn)">${baht(e.amount||0)}</td>
+    <td style="font-size:.75rem">${esc(e.paymentMethod||"—")}</td>
+    <td style="font-size:.75rem">${esc(e.vendor||"—")}</td>
+    <td style="color:var(--m);font-size:.73rem">${esc(e.note||"—")}</td>
+    <td class="tact">
+      <button class="btn-e" data-exp-edit="${esc(e.id)}">Edit</button>
+      <button class="btn-r" data-exp-del="${esc(e.id)}" style="margin-left:5px">Del</button>
+    </td>
+  </tr>`).join("");
+
+  wrap.innerHTML = `<div class="tscroll"><table class="ftable">
+    <thead><tr><th>Date</th><th>Category</th><th class="tnum">Amount</th><th>Method</th><th>Vendor</th><th>Note</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr class="tot-row">
+      <td colspan="2"><strong>${expCatFilter==="all"?"Total":"Category Total"}</strong></td>
+      <td class="tnum"><strong>${baht(filtTotal)}</strong></td>
+      <td colspan="4"></td>
+    </tr></tfoot>
+  </table></div>`;
+
+  wrap.querySelectorAll("[data-exp-edit]").forEach(btn =>
+    btn.addEventListener("click", () => startEditExpense(btn.dataset.expEdit)));
+  wrap.querySelectorAll("[data-exp-del]").forEach(btn =>
+    btn.addEventListener("click", () => deleteExpense(btn.dataset.expDel)));
+}
+
+// ── CATEGORY TOTALS ───────────────────────────────────────────────
+function renderCategoryTotals() {
+  const wrap = $("catTotalsWrap");
+  if (!allExpenses.length) {
+    wrap.innerHTML = `<div class="empty" style="padding:12px">No expenses this month.</div>`;
+    return;
+  }
+
+  const catMap = {};
+  allExpenses.forEach(e => {
+    const cat = e.category || "Misc";
+    catMap[cat] = (catMap[cat] || 0) + (Number(e.amount) || 0);
+  });
+
+  const sorted = Object.entries(catMap).sort((a, b) => b[1] - a[1]);
+  const total  = sorted.reduce((s, [, v]) => s + v, 0);
+
+  const items = sorted.map(([cat, amt]) =>
+    `<div class="cat-item">
+      <span class="cat-name">${esc(cat)}</span>
+      <span class="cat-amt">${baht(amt)}</span>
+    </div>`
+  ).join("");
+
+  wrap.innerHTML = `<div class="cat-grid">
+    ${items}
+    <div class="cat-item cat-item-total">
+      <span class="cat-name">TOTAL</span>
+      <span class="cat-amt">${baht(total)}</span>
+    </div>
+  </div>`;
+}
+
+// ── EXPENSE CATEGORY FILTER ───────────────────────────────────────
+$("expCatFilter").addEventListener("change", () => {
+  expCatFilter = $("expCatFilter").value;
+  renderExpenseTable();
+});
+
+// ── ADD / EDIT EXPENSE ────────────────────────────────────────────
+function resetExpenseForm() {
+  expEditId = null;
+  $("expDate").value         = todayISO();
+  $("expCategory").value     = "Rent";
+  $("expAmount").value       = "";
+  $("expPayMethod").value    = "Transfer";
+  $("expVendor").value       = "";
+  $("expNote").value         = "";
+  $("expSubmitBtn").textContent = "+ Add Expense";
+  $("expCancelBtn").style.display = "none";
+  $("expFormSec").classList.remove("form-editing");
+  $("expFormTitle").textContent = "💸 Add Expense";
+}
+
+function startEditExpense(id) {
+  const exp = allExpenses.find(e => e.id === id);
+  if (!exp) return;
+  expEditId = id;
+  $("expDate").value         = exp.date || "";
+  $("expCategory").value     = exp.category || "Misc";
+  $("expAmount").value       = exp.amount ?? "";
+  $("expPayMethod").value    = exp.paymentMethod || "Transfer";
+  $("expVendor").value       = exp.vendor || "";
+  $("expNote").value         = exp.note || "";
+  $("expSubmitBtn").textContent = "✓ Update Expense";
+  $("expCancelBtn").style.display = "inline-flex";
+  $("expFormSec").classList.add("form-editing");
+  $("expFormTitle").textContent = "✏️ Edit Expense";
+  $("expFormSec").scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+$("expCancelBtn").addEventListener("click", resetExpenseForm);
+
+$("expSubmitBtn").addEventListener("click", async () => {
+  const date   = $("expDate").value;
+  const cat    = $("expCategory").value;
+  const amount = Number($("expAmount").value);
+  const vendor = $("expVendor").value.trim();
+  const note   = $("expNote").value.trim();
+  const method = $("expPayMethod").value;
+
+  if (!date)            { showToast("Date is required.", true); return; }
+  if (!amount || amount <= 0) { showToast("Amount must be greater than 0.", true); return; }
+
+  const btn = $("expSubmitBtn"); btn.disabled = true;
+
+  try {
+    const body = expEditId
+      ? { id: expEditId, date, category: cat, amount, paymentMethod: method, vendor, note }
+      : { date, category: cat, amount, paymentMethod: method, vendor, note };
+    const res  = await fetch("/api/finance-expense", {
+      method: expEditId ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Save failed");
+    showToast(expEditId ? "✓ Expense updated" : `✓ Expense added: ${baht(amount)}`);
+    resetExpenseForm();
+    await loadMonthData();
+  } catch (e) {
+    console.error(e); showToast("Failed to save expense.", true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function deleteExpense(id) {
+  if (!id) return;
+  const exp = allExpenses.find(e => e.id === id);
+  const label = exp ? `${exp.category} ${baht(exp.amount)} on ${exp.date}` : "this expense";
+  if (!confirm(`Delete ${label}?\n\nThe record will be hidden but retained in Firestore for audit purposes.`)) return;
+  try {
+    const res  = await fetch("/api/finance-expense", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, deleted: true }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Delete failed");
+    showToast("Expense deleted.");
+    await loadMonthData();
+  } catch (e) {
+    console.error(e); showToast("Delete failed.", true);
+  }
+}
+
+// ── ADD / EDIT MANUAL INCOME ──────────────────────────────────────
+function resetIncomeForm() {
+  incEditId = null;
+  $("incDate").value             = todayISO();
+  $("incCategory").value         = "Pass Sale";
+  $("incAmount").value           = "";
+  $("incDesc").value             = "";
+  $("incSubmitBtn").textContent  = "+ Add Income";
+  $("incCancelBtn").style.display = "none";
+  $("incFormSec").classList.remove("form-editing");
+  $("incFormTitle").textContent  = "➕ Add Manual Income";
+}
+
+function startEditIncome(id) {
+  const inc = allManualIncome.find(i => i.id === id);
+  if (!inc) return;
+  incEditId = id;
+  $("incDate").value             = inc.date || "";
+  $("incCategory").value         = inc.category || "Misc";
+  $("incAmount").value           = inc.amount ?? "";
+  $("incDesc").value             = inc.description || "";
+  $("incSubmitBtn").textContent  = "✓ Update Income";
+  $("incCancelBtn").style.display = "inline-flex";
+  $("incFormSec").classList.add("form-editing");
+  $("incFormTitle").textContent  = "✏️ Edit Income";
+  $("incFormSec").scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+$("incCancelBtn").addEventListener("click", resetIncomeForm);
+
+$("incSubmitBtn").addEventListener("click", async () => {
+  const date   = $("incDate").value;
+  const cat    = $("incCategory").value;
+  const amount = Number($("incAmount").value);
+  const desc   = $("incDesc").value.trim();
+
+  if (!date)            { showToast("Date is required.", true); return; }
+  if (!amount || amount <= 0) { showToast("Amount must be greater than 0.", true); return; }
+
+  const btn = $("incSubmitBtn"); btn.disabled = true;
+
+  try {
+    const body = incEditId
+      ? { id: incEditId, date, category: cat, amount, description: desc }
+      : { date, category: cat, amount, description: desc };
+    const res  = await fetch("/api/finance-income", {
+      method: incEditId ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Save failed");
+    showToast(incEditId ? "✓ Income updated" : `✓ Income added: ${baht(amount)}`);
+    resetIncomeForm();
+    await loadMonthData();
+  } catch (e) {
+    console.error(e); showToast("Failed to save income.", true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function deleteIncome(id) {
+  if (!id) return;
+  const inc = allManualIncome.find(i => i.id === id);
+  const label = inc ? `${inc.category} ${baht(inc.amount)} on ${inc.date}` : "this entry";
+  if (!confirm(`Delete ${label}?\n\nThe record will be hidden but retained in Firestore for audit purposes.`)) return;
+  try {
+    const res  = await fetch("/api/finance-income", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, deleted: true }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Delete failed");
+    showToast("Income entry deleted.");
+    await loadMonthData();
+  } catch (e) {
+    console.error(e); showToast("Delete failed.", true);
+  }
+}
+
+// ── INIT ──────────────────────────────────────────────────────────
+// Set form date defaults to today on first load
+resetExpenseForm();
+resetIncomeForm();
+
+checkSession().then(ok => {
+  if (!ok) { $("loginScreen").style.display = "flex"; }
+});
+</script>
+</body>
+</html>
