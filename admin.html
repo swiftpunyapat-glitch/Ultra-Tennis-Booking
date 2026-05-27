@@ -544,6 +544,34 @@
   </div>
 </div>
 
+<!-- MARK PAID MODAL (unpaid manual bookings) -->
+<div class="moverlay" id="mpModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>บันทึกจ่ายแล้ว / Mark as Paid</h2><button class="mclose" id="mpClose">✕</button></div>
+    <div class="mbody">
+      <div class="minfo"><strong id="mpCode">—</strong><span id="mpCustInfo" style="display:block;margin-top:3px;font-size:.75rem">—</span></div>
+      <div class="mfield">
+        <label>Amount Received (฿)</label>
+        <input type="number" id="mpAmount" min="1" step="1" placeholder="e.g. 350"/>
+      </div>
+      <div class="mfield">
+        <label>Payment Method</label>
+        <select id="mpMethod">
+          <option value="cash">Cash</option>
+          <option value="transfer">Transfer</option>
+          <option value="manual_confirmed">Manual Confirmed</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div class="mfield">
+        <label>Note (optional)</label>
+        <input type="text" id="mpNote" maxlength="400" placeholder="e.g. Received before app payment flow"/>
+      </div>
+    </div>
+    <div class="mftr"><button class="mcancel" id="mpCancel">Cancel</button><button class="mconfirm" id="mpConfirmBtn">✓ Confirm Paid</button></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script type="module">
@@ -685,6 +713,8 @@ function renderBookings(){
     const ns=document.querySelector(`[data-paid-noslip="${b.id}"]`);
     if(p)  p.addEventListener("click",()=>markPaid(b));
     if(ns) ns.addEventListener("click",()=>markPaid(b,{withoutSlip:true}));
+    const mp=document.querySelector(`[data-markpaid="${b.id}"]`);
+    if(mp) mp.addEventListener("click",()=>openMarkPaidModal(b));
     if(c)  c.addEventListener("click",()=>cancelBooking(b));
     if(r)  r.addEventListener("click",()=>openResch(b));
     if(gr) gr.addEventListener("click",()=>retrySyncGcal(b));
@@ -728,6 +758,7 @@ function cardHTML(b){
   const isConfirmed=b.bookingStatus==="confirmed";
   const isPaid=b.paymentStatus==="paid";
   const canMarkPaid=b.paymentStatus==="pending_review"&&!isCancelled;
+  const canMarkUnpaid=b.paymentStatus==="unpaid"&&!isCancelled;
   const canCancel=!isCancelled&&!isPaid;
   const created=b.createdAt?.toDate?b.createdAt.toDate().toLocaleString("en-US",{dateStyle:"short",timeStyle:"short"}):"—";
   const prevRow=b.previousDate?`<div><div class="fl">Previously</div><div class="fv dim">${esc(b.previousDate)} ${esc(b.previousStartTime)}–${esc(b.previousEndTime)}</div></div>`:"";
@@ -749,6 +780,7 @@ function cardHTML(b){
   const actions=isCancelled
     ?`<button class="bdone">✗ Cancelled</button>${artDelete}`
     :`${canMarkPaid?`<button class="bp" data-paid="${esc(b.id)}">✓ Mark as Paid</button>`:""}
+      ${canMarkUnpaid?`<button class="bp" data-markpaid="${esc(b.id)}">บันทึกจ่ายแล้ว</button>`:""}
       ${canConfirmNoSlip?`<button class="bp" data-paid-noslip="${esc(b.id)}">✅ Confirm Paid (No Slip)</button>`:""}
       ${canResch?`<button class="br" data-resch="${esc(b.id)}">📅 Reschedule</button>`:""}
       ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}
@@ -2325,6 +2357,75 @@ $("mConfirm").addEventListener("click",async()=>{
     showToast(`📅 ${reschBooking.bookingCode} → ${newDate} ${reschTime}`);
     closeModal();await loadBookings();
   }catch(e){console.error(e);showToast(e.message||"Reschedule failed.",true);btn.disabled=false;btn.textContent=wasPendingReschedule?"Assign New Slot":"Confirm Reschedule";}
+});
+
+// ── MARK PAID MODAL (unpaid manual bookings) ─────────────────────
+let markPaidBooking=null;
+
+function openMarkPaidModal(b){
+  markPaidBooking=b;
+  $("mpCode").textContent=b.bookingCode||"—";
+  $("mpCustInfo").textContent=`${b.customerName||"—"} · ${b.date||"—"} ${b.startTime||"—"}–${b.endTime||"—"} · ฿${Number(b.price)||0}`;
+  $("mpAmount").value=Number(b.price)>0?Number(b.price):350;
+  $("mpMethod").value="cash";
+  $("mpNote").value="";
+  $("mpConfirmBtn").disabled=false;
+  $("mpConfirmBtn").textContent="✓ Confirm Paid";
+  $("mpModal").style.display="flex";
+}
+function closeMarkPaidModal(){$("mpModal").style.display="none";markPaidBooking=null;}
+$("mpClose").addEventListener("click",closeMarkPaidModal);
+$("mpCancel").addEventListener("click",closeMarkPaidModal);
+$("mpModal").addEventListener("click",e=>{if(e.target===$("mpModal"))closeMarkPaidModal();});
+
+$("mpConfirmBtn").addEventListener("click",async()=>{
+  if(!markPaidBooking) return;
+  const amount=Number($("mpAmount").value);
+  const paymentMethod=$("mpMethod").value;
+  const paymentNote=$("mpNote").value.trim();
+  if(!amount||amount<=0){showToast("Amount must be greater than 0.",true);return;}
+
+  const btn=$("mpConfirmBtn");btn.disabled=true;btn.textContent="Saving...";
+  try{
+    const res=await fetch("/api/admin-mark-booking-paid",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({bookingId:markPaidBooking.id,amount,paymentMethod,paymentNote}),
+    });
+    const data=await res.json();
+    if(!data.ok) throw new Error(data.error||"Failed");
+
+    // Fire-and-forget LINE notification (skipped for "manual" lineUserId)
+    if(canNotifyLine(markPaidBooking.lineUserId)&&window.sendLineNotification){
+      window.sendLineNotification({
+        eventId:`${markPaidBooking.bookingCode}_booking_paid_customer`,
+        type:"booking_paid_customer",
+        lineUserId:markPaidBooking.lineUserId,
+        bookingCode:markPaidBooking.bookingCode,
+        date:markPaidBooking.date,
+        startTime:markPaidBooking.startTime,
+        endTime:markPaidBooking.endTime,
+      });
+    }
+
+    // Google Calendar sync — payment already confirmed server-side; cal error must never revert it
+    if(!markPaidBooking.googleCalendarEventId){
+      try{
+        const gcalResult=await callGcal({action:"create",booking:markPaidBooking});
+        const syncFields=gcalResult.ok
+          ?{googleCalendarEventId:gcalResult.eventId,googleCalendarHtmlLink:gcalResult.htmlLink,googleCalendarSyncStatus:"created",googleCalendarSyncedAt:serverTimestamp()}
+          :{googleCalendarSyncStatus:"failed",googleCalendarSyncError:gcalResult.error??"Sync failed",googleCalendarSyncedAt:serverTimestamp()};
+        await updateDoc(doc(db,"bookings",markPaidBooking.id),syncFields);
+      }catch(e){console.error("[mpModal] gcal sync error (payment already saved):",e);}
+    }
+
+    showToast(`✓ ${markPaidBooking.bookingCode} marked as paid`);
+    closeMarkPaidModal();
+    await loadBookings();
+  }catch(e){
+    console.error(e);showToast(e.message||"Failed to mark as paid.",true);
+    btn.disabled=false;btn.textContent="✓ Confirm Paid";
+  }
 });
 
 // ── TOAST ────────────────────────────────────────────────────────
