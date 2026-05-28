@@ -406,13 +406,27 @@
 
         <!-- Search Result -->
         <div id="searchResult" style="display:none;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:12px;margin-bottom:12px">
-          <div style="font-size:.7rem;color:var(--m);text-transform:uppercase;font-weight:800;margin-bottom:8px">Customer Found</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.82rem">
+          <div style="font-size:.7rem;color:var(--m);text-transform:uppercase;font-weight:800;margin-bottom:6px">Customer Found</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.82rem;margin-bottom:10px">
             <div><div class="fl">Name</div><div class="fv" id="foundName">—</div></div>
             <div><div class="fl">Phone</div><div class="fv" id="foundPhone">—</div></div>
-            <div><div class="fl">LINE User ID</div><div class="fv" id="foundLineId" style="font-size:.72rem;word-break:break-all">—</div></div>
-            <div><div class="fl">LINE Name</div><div class="fv" id="foundLineName">—</div></div>
+            <div><div class="fl">LINE Display Name</div><div class="fv" id="foundLineName">—</div></div>
+            <div><div class="fl">LINE User ID</div><div class="fv" id="foundLineId" style="font-size:.68rem;word-break:break-all">—</div></div>
+            <div><div class="fl">Linked Status</div><div class="fv" id="foundLinkedStatus">—</div></div>
+            <div><div class="fl">Source / Type</div><div class="fv" id="foundSource">—</div></div>
+            <div><div class="fl">Latest Booking</div><div class="fv" id="foundLatestBooking">—</div></div>
           </div>
+          <div id="foundLineWarning" style="display:none;background:#3d2e00;border:1px solid var(--warn);border-radius:6px;padding:7px 10px;font-size:.75rem;color:var(--warn);margin-bottom:8px"></div>
+          <div style="display:flex;gap:7px;flex-wrap:wrap">
+            <button class="smbtn smgr" id="editCustomerInfoBtn" style="font-size:.72rem;padding:5px 11px">✎ Edit Customer Info</button>
+            <button class="smbtn" id="markProxyBtn" style="font-size:.72rem;padding:5px 11px;background:#3d2e00;border:1px solid var(--warn);color:var(--warn)">⚠ Mark as Admin Proxy / Unlink LINE</button>
+          </div>
+        </div>
+
+        <!-- Multiple Records Selector -->
+        <div id="multipleRecordsPanel" style="display:none;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:12px;margin-bottom:12px">
+          <div style="font-size:.7rem;color:var(--warn);text-transform:uppercase;font-weight:800;margin-bottom:8px">⚠ Multiple Records Found — Select the correct LINE identity</div>
+          <div id="multipleRecordsList" style="display:grid;gap:6px"></div>
         </div>
 
         <!-- Not Found -->
@@ -444,6 +458,7 @@
             <div class="smf"><label>Customer Name (if not found)</label><input type="text" id="manualName" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%" placeholder="Auto-filled from search"/></div>
             <div class="smf"><label>Valid From</label><input type="date" id="validFromDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%"/></div>
           </div>
+          <div id="passConfirmWarning" style="display:none;background:#0f2d3a;border:1px solid var(--bl);border-radius:7px;padding:9px 12px;font-size:.8rem;color:var(--mid);margin-bottom:10px"></div>
           <button class="smbtn smg" id="addPassBtn" style="width:100%;padding:12px;font-size:.88rem">✓ Add Pass for Customer</button>
         </div>
       </div>
@@ -569,6 +584,20 @@
       </div>
     </div>
     <div class="mftr"><button class="mcancel" id="mpCancel">Cancel</button><button class="mconfirm" id="mpConfirmBtn">✓ Confirm Paid</button></div>
+  </div>
+</div>
+
+<!-- EDIT CUSTOMER INFO MODAL -->
+<div class="moverlay" id="editCustModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>✎ Edit Customer Info</h2><button class="mclose" id="editCustClose">✕</button></div>
+    <div class="mbody">
+      <div class="minfo"><strong id="editCustBookingCode">—</strong><span id="editCustContext" style="display:block;margin-top:3px;font-size:.75rem">—</span></div>
+      <div class="mfield"><label>Customer Name</label><input type="text" id="editCustName" maxlength="200" placeholder="Customer full name"/></div>
+      <div class="mfield"><label>Customer Phone</label><input type="text" id="editCustPhone" maxlength="40" placeholder="08x-xxx-xxxx"/></div>
+      <p style="font-size:.7rem;color:var(--m);margin-top:4px">LINE User ID cannot be changed here. Use "Mark as Admin Proxy / Unlink LINE" to detach the current LINE identity.</p>
+    </div>
+    <div class="mftr"><button class="mcancel" id="editCustCancel">Cancel</button><button class="mconfirm" id="editCustConfirm">Save Changes</button></div>
   </div>
 </div>
 
@@ -1385,48 +1414,59 @@ const PACKAGES = {
 };
 
 let foundCustomer = null;
+let foundCustomerBookingId = null;
 
 $("searchCustomerBtn").addEventListener("click", async()=>{
   const phone=$("searchPhone").value.trim();
   if(!phone){ showToast("Enter a phone number to search.",true); return; }
   const btn=$("searchCustomerBtn"); btn.disabled=true; btn.textContent="Searching...";
-  $("searchResult").style.display="none"; $("notFound").style.display="none";
+  $("searchResult").style.display="none";
+  $("notFound").style.display="none";
+  $("multipleRecordsPanel").style.display="none";
   $("customerHistoryPanel").style.display="none";
+  $("passConfirmWarning").style.display="none";
   foundCustomer=null;
+  foundCustomerBookingId=null;
 
   try{
     const normalized=normalizePhone(phone);
-    // Search bookings (normalized + raw fallback for legacy docs) PLUS all active
-    // packages — needed for the customer history panel below.
     const [snapNorm, snapRaw, pkgSnap] = await Promise.all([
       getDocs(query(collection(db,"bookings"),where("customerPhoneNormalized","==",normalized))),
       getDocs(query(collection(db,"bookings"),where("customerPhone","==",phone))),
       getDocs(query(collection(db,"customer_packages"),where("status","==","active"))),
     ]);
     const seen=new Set();
-    const docs=[];
+    const allDocs=[];
     [...snapNorm.docs, ...snapRaw.docs].forEach(d=>{
       if(seen.has(d.id)) return;
       seen.add(d.id);
-      docs.push(d.data());
+      allDocs.push({id:d.id,...d.data()});
     });
-    docs.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
-    if(docs.length){
-      foundCustomer=docs[0];
-      $("foundName").textContent=foundCustomer.customerName||"—";
-      $("foundPhone").textContent=foundCustomer.customerPhone||"—";
-      $("foundLineId").textContent=foundCustomer.lineUserId||"Not linked yet";
-      $("foundLineName").textContent=foundCustomer.lineDisplayName||"—";
-      $("manualName").value=foundCustomer.customerName||"";
-      $("searchResult").style.display="block";
+    allDocs.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+
+    // Exclude admin proxy / manual / guest records — these carry the wrong LINE identity
+    const safeRecords=allDocs.filter(d=>
+      d.lineUserId!=="manual" &&
+      d.lineUserId!=="guest"  &&
+      d.linkedLineStatus!=="admin_proxy"
+    );
+
+    const activePkgs=pkgSnap.docs.map(d=>d.data());
+
+    if(safeRecords.length>1){
+      renderMultipleRecordsPanel(safeRecords);
+      foundCustomer={lineUserId:"",lineDisplayName:"",customerName:safeRecords[0].customerName||"",customerPhone:phone};
+      renderCustomerHistoryPanel(allDocs,activePkgs,normalized,"");
+    } else if(safeRecords.length===1){
+      selectFoundCustomer(safeRecords[0]);
+      renderCustomerHistoryPanel(allDocs,activePkgs,normalized,safeRecords[0].lineUserId);
     } else {
       $("notFound").style.display="block";
-      foundCustomer={ lineUserId:"", lineDisplayName:"", customerName:"", customerPhone:phone };
-      $("manualName").value="";
+      const anyDoc=allDocs[0];
+      foundCustomer={lineUserId:"",lineDisplayName:"",customerName:anyDoc?.customerName||"",customerPhone:phone};
+      $("manualName").value=foundCustomer.customerName;
+      renderCustomerHistoryPanel(allDocs,activePkgs,normalized,"");
     }
-    // Render the customer history panel — runs whether or not a booking was found,
-    // because admin-added passes might exist for customers who haven't booked yet.
-    renderCustomerHistoryPanel(docs, pkgSnap.docs.map(d=>d.data()), normalized, foundCustomer.lineUserId);
   }catch(e){ console.error(e); showToast("Search failed.",true); }
   finally{ btn.disabled=false; btn.textContent="Search"; }
 });
@@ -1489,6 +1529,143 @@ function renderCustomerHistoryPanel(bookings, activePkgs, normalizedPhone, lineU
   panel.style.display="block";
 }
 
+// ── CUSTOMER DATA REPAIR ─────────────────────────────────────────
+
+function selectFoundCustomer(d){
+  foundCustomer=d;
+  foundCustomerBookingId=d.id||null;
+  $("foundName").textContent        = d.customerName    || "—";
+  $("foundPhone").textContent       = d.customerPhone   || "—";
+  $("foundLineName").textContent    = d.lineDisplayName || "—";
+  $("foundLineId").textContent      = d.lineUserId      || "Not linked yet";
+  $("foundLinkedStatus").textContent= d.linkedLineStatus|| "—";
+  $("foundSource").textContent      = d.source || d.bookingType || "—";
+  $("foundLatestBooking").textContent = [d.bookingCode,d.date].filter(Boolean).join(" · ") || "—";
+  $("manualName").value = d.customerName || "";
+
+  const warn=$("foundLineWarning");
+  if(!d.lineUserId || d.lineUserId==="guest"){
+    warn.textContent="⚠ This booking has no linked LINE account. Pass will be saved without a LINE user ID.";
+    warn.style.display="block";
+  } else if(d.linkedLineStatus==="admin_proxy"){
+    warn.textContent="⚠ This record is marked as admin proxy. LINE identity may not belong to this customer.";
+    warn.style.display="block";
+  } else {
+    warn.textContent=""; warn.style.display="none";
+  }
+
+  $("multipleRecordsPanel").style.display="none";
+  $("searchResult").style.display="block";
+  $("notFound").style.display="none";
+  updatePassConfirmWarning();
+}
+
+function updatePassConfirmWarning(){
+  const w=$("passConfirmWarning");
+  if(!foundCustomer){ w.style.display="none"; return; }
+  const lid=foundCustomer.lineUserId;
+  if(lid && lid!=="manual" && lid!=="guest"){
+    w.innerHTML=`⚠ กำลังเพิ่ม Pass ให้ LINE: <strong>${esc(foundCustomer.lineDisplayName||lid)}</strong> — ยืนยันว่าเป็น LINE ของลูกค้าคนนี้จริงไหม?`;
+    w.style.display="block";
+  } else {
+    w.style.display="none";
+  }
+}
+
+function renderMultipleRecordsPanel(records){
+  $("multipleRecordsPanel").style.display="block";
+  $("searchResult").style.display="none";
+  $("notFound").style.display="none";
+  $("passConfirmWarning").style.display="none";
+
+  $("multipleRecordsList").innerHTML=records.map((d,i)=>{
+    const isSafe=!!d.lineUserId && d.lineUserId!=="manual" && d.lineUserId!=="guest";
+    const safeLabel=isSafe
+      ? `<span style="color:var(--g);font-size:.65rem;font-weight:800">✓ LINE Linked</span>`
+      : `<span style="color:var(--warn);font-size:.65rem;font-weight:800">⚠ No LINE</span>`;
+    return `<div style="background:var(--s);border:1px solid var(--bd);border-radius:6px;padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div style="font-size:.78rem;min-width:0">
+        <div style="font-weight:800">${esc(d.customerName||"—")} · ${esc(d.customerPhone||"—")} ${safeLabel}</div>
+        <div style="color:var(--m);font-size:.7rem;margin-top:2px">${esc(d.lineDisplayName||"—")} · ${esc(d.bookingCode||"—")} · ${esc(d.date||"—")}</div>
+      </div>
+      <button class="smbtn smg" data-select-record="${i}" style="font-size:.7rem;padding:4px 10px;white-space:nowrap">Select</button>
+    </div>`;
+  }).join("");
+
+  $("multipleRecordsList").querySelectorAll("[data-select-record]").forEach(btn=>{
+    btn.addEventListener("click",()=>selectFoundCustomer(records[Number(btn.dataset.selectRecord)]));
+  });
+}
+
+// Edit Customer Info modal
+function openEditCustModal(){
+  if(!foundCustomer||!foundCustomerBookingId){ showToast("No booking record selected.",true); return; }
+  $("editCustBookingCode").textContent=foundCustomer.bookingCode||foundCustomerBookingId||"—";
+  $("editCustContext").textContent=`${foundCustomer.date||"—"} · ${foundCustomer.lineDisplayName||"—"}`;
+  $("editCustName").value =foundCustomer.customerName ||"";
+  $("editCustPhone").value=foundCustomer.customerPhone||"";
+  $("editCustConfirm").disabled=false;
+  $("editCustConfirm").textContent="Save Changes";
+  $("editCustModal").style.display="flex";
+}
+function closeEditCustModal(){ $("editCustModal").style.display="none"; }
+$("editCustClose").addEventListener("click",closeEditCustModal);
+$("editCustCancel").addEventListener("click",closeEditCustModal);
+$("editCustModal").addEventListener("click",e=>{ if(e.target===$("editCustModal")) closeEditCustModal(); });
+$("editCustomerInfoBtn").addEventListener("click",openEditCustModal);
+
+$("editCustConfirm").addEventListener("click",async()=>{
+  const newName =$("editCustName").value.trim();
+  const newPhone=$("editCustPhone").value.trim();
+  if(!newName) { showToast("Customer name is required.",true);  $("editCustName").focus();  return; }
+  if(!newPhone){ showToast("Customer phone is required.",true); $("editCustPhone").focus(); return; }
+  if(!foundCustomerBookingId){ showToast("No booking record selected.",true); return; }
+  const btn=$("editCustConfirm"); btn.disabled=true; btn.textContent="Saving...";
+  try{
+    await updateDoc(doc(db,"bookings",foundCustomerBookingId),{
+      customerName:            newName,
+      customerPhone:           newPhone,
+      customerPhoneNormalized: normalizePhone(newPhone),
+      updatedAt:               serverTimestamp(),
+    });
+    showToast("Customer info updated.");
+    closeEditCustModal();
+    $("searchPhone").value=newPhone;
+    $("searchCustomerBtn").click();
+  }catch(e){
+    console.error(e);
+    showToast("Failed to save changes.",true);
+    btn.disabled=false; btn.textContent="Save Changes";
+  }
+});
+
+$("markProxyBtn").addEventListener("click",async()=>{
+  if(!foundCustomer||!foundCustomerBookingId){ showToast("No booking record selected.",true); return; }
+  if(!confirm(
+    `Mark as Admin Proxy / Unlink LINE?\n\n`+
+    `Customer: ${foundCustomer.customerName||"—"}\n`+
+    `Current LINE: ${foundCustomer.lineDisplayName||"—"} (${foundCustomer.lineUserId||"—"})\n\n`+
+    `This will set lineUserId → "manual" and flag this record as admin-booked.\n`+
+    `The LINE account will no longer be associated with this booking.`
+  )) return;
+  const btn=$("markProxyBtn"); btn.disabled=true; btn.textContent="Saving...";
+  try{
+    await updateDoc(doc(db,"bookings",foundCustomerBookingId),{
+      lineUserId:       "manual",
+      lineDisplayName:  "Manual/Admin Booking",
+      linkedLineStatus: "admin_proxy",
+      identityWarning:  "Booked by admin on behalf of customer",
+      updatedAt:        serverTimestamp(),
+    });
+    showToast("Marked as Admin Proxy / LINE unlinked.");
+    $("searchCustomerBtn").click();
+  }catch(e){
+    console.error(e);
+    showToast("Failed to mark as admin proxy.",true);
+    btn.disabled=false; btn.textContent="⚠ Mark as Admin Proxy / Unlink LINE";
+  }
+});
+
 $("addPassBtn").addEventListener("click", async()=>{
   const pkgType=$("packageSelect").value;
   const name=$("manualName").value.trim();
@@ -1547,7 +1724,9 @@ $("addPassBtn").addEventListener("click", async()=>{
     // Reset form
     $("searchPhone").value=""; $("packageSelect").value=""; $("manualName").value="";
     $("searchResult").style.display="none"; $("notFound").style.display="none";
-    foundCustomer=null;
+    $("multipleRecordsPanel").style.display="none";
+    $("passConfirmWarning").style.display="none";
+    foundCustomer=null; foundCustomerBookingId=null;
     loadActivePasses();
   }catch(e){ console.error(e); showToast("Failed to add pass.",true); }
   finally{ btn.disabled=false; btn.textContent="✓ Add Pass for Customer"; }
