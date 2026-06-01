@@ -48,7 +48,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ ok: false, error: "Invalid JSON body" });
   }
 
-  const { type, bookingCode } = body;
+  // eventSuffix is optional — when provided it is appended to the per-admin
+  // eventId so that multiple events of the same type for the same booking
+  // (e.g. rescheduled twice) each produce a unique idempotency key.
+  const { type, bookingCode, eventSuffix } = body;
   if (!type)        return res.status(400).json({ ok: false, error: "Missing type" });
   if (!bookingCode) return res.status(400).json({ ok: false, error: "Missing bookingCode" });
   if (!VALID_TYPES.includes(type)) {
@@ -89,8 +92,13 @@ export default async function handler(req, res) {
   }
 
   // Fan out — each admin gets its own eventId for independent idempotency.
+  // A sanitised eventSuffix (if provided) is appended so that the same booking
+  // can be notified more than once under different events (e.g. rescheduled twice).
+  const safeSuffix = eventSuffix
+    ? `_${String(eventSuffix).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 30)}`
+    : '';
   const results = await Promise.all(admins.map(async (admin) => {
-    const eventId = `${bookingCode}_${type}_${admin.lineUserId}`;
+    const eventId = `${bookingCode}_${type}_${admin.lineUserId}${safeSuffix}`;
     try {
       const r = await sendAndLog({
         eventId,

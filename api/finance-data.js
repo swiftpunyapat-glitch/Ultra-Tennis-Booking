@@ -66,16 +66,21 @@ export default async function handler(req, res) {
     const bookings = bookSnap.docs.map(d => {
       const b = d.data();
       return {
-        id:            d.id,
-        date:          b.date          ?? '',
-        startTime:     b.startTime     ?? '',
-        endTime:       b.endTime       ?? '',
-        customerName:  b.customerName  ?? '',
-        paymentStatus: b.paymentStatus ?? '',
-        bookingStatus: b.bookingStatus ?? '',
-        price:         Number(b.price) || 0,
-        bookingType:   b.bookingType   ?? '',
-        bookingCode:   b.bookingCode   ?? '',
+        id:                       d.id,
+        date:                     b.date                     ?? '',
+        startTime:                b.startTime                ?? '',
+        endTime:                  b.endTime                  ?? '',
+        customerName:             b.customerName             ?? '',
+        paymentStatus:            b.paymentStatus            ?? '',
+        bookingStatus:            b.bookingStatus            ?? '',
+        price:                    Number(b.price)            || 0,
+        bookingType:              b.bookingType              ?? '',
+        bookingCode:              b.bookingCode              ?? '',
+        // Package accounting fields (set by admin-edit-booking-accounting)
+        packageType:              b.packageType              ?? null,
+        packageUsageValuePerHour: b.packageUsageValuePerHour ?? null,
+        packageUsageValueTotal:   b.packageUsageValueTotal   ?? null,
+        isInfluencerBooking:      b.isInfluencerBooking      ?? false,
       };
     });
 
