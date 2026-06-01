@@ -358,7 +358,7 @@
           <div class="pmeta-item"><div class="lbl" data-i18n="dateItem">Date / Item</div><div class="val" id="payDate" style="font-size:.78rem">—</div></div>
           <div class="pmeta-item"><div class="lbl" data-i18n="details">Details</div><div class="val" id="payDets" style="font-size:.75rem">—</div></div>
         </div>
-        <div class="qrwrap">
+        <div class="qrwrap" id="payQrWrap">
           <img src="/payment-qr.png" alt="QR"
             onerror="this.parentElement.innerHTML='<p style=\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\'>⚠️ '+(window.utT?window.utT('qrNotFound'):'QR not found. Please contact staff.')+'</p>'"/>
         </div>
@@ -438,6 +438,11 @@ const RESOURCE_ID = "room1";
 const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
 const PAY_MINS    = 15;
 const OFFPEAK     = { startHour:9, endHour:15 }; // 09:00–15:00
+// Late Night Session: 00:00–06:00 · ฿450 · opened manually by Admin only.
+const LN_START    = 0, LN_END = 6;
+const LATE_NIGHT_PRICE = 450;
+const LATE_NIGHT_QR_URL = ""; // TODO: set to "/late-night-qr.png" (or full URL) when QR is ready
+function isLateNightHour(h){ return h >= LN_START && h < LN_END; }
 
 const PACKAGES = {
   ultra_10:{ packageType:"ultra_10", packageName:"Ultra Pass 10 Hours",  price:3100, totalMinutes:600,  validityDays:90,  weeklyLimitHours:null, monthlyLimitHours:null, desc:"600 minutes · Valid 90 days · avg ฿310/hr · Save ฿40/hr" },
@@ -882,18 +887,34 @@ async function loadSlotsAndRender(dateStr) {
 function renderTimes() {
   const grid=$("timeGrid"); grid.innerHTML="";
   let avail=0;
-  for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
+
+  // Only surface Late Night hours when Admin has explicitly opened at least one.
+  // If none are open the section stays invisible — customer page looks normal.
+  const hasOpenLN=[...state.openSlots].some(s=>isLateNightHour(parseInt(s,10)));
+  const hoursToRender=[];
+  if(hasOpenLN){ for(let h=LN_START;h<LN_END;h++) hoursToRender.push(h); }
+  for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++) hoursToRender.push(h);
+
+  for(const h of hoursToRender){
     const time=`${String(h).padStart(2,"0")}:00`;
     const reason=getDisabledReason(time,h);
+    const isLN=isLateNightHour(h);
     const btn=document.createElement("button");
     btn.className=`tbtn${time===state.time?" on":""}`;
-    btn.textContent=time; btn.title=reason||t("available");
+    btn.title=reason||t("available");
     btn.disabled=Boolean(reason);
+    if(isLN){
+      // 🌙 badge below time — visible only when slot is open
+      btn.innerHTML=`${time}<br><span style="font-size:.58rem;color:#a855f7;font-weight:800;white-space:nowrap;line-height:1">🌙 Late Night</span>`;
+    } else {
+      btn.textContent=time;
+    }
     btn.addEventListener("click",()=>{
       state.time=time;
       grid.querySelectorAll(".tbtn").forEach(b=>b.classList.remove("on"));
       btn.classList.add("on");
       updateBookingConfirmBtn();
+      updateBookingPriceNote(); // price changes between LN (฿450) and normal (฿350)
     });
     grid.append(btn);
     if(!reason) avail++;
@@ -951,7 +972,9 @@ function updatePaymentTypeButtons() {
 function updateBookingPriceNote(){
   if(!$("bkPrice")||!$("bkNote2")) return;
   if(state.bookingPaymentType==="single"){
-    $("bkPrice").textContent="฿350";
+    const isLN=state.time && isLateNightHour(parseInt(state.time,10));
+    const price=isLN ? LATE_NIGHT_PRICE : 350;
+    $("bkPrice").textContent=`฿${price}`;
     $("bkNote2").textContent=t("paymentDue");
   } else {
     $("bkPrice").textContent="฿0 (Pass)";
@@ -994,13 +1017,16 @@ $("confirmBkBtn").addEventListener("click", async()=>{
     const endTime   = formatEndTime(state.time);
     const slotDocId = `${RESOURCE_ID}_${dateISO}_${state.time.replace(":","")}`;
     const isSingle  = payType==="single";
+    const isLN      = isSingle && isLateNightHour(parseInt(state.time,10));
+    const singlePrice = isLN ? LATE_NIGHT_PRICE : 350;
+    const singleType  = isLN ? "Late Night Session" : "Single Use";
     const expiresAt = isSingle ? new Date(Date.now()+PAY_MINS*60*1000) : null;
     const expiresTS = isSingle ? Timestamp.fromDate(expiresAt) : null;
 
     const bookingPayload = {
       bookingCode:             code,
       resourceId:              RESOURCE_ID,
-      bookingType:             isSingle?"Single Use":payType==="ultra"?"Ultra Pass":"Off-Peak Pass",
+      bookingType:             isSingle?singleType:payType==="ultra"?"Ultra Pass":"Off-Peak Pass",
       lineUserId:              state.lineProfile.userId,
       lineDisplayName:         state.lineProfile.displayName,
       customerName:            name,
@@ -1011,7 +1037,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       startTime:               state.time,
       endTime,
       durationHours:           1,
-      price:                   isSingle?350:0,
+      price:                   isSingle?singlePrice:0,
       bookingStatus:           isSingle?"pending_payment":"confirmed",
       paymentStatus:           isSingle?"unpaid":"package",
       paymentExpiresAt:        expiresTS,
@@ -1137,7 +1163,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
 
     if(isSingle){
       state.paymentMode="booking";
-      showPaymentPanel(code, 350, expiresAt, dateISO, `${state.time} – ${endTime}`);
+      showPaymentPanel(code, singlePrice, expiresAt, dateISO, `${state.time} – ${endTime}`, isLN);
       showView("viewPayment");
     } else {
       // Refresh local eligibility so the buttons reflect the just-deducted pass state
@@ -1154,7 +1180,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
 });
 
 // ── PAYMENT PANEL ───────────────────────────────────────────────
-function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel) {
+function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLateNight=false) {
   $("payCode").textContent   = code;
   $("payAmt").textContent    = `฿${amount.toLocaleString("en-US")}`;
   $("payAmtText").textContent= amount.toLocaleString("en-US");
@@ -1172,6 +1198,18 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel) {
   $("slipIn").value="";
   $("slipArea").classList.remove("has");
   $("submitSlipBtn").disabled=true;
+  // QR: switch to Late Night QR when applicable; fall back to placeholder message
+  // when LATE_NIGHT_QR_URL is not yet configured.
+  const qrWrap=$("payQrWrap");
+  if(qrWrap){
+    if(isLateNight && !LATE_NIGHT_QR_URL){
+      qrWrap.innerHTML=`<div style="padding:18px 10px;text-align:center;font-size:.78rem;color:var(--muted);line-height:1.7">🌙 <strong>Late Night Session</strong><br>กรุณาติดต่อแอดมินเพื่อรับ QR โอนเงิน<br><span style="font-size:.7rem">Please contact staff for payment QR.</span></div>`;
+    } else {
+      const src = isLateNight ? LATE_NIGHT_QR_URL : "/payment-qr.png";
+      qrWrap.innerHTML=`<img src="${src}" alt="QR" style="width:100%;height:100%;object-fit:contain"
+        onerror="this.parentElement.innerHTML='<p style=\\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\\'>⚠️ '+(window.utT?window.utT(\\'qrNotFound\\'):\\'QR not found. Please contact staff.\\')+'</p>'"/>`;
+    }
+  }
 }
 
 // Slip file change
