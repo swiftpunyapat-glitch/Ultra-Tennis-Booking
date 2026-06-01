@@ -290,6 +290,16 @@
       <div class="stat"><div class="sn cg" id="stPaid">—</div><div class="sl">Paid</div></div>
       <div class="stat"><div class="sn cr" id="stCancelled">—</div><div class="sl">Cancelled</div></div>
     </div>
+
+    <!-- MONTH FILTER — filters by booking.date (play date), not createdAt/paidAt -->
+    <div class="filters" style="gap:6px;align-items:center;border-bottom:0">
+      <span style="font-size:.68rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap">📅 Play Month</span>
+      <button class="rfbtn" id="mfPrev">‹</button>
+      <input type="month" id="mfInput" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:5px 9px;font-size:.78rem;min-width:0"/>
+      <button class="rfbtn" id="mfNext">›</button>
+      <button class="rfbtn" id="mfThisMonth">This Month</button>
+    </div>
+
     <div class="filters">
       <button class="fbtn on" data-filter="all">All</button>
       <button class="fbtn" data-filter="pending_payment">Pending Pay</button>
@@ -618,6 +628,39 @@ function isLiveBookedSlot(slotData, now = new Date()) {
   return false;
 }
 
+// ── MONTH FILTER HELPERS ──────────────────────────────────────────
+// currentMonthValue — returns "YYYY-MM" for the current local month.
+// Called at module load to initialise playMonthFilter (hoisting safe).
+function currentMonthValue(){
+  const d=new Date(),pad=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}`;
+}
+// shiftMonth — moves "YYYY-MM" by ±delta months (handles year roll-over).
+function shiftMonth(value,delta){
+  const[y,m]=value.split("-").map(Number);
+  const d=new Date(y,m-1+delta,1);
+  const pad=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}`;
+}
+// monthLabel — human-readable month string, e.g. "June 2026".
+function monthLabel(value){
+  if(!value) return "";
+  const[y,m]=value.split("-").map(Number);
+  return new Date(y,m-1,1).toLocaleString("en-US",{month:"long",year:"numeric"});
+}
+// isBookingInSelectedPlayMonth — true when booking.date starts with playMonthFilter.
+// Uses play date (booking.date), NOT createdAt / paidAt / adminReviewedAt.
+function isBookingInSelectedPlayMonth(b){
+  if(!b||!b.date) return false;
+  return b.date.startsWith(playMonthFilter);
+}
+// formatDateTimeSafe — wraps tsToDateTime (defined later; both hoisted) and
+// returns "—" instead of "" for missing/null timestamps.
+function formatDateTimeSafe(ts){
+  const s=tsToDateTime(ts);
+  return s||"—";
+}
+
 // ── ADMIN NAMES (display only — no PINs) ─────────────────────────
 ADMIN_NAMES.forEach(n=>{const o=document.createElement("option");o.value=o.textContent=n;$("adminSel").append(o);});
 
@@ -667,7 +710,7 @@ document.querySelectorAll(".tab").forEach(btn=>{
 });
 
 // ── BOOKINGS ─────────────────────────────────────────────────────
-let allBookings=[],activeFilter="all",reschBooking=null,reschTime=null,activePasses=[],minPass=null;
+let allBookings=[],activeFilter="all",playMonthFilter=currentMonthValue(),reschBooking=null,reschTime=null,activePasses=[],minPass=null;
 
 async function loadBookings(){
   $("bookingsList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading...</p></div>`;
@@ -680,11 +723,13 @@ async function loadBookings(){
 }
 
 function updateStats(){
-  $("stTotal").textContent=allBookings.length;
-  $("stPending").textContent=allBookings.filter(b=>b.bookingStatus==="pending_payment").length;
-  $("stReview").textContent=allBookings.filter(b=>b.paymentStatus==="pending_review").length;
-  $("stPaid").textContent=allBookings.filter(b=>b.paymentStatus==="paid").length;
-  $("stCancelled").textContent=allBookings.filter(b=>b.bookingStatus==="cancelled").length;
+  // Stats reflect only the selected play month, not all historical bookings.
+  const mb=allBookings.filter(isBookingInSelectedPlayMonth);
+  $("stTotal").textContent=mb.length;
+  $("stPending").textContent=mb.filter(b=>b.bookingStatus==="pending_payment").length;
+  $("stReview").textContent=mb.filter(b=>b.paymentStatus==="pending_review").length;
+  $("stPaid").textContent=mb.filter(b=>b.paymentStatus==="paid").length;
+  $("stCancelled").textContent=mb.filter(b=>b.bookingStatus==="cancelled").length;
 }
 
 function isPendingRescheduleBooking(b){
@@ -696,13 +741,18 @@ function bookingStatusDisplay(b){
 }
 
 function renderBookings(){
-  renderPendingRescheduleList();
+  renderPendingRescheduleList();  // Pending Reschedule panel is intentionally global (all months).
   renderPaidSummary();
-  const list=activeFilter==="all"?allBookings:allBookings.filter(b=>{
-    if(activeFilter==="pending_reschedule") return isPendingRescheduleBooking(b);
-    return b.bookingStatus===activeFilter||b.paymentStatus===activeFilter;
-  });
-  if(!list.length){$("bookingsList").innerHTML=`<div class="estate">📭 No bookings found.</div>`;return;}
+  // Step 1 — month filter: only bookings whose play date falls in the selected month.
+  let list=allBookings.filter(isBookingInSelectedPlayMonth);
+  // Step 2 — status filter applied on top of the month-filtered subset.
+  if(activeFilter!=="all"){
+    list=list.filter(b=>{
+      if(activeFilter==="pending_reschedule") return isPendingRescheduleBooking(b);
+      return b.bookingStatus===activeFilter||b.paymentStatus===activeFilter;
+    });
+  }
+  if(!list.length){$("bookingsList").innerHTML=`<div class="estate">📭 No bookings for ${esc(monthLabel(playMonthFilter))}.</div>`;return;}
   $("bookingsList").innerHTML=`<div class="bgrid">${list.map(cardHTML).join("")}</div>`;
   list.forEach(b=>{
     const p=document.querySelector(`[data-paid="${b.id}"]`);
@@ -760,8 +810,21 @@ function cardHTML(b){
   const canMarkPaid=b.paymentStatus==="pending_review"&&!isCancelled;
   const canMarkUnpaid=b.paymentStatus==="unpaid"&&!isCancelled;
   const canCancel=!isCancelled&&!isPaid;
-  const created=b.createdAt?.toDate?b.createdAt.toDate().toLocaleString("en-US",{dateStyle:"short",timeStyle:"short"}):"—";
   const prevRow=b.previousDate?`<div><div class="fl">Previously</div><div class="fv dim">${esc(b.previousDate)} ${esc(b.previousStartTime)}–${esc(b.previousEndTime)}</div></div>`:"";
+  // ── Three-date timeline ───────────────────────────────────────────
+  // BOOKED: when the customer created the booking.
+  // PAID:   when payment was confirmed (adminReviewedAt > paidAt > confirmedAt fallback).
+  // PLAY:   the actual court session date/time (booking.date / startTime / endTime).
+  const paidTs=b.adminReviewedAt||b.paidAt||b.confirmedAt;
+  const createdStr=formatDateTimeSafe(b.createdAt);
+  const paidStr=formatDateTimeSafe(paidTs);
+  const paidByLine=b.paidBy?`<span style="font-size:.62rem;color:var(--m);display:block">by ${esc(b.paidBy)}</span>`:"";
+  const paidLblColor=(paidTs&&b.paymentStatus==="paid")?"color:var(--g);":"";
+  const timeline=`<div style="grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:7px;background:var(--s2);border:1px solid var(--bd);border-radius:7px;padding:9px 10px;margin-top:4px">`+
+    `<div><div class="fl">📋 Booked</div><div class="fv dim" style="font-size:.76rem">${esc(createdStr)}</div></div>`+
+    `<div><div class="fl" style="${paidLblColor}">💳 Paid / Confirmed</div><div class="fv" style="font-size:.76rem">${esc(paidStr)}${paidByLine}</div></div>`+
+    `<div><div class="fl" style="color:var(--ac)">🎾 Play Date</div><div class="fv" style="font-size:.76rem">${esc(b.date||"—")} ${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</div></div>`+
+    `</div>`;
   // slipUrl comes from Firebase Storage getDownloadURL — escape for safety; only render if it begins with http(s).
   const safeSlip=(typeof b.slipUrl==="string"&&/^https?:\/\//.test(b.slipUrl))?b.slipUrl:"";
   const hasPaymentProof=!!safeSlip||!!b.paymentProofUrl||!!b.proofUrl||!!b.paymentSlipUrl;
@@ -792,13 +855,11 @@ function cardHTML(b){
       <div class="bfields">
         <div><div class="fl">Customer</div><div class="fv">${esc(b.customerName||"—")}</div></div>
         <div><div class="fl">Phone</div><div class="fv">${esc(b.customerPhone||"—")}</div></div>
-        <div><div class="fl">Date</div><div class="fv">${esc(b.date||"—")}</div></div>
-        <div><div class="fl">Time</div><div class="fv">${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</div></div>
         <div><div class="fl">Price</div><div class="fv">฿${Number(b.price)||0}</div></div>
         <div><div class="fl">Booking Status</div><div class="fv"><span class="sp s-${esc(statusText)}">${esc(statusText)}</span></div></div>
         <div><div class="fl">Payment Status</div><div class="fv"><span class="sp s-${esc(b.paymentStatus)}">${esc(b.paymentStatus||"—")}</span></div></div>
-        <div><div class="fl">Created</div><div class="fv dim">${esc(created)}</div></div>
         ${prevRow}
+        ${timeline}
         ${b.customerNote?`<div style="grid-column:1/-1"><div class="fl">Note</div><div class="fv dim">${esc(b.customerNote)}</div></div>`:""}
       </div>
       ${slip}
@@ -2439,6 +2500,31 @@ const todayISO=new Date().toISOString().slice(0,10);
 ["weekDate","dayDate","viewDate","paidSummaryDate"].forEach(id=>{const el=$(id);if(el)el.value=todayISO;});
 $("paidSummaryDate").addEventListener("change",renderPaidSummary);
 $("paidSummaryToday").addEventListener("click",()=>{$("paidSummaryDate").value=new Date().toISOString().slice(0,10);renderPaidSummary();});
+
+// ── MONTH FILTER WIRING ───────────────────────────────────────────
+// playMonthFilter is already set to currentMonthValue() by the let declaration above.
+// Set the input to match, then wire the three controls.
+$("mfInput").value=playMonthFilter;
+$("mfPrev").addEventListener("click",()=>{
+  playMonthFilter=shiftMonth(playMonthFilter,-1);
+  $("mfInput").value=playMonthFilter;
+  updateStats();renderBookings();
+});
+$("mfNext").addEventListener("click",()=>{
+  playMonthFilter=shiftMonth(playMonthFilter,1);
+  $("mfInput").value=playMonthFilter;
+  updateStats();renderBookings();
+});
+$("mfThisMonth").addEventListener("click",()=>{
+  playMonthFilter=currentMonthValue();
+  $("mfInput").value=playMonthFilter;
+  updateStats();renderBookings();
+});
+$("mfInput").addEventListener("change",()=>{
+  const v=$("mfInput").value;
+  if(/^\d{4}-\d{2}$/.test(v)){playMonthFilter=v;updateStats();renderBookings();}
+});
+
 (async()=>{if(await checkSession()){loadBookings();}})();
 </script>
 </body>
