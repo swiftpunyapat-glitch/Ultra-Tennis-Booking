@@ -244,7 +244,7 @@ export default async function handler(req, res) {
     const slotRef = db.collection('booking_slots').doc(slotId);
     try {
       const slotSnap = await slotRef.get();
-      if (slotSnap.exists()) {
+      if (slotSnap.exists) {
         batch.update(slotRef, {
           bookingStatus: 'cancelled',
           // Use "refunded" to distinguish refund cancels from normal slip-rejected cancels.

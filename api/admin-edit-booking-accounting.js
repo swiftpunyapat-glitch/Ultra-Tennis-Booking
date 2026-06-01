@@ -311,7 +311,7 @@ export default async function handler(req, res) {
   const slotRef = db.collection('booking_slots').doc(slotId);
   try {
     const slotSnap = await slotRef.get();
-    if (slotSnap.exists()) {
+    if (slotSnap.exists) {
       batch.update(slotRef, {
         paymentStatus: accountingFields.paymentStatus,
         bookingStatus: accountingFields.bookingStatus || booking.bookingStatus,
