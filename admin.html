@@ -246,6 +246,11 @@
     .sr-view{display:block;padding:4px 10px;border-radius:6px;background:var(--gd);border:1px solid var(--g);color:var(--g);font-size:.7rem;font-weight:800;text-decoration:none;margin-top:5px;text-align:center;}
     .sr-view:hover{background:var(--gh);}
 
+    /* CUSTOMER LIST TAB */
+    .cl-row{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);padding:11px 14px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start;margin-bottom:8px;}
+    .cl-info{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;}
+    .cl-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:flex-start;padding-top:2px;}
+
     @media(max-width:600px){
       .main{padding:12px 13px;}
       .bfields{grid-template-columns:1fr 1fr;}
@@ -253,6 +258,7 @@
       .mtgrid{grid-template-columns:repeat(3,1fr);}
       .stats{flex-wrap:wrap;}
       .stat{min-width:33.33%;border-bottom:1px solid var(--bd);}
+      .cl-row{grid-template-columns:1fr;}
     }
   </style>
 </head>
@@ -282,15 +288,17 @@
 <div id="mainApp" style="display:none">
   <header class="ahdr">
     <div class="ahdr-l"><h1>🎾 Ultra Tennis · Admin</h1><span id="lastUpd">—</span></div>
-    <div class="ahdr-r"><a href="/ultra-finance.html">💰 Finance</a><span class="abadge" id="adminBadge">—</span><button class="loutbtn" id="logoutBtn">Logout</button></div>
+    <div class="ahdr-r"><a href="/ultra-finance.html">💰 Finance</a><span id="gcalHdrChip" style="display:none" class="gcal-chip gcal-dim" title="Google Calendar connection status">📅 GCal</span><span class="abadge" id="adminBadge">—</span><button class="loutbtn" id="logoutBtn">Logout</button></div>
   </header>
 
-  <div class="tabbar">
-    <button class="tab on" data-tab="bookings">📋 Bookings</button>
-    <button class="tab" data-tab="daily">📅 Daily View</button>
-    <button class="tab" data-tab="slots">🗓 Slot Manager</button>
-    <button class="tab" data-tab="passes">🎫 Add Pass</button>
-    <button class="tab" data-tab="slips">🧾 Slip Review</button>
+  <div class="tabbar" style="overflow-x:auto;flex-wrap:nowrap">
+    <button class="tab on" data-tab="bookings" style="flex:0 0 auto">📋 Bookings</button>
+    <button class="tab" data-tab="daily" style="flex:0 0 auto">📅 Daily View</button>
+    <button class="tab" data-tab="slots" style="flex:0 0 auto">🗓 Slots</button>
+    <button class="tab" data-tab="passes" style="flex:0 0 auto">🎫 Pass</button>
+    <button class="tab" data-tab="slips" style="flex:0 0 auto">🧾 Slips</button>
+    <button class="tab" data-tab="pending" style="flex:0 0 auto">⏳ Pending</button>
+    <button class="tab" data-tab="customers" style="flex:0 0 auto">👥 Customers</button>
   </div>
 
   <!-- BOOKINGS TAB -->
@@ -506,6 +514,24 @@
     </div>
     <!-- Slip list -->
     <div class="main"><div id="srList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
+  </div>
+
+  <!-- PENDING RESCHEDULE TAB -->
+  <div id="tabPending" style="display:none">
+    <div class="filters" style="justify-content:space-between;align-items:center">
+      <span style="font-size:.68rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:.4px">All-months pending reschedules — needs new slot</span>
+      <button class="rfbtn" id="pendingRefreshBtn">↻ Refresh</button>
+    </div>
+    <div class="main"><div id="pendingTabList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
+  </div>
+
+  <!-- CUSTOMERS TAB -->
+  <div id="tabCustomers" style="display:none">
+    <div class="filters" style="justify-content:space-between;align-items:center">
+      <span style="font-size:.68rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:.4px">All-time customers · aggregated from bookings</span>
+      <button class="rfbtn" id="custRefreshBtn">↻ Refresh</button>
+    </div>
+    <div class="main"><div id="customersList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
   </div>
 </div>
 
@@ -725,6 +751,22 @@
   </div>
 </div>
 
+<!-- ALERT CUSTOMER MODAL -->
+<div class="moverlay" id="alertModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>📢 Alert Customer via LINE</h2><button class="mclose" id="alertClose">✕</button></div>
+    <div class="mbody">
+      <div class="minfo"><strong id="alertCustName">—</strong><span id="alertCustMeta" style="display:block;margin-top:3px;font-size:.75rem">—</span></div>
+      <div class="mfield">
+        <label>Message</label>
+        <textarea id="alertMessage" style="min-height:140px;width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:10px 12px;font-size:.82rem;line-height:1.55;resize:vertical" placeholder="พิมพ์ข้อความที่ต้องการส่งให้ลูกค้า…"></textarea>
+      </div>
+      <p id="alertHint" style="font-size:.72rem;color:var(--m);margin-top:4px">Message will be sent via LINE Push to this customer.</p>
+    </div>
+    <div class="mftr"><button class="mcancel" id="alertCancel">Cancel</button><button class="mconfirm" id="alertSend">📤 Send Message</button></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script type="module">
@@ -843,14 +885,18 @@ $("logoutBtn").addEventListener("click",async()=>{
 document.querySelectorAll(".tab").forEach(btn=>{
   btn.addEventListener("click",()=>{
     document.querySelectorAll(".tab").forEach(b=>b.classList.remove("on"));btn.classList.add("on");
-    $("tabBookings").style.display=btn.dataset.tab==="bookings"?"block":"none";
-    $("tabDaily").style.display   =btn.dataset.tab==="daily"   ?"block":"none";
-    $("tabSlots").style.display   =btn.dataset.tab==="slots"   ?"block":"none";
-    $("tabPasses").style.display  =btn.dataset.tab==="passes"  ?"block":"none";
-    $("tabSlips").style.display   =btn.dataset.tab==="slips"   ?"block":"none";
-    if(btn.dataset.tab==="passes") loadActivePasses();
-    if(btn.dataset.tab==="daily")  loadDailyView();
-    if(btn.dataset.tab==="slips")  renderSlipReview();
+    $("tabBookings").style.display  =btn.dataset.tab==="bookings"  ?"block":"none";
+    $("tabDaily").style.display     =btn.dataset.tab==="daily"     ?"block":"none";
+    $("tabSlots").style.display     =btn.dataset.tab==="slots"     ?"block":"none";
+    $("tabPasses").style.display    =btn.dataset.tab==="passes"    ?"block":"none";
+    $("tabSlips").style.display     =btn.dataset.tab==="slips"     ?"block":"none";
+    $("tabPending").style.display   =btn.dataset.tab==="pending"   ?"block":"none";
+    $("tabCustomers").style.display =btn.dataset.tab==="customers" ?"block":"none";
+    if(btn.dataset.tab==="passes")   loadActivePasses();
+    if(btn.dataset.tab==="daily")    loadDailyView();
+    if(btn.dataset.tab==="slips")    renderSlipReview();
+    if(btn.dataset.tab==="pending")  renderPendingTab();
+    if(btn.dataset.tab==="customers") renderCustomerListTab();
   });
 });
 
@@ -944,6 +990,60 @@ function renderPendingRescheduleList(){
   pending.forEach(b=>{
     const btn=panel.querySelector(`[data-pending-assign="${b.id}"]`);
     if(btn) btn.addEventListener("click",()=>openResch(b));
+  });
+}
+
+// ── PENDING RESCHEDULE TAB ────────────────────────────────────────
+// Dedicated full-page view for all pending reschedule bookings (all months).
+// Uses the already-loaded allBookings — no extra Firestore fetch.
+function renderPendingTab(){
+  const el=$("pendingTabList");
+  if(!el) return;
+  if(!allBookings.length){
+    el.innerHTML=`<div class="estate">📭 No booking data loaded.<br>Open <strong>Bookings</strong> tab, click ↻ Refresh, then return here.</div>`;
+    return;
+  }
+  const pending=allBookings
+    .filter(isPendingRescheduleBooking)
+    .sort((a,b)=>(b.pendingRescheduleAt?.seconds||b.updatedAt?.seconds||0)-(a.pendingRescheduleAt?.seconds||a.updatedAt?.seconds||0));
+  if(!pending.length){
+    el.innerHTML=`<div class="estate">✓ No pending reschedules right now.</div>`;
+    return;
+  }
+  el.innerHTML=`<div class="bgrid">${pending.map(b=>{
+    const origDate=b.pendingRescheduleFromDate||b.previousDate||b.date||"—";
+    const origStart=b.pendingRescheduleFromStartTime||b.previousStartTime||b.startTime||"—";
+    const origEnd=b.pendingRescheduleFromEndTime||b.previousEndTime||b.endTime||"—";
+    const movedAt=formatDateTimeSafe(b.pendingRescheduleAt||b.updatedAt);
+    const movedBy=b.pendingRescheduleBy||"—";
+    const hasPayment=b.paymentStatus==="paid"||b.paymentStatus==="package";
+    return `<div class="bcard" id="ptcard-${esc(b.id)}">
+      <div class="bcard-hdr">
+        <span class="bcode">${esc(b.bookingCode||"—")}</span>
+        <div style="display:flex;gap:5px;align-items:center">
+          ${hasPayment?`<span class="sp s-paid">✓ Paid</span>`:""}
+          <span class="tbadge" style="background:#2d1e00;color:#fb923c">⏳ Pending Reschedule</span>
+        </div>
+      </div>
+      <div class="bcard-body">
+        <div class="bfields">
+          <div><div class="fl">Customer</div><div class="fv">${esc(b.customerName||"—")}</div></div>
+          <div><div class="fl">Phone</div><div class="fv">${esc(b.customerPhone||"—")}</div></div>
+          <div><div class="fl">Original Slot</div><div class="fv">${esc(origDate)} ${esc(origStart)}–${esc(origEnd)}</div></div>
+          <div><div class="fl">Type</div><div class="fv dim">${esc(b.bookingType||"—")}</div></div>
+          <div><div class="fl">Payment</div><div class="fv"><span class="sp s-${esc(b.paymentStatus)}">${esc(b.paymentStatus||"—")}</span></div></div>
+          <div><div class="fl">Moved</div><div class="fv dim" style="font-size:.72rem">${esc(movedAt)}<br>by ${esc(movedBy)}</div></div>
+          ${b.customerNote?`<div style="grid-column:1/-1"><div class="fl">Note</div><div class="fv dim">${esc(b.customerNote)}</div></div>`:""}
+        </div>
+        <div class="acts">
+          <button class="smbtn smg" data-pt-assign="${esc(b.id)}">📅 Assign New Slot</button>
+        </div>
+      </div>
+    </div>`;
+  }).join("")}</div>`;
+  el.querySelectorAll("[data-pt-assign]").forEach(btn=>{
+    const bk=pending.find(x=>x.id===btn.dataset.ptAssign);
+    if(bk) btn.addEventListener("click",()=>openResch(bk));
   });
 }
 
@@ -1350,8 +1450,17 @@ function tsToDate(ts){
 
 $("exportBookingsBtn").addEventListener("click",()=>{
   if(!allBookings.length){ showToast("No bookings loaded — click Refresh first.",true); return; }
+  // Apply the same month + status filters currently shown in the Bookings tab.
+  let exportList=allBookings.filter(isBookingInSelectedPlayMonth);
+  if(activeFilter!=="all"){
+    exportList=exportList.filter(b=>{
+      if(activeFilter==="pending_reschedule") return isPendingRescheduleBooking(b);
+      return b.bookingStatus===activeFilter||b.paymentStatus===activeFilter;
+    });
+  }
+  const filterTag=activeFilter==="all"?"all":activeFilter;
   const headers=["bookingCode","customerName","lineDisplayName","lineUserId","customerPhone","normalizedPhone","date","startTime","endTime","bookingType","bookingStatus","paymentStatus","price","createdAt"];
-  const rows=allBookings.map(b=>({
+  const rows=exportList.map(b=>({
     bookingCode:b.bookingCode||"",
     customerName:b.customerName||"",
     lineDisplayName:b.lineDisplayName||"",
@@ -1367,8 +1476,8 @@ $("exportBookingsBtn").addEventListener("click",()=>{
     price:b.price??"",
     createdAt:tsToDateTime(b.createdAt),
   }));
-  downloadCSV(`bookings_${csvStamp()}.csv`,headers,rows);
-  showToast(`✓ Exported ${rows.length} bookings`);
+  downloadCSV(`bookings_${playMonthFilter}_${filterTag}_${csvStamp()}.csv`,headers,rows);
+  showToast(`✓ Exported ${rows.length} bookings · ${monthLabel(playMonthFilter)} · ${filterTag}`);
 });
 
 $("exportPassesBtn").addEventListener("click",async()=>{
@@ -1449,6 +1558,70 @@ $("exportCustomersBtn").addEventListener("click",async()=>{
   }catch(e){ console.error(e); showToast("Customer export failed.",true); }
   finally{ btn.disabled=false; btn.textContent="Customers"; }
 });
+
+// ── CUSTOMER LIST TAB ─────────────────────────────────────────────
+// Aggregates allBookings into a per-customer list. No extra Firestore fetches.
+let custListData=[];
+
+function renderCustomerListTab(){
+  const el=$("customersList");
+  if(!el) return;
+  if(!allBookings.length){
+    el.innerHTML=`<div class="estate">📭 No booking data loaded.<br>Open <strong>Bookings</strong> tab, click ↻ Refresh, then return here.</div>`;
+    return;
+  }
+  const map=new Map();
+  allBookings.forEach(b=>{
+    const np=b.customerPhoneNormalized||normalizePhone(b.customerPhone);
+    const key=np||b.lineUserId||"unknown";
+    if(!map.has(key)) map.set(key,{
+      customerName:"",lineDisplayName:"",lineUserId:"",customerPhone:"",normalizedPhone:np,
+      total:0,confirmed:0,cancelled:0,pending:0,lastDate:"",_lastTs:-1,
+    });
+    const c=map.get(key);
+    c.total++;
+    if(b.bookingStatus==="confirmed") c.confirmed++;
+    if(b.bookingStatus==="cancelled") c.cancelled++;
+    if(b.bookingStatus==="pending_payment") c.pending++;
+    if((b.date||"")>c.lastDate) c.lastDate=b.date||"";
+    const ts=b.createdAt?.seconds||0;
+    if(ts>=c._lastTs){
+      c._lastTs=ts;
+      if(b.customerName) c.customerName=b.customerName;
+      if(b.customerPhone) c.customerPhone=b.customerPhone;
+      if(b.lineDisplayName) c.lineDisplayName=b.lineDisplayName;
+      if(b.lineUserId&&b.lineUserId!=="guest"&&b.lineUserId!=="manual") c.lineUserId=b.lineUserId;
+    }
+  });
+  custListData=[...map.values()]
+    .filter(c=>c.total>0)
+    .sort((a,b)=>b.lastDate.localeCompare(a.lastDate));
+
+  el.innerHTML=`<div style="font-size:.72rem;color:var(--m);margin-bottom:10px">${custListData.length} unique customers (all-time)</div>`+
+    custListData.map((c,i)=>{
+      const lineLinked=canNotifyLine(c.lineUserId);
+      const lineTag=lineLinked
+        ?`<span style="color:var(--g);font-size:.72rem">✓ LINE linked</span>`
+        :`<span style="color:var(--m);font-size:.72rem">Not linked</span>`;
+      return `<div class="cl-row">
+        <div class="cl-info">
+          <div><div class="fl">Name</div><div class="fv">${esc(c.customerName||"—")}</div></div>
+          <div><div class="fl">Phone</div><div class="fv">${esc(c.customerPhone||"—")}</div></div>
+          <div><div class="fl">LINE</div><div class="fv">${lineTag}</div></div>
+          <div><div class="fl">Bookings</div><div class="fv">${c.total} total · <span style="color:var(--ac)">${c.confirmed}</span> conf · <span style="color:var(--dan)">${c.cancelled}</span> cancel${c.pending?` · <span style="color:var(--warn)">${c.pending}</span> pending`:""}</div></div>
+          <div><div class="fl">Last Visit</div><div class="fv dim">${esc(c.lastDate||"—")}</div></div>
+          ${c.lineDisplayName?`<div><div class="fl">LINE Name</div><div class="fv dim">${esc(c.lineDisplayName)}</div></div>`:""}
+        </div>
+        <div class="cl-actions">
+          ${lineLinked?`<button class="smbtn smg" style="font-size:.72rem;padding:5px 10px" data-alert-idx="${i}">📢 Alert</button>`:`<span style="font-size:.68rem;color:var(--m)">No LINE</span>`}
+        </div>
+      </div>`;
+    }).join("");
+
+  el.querySelectorAll("[data-alert-idx]").forEach(btn=>{
+    btn.addEventListener("click",()=>openAlertModal(custListData[Number(btn.dataset.alertIdx)]));
+  });
+}
 
 // ── SLOT MANAGER ─────────────────────────────────────────────────
 const allH=()=>{const h=[];for(let i=OPEN_HOUR;i<CLOSE_HOUR;i++)h.push(i);return h;};
@@ -2693,6 +2866,58 @@ $("mpConfirmBtn").addEventListener("click",async()=>{
   }
 });
 
+// ── ALERT CUSTOMER MODAL ─────────────────────────────────────────
+// Admin sends a free-text LINE message to a customer.
+// Uses sendLineNotification type:"admin_alert_customer" (defined in notify.js).
+// Skipped automatically if customer has no valid LINE userId.
+let alertCustomer=null;
+
+function openAlertModal(c){
+  alertCustomer=c;
+  $("alertCustName").textContent=c.customerName||"—";
+  $("alertCustMeta").textContent=`${c.customerPhone||"—"}${c.lineUserId?` · LINE: ${c.lineUserId.slice(0,16)}…`:" · No LINE ID"}`;
+  $("alertMessage").value="";
+  const canSend=canNotifyLine(c.lineUserId);
+  $("alertHint").textContent=canSend
+    ?"Message will be sent via LINE Push to this customer."
+    :"⚠ This customer has no LINE ID — cannot send a message.";
+  $("alertHint").style.color=canSend?"var(--m)":"var(--dan)";
+  $("alertSend").disabled=!canSend;
+  $("alertModal").style.display="flex";
+  if(canSend) setTimeout(()=>$("alertMessage").focus(),80);
+}
+function closeAlertModal(){$("alertModal").style.display="none";alertCustomer=null;}
+$("alertClose").addEventListener("click",closeAlertModal);
+$("alertCancel").addEventListener("click",closeAlertModal);
+$("alertModal").addEventListener("click",e=>{if(e.target===$("alertModal"))closeAlertModal();});
+
+$("alertSend").addEventListener("click",async()=>{
+  if(!alertCustomer||!canNotifyLine(alertCustomer.lineUserId)) return;
+  const msg=$("alertMessage").value.trim();
+  if(!msg){showToast("Please enter a message.",true);$("alertMessage").focus();return;}
+  const btn=$("alertSend");btn.disabled=true;btn.textContent="Sending…";
+  try{
+    const result=await window.sendLineNotification({
+      eventId:`admin_alert_${alertCustomer.lineUserId}_${Date.now()}`,
+      type:"admin_alert_customer",
+      lineUserId:alertCustomer.lineUserId,
+      message:msg,
+    });
+    if(result&&result.status==="success"){
+      showToast(`✓ Message sent to ${alertCustomer.customerName||"customer"}`);
+      closeAlertModal();
+    }else if(result&&result.status==="skipped"){
+      showToast("Skipped — customer LINE ID is not valid.",true);
+    }else{
+      showToast(result?.error||"Send failed — check LINE configuration.",true);
+    }
+  }catch(e){
+    console.error("[alertSend]",e);showToast("Send failed.",true);
+  }finally{
+    btn.disabled=false;btn.textContent="📤 Send Message";
+  }
+});
+
 // ── SLIP REVIEW ───────────────────────────────────────────────────
 let srMonthFilter=currentMonthValue(), srGroupBy="paid", srStatusFilter="all";
 
@@ -3044,6 +3269,35 @@ $("rfConfirm").addEventListener("click",async()=>{
   }
 });
 
+// ── GCAL PREFLIGHT ───────────────────────────────────────────────
+// Called once after login. Attempts a harmless "ping" action — gcal.js returns
+// 400 "Unsupported action" for it, but that means the endpoint is reachable and
+// the admin session is valid.  Auth/config errors ("auth failed", "not configured")
+// are the only cases that flip gcalHealthy to false.
+let gcalHealthy=null; // null=unknown, true=reachable+auth ok, false=broken
+
+async function checkGcalHealth(){
+  try{
+    const r=await callGcal({action:"ping"});
+    const err=String(r?.error||"").toLowerCase();
+    gcalHealthy=!err.includes("auth failed")&&!err.includes("not configured")&&!err.includes("access denied");
+  }catch{
+    gcalHealthy=false;
+  }
+  const chip=$("gcalHdrChip");
+  if(!chip) return;
+  chip.style.display="inline-block";
+  if(gcalHealthy){
+    chip.className="gcal-chip gcal-ok";
+    chip.title="Google Calendar: reachable & session valid";
+    chip.textContent="📅 GCal ✓";
+  }else{
+    chip.className="gcal-chip gcal-err";
+    chip.title="Google Calendar: auth or config issue — check env vars";
+    chip.textContent="📅 GCal ⚠";
+  }
+}
+
 // ── TOAST ────────────────────────────────────────────────────────
 function showToast(msg,isErr=false){
   const t=$("toast");t.textContent=msg;t.className=`toast show${isErr?" err":""}`;
@@ -3101,7 +3355,24 @@ $("srRefresh").addEventListener("click",async()=>{
   renderSlipReview();
 });
 
-(async()=>{if(await checkSession()){loadBookings();}})();
+// ── PENDING + CUSTOMERS TAB REFRESH BUTTONS ──────────────────────
+$("pendingRefreshBtn").addEventListener("click",async()=>{
+  $("pendingTabList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Refreshing...</p></div>`;
+  await loadBookings();
+  renderPendingTab();
+});
+$("custRefreshBtn").addEventListener("click",async()=>{
+  $("customersList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Refreshing...</p></div>`;
+  await loadBookings();
+  renderCustomerListTab();
+});
+
+(async()=>{
+  if(await checkSession()){
+    loadBookings();
+    checkGcalHealth(); // fire-and-forget gcal preflight after login
+  }
+})();
 </script>
 </body>
 </html>
