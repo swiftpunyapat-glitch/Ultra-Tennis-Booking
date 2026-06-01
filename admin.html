@@ -623,6 +623,53 @@
   </div>
 </div>
 
+<!-- ACCOUNTING EDIT MODAL (Art-only) -->
+<div class="moverlay" id="acctModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>✏️ Edit Accounting / แก้สถานะบัญชี</h2><button class="mclose" id="acctClose">✕</button></div>
+    <div class="mbody">
+      <div class="minfo"><strong id="acctCode">—</strong><span id="acctCustInfo" style="display:block;margin-top:3px;font-size:.75rem">—</span><span id="acctCurrentState" style="display:block;margin-top:4px;font-size:.7rem;color:var(--m)">—</span></div>
+      <div class="mfield">
+        <label>Booking Status</label>
+        <select id="acctBookingStatus">
+          <option value="confirmed">confirmed</option>
+          <option value="pending_payment">pending_payment</option>
+          <option value="cancelled">cancelled</option>
+          <option value="rescheduled">rescheduled</option>
+          <option value="pending_reschedule">pending_reschedule</option>
+        </select>
+      </div>
+      <div class="mfield">
+        <label>Payment / Accounting Type</label>
+        <select id="acctType">
+          <option value="normal_paid">Normal Paid (paymentStatus: paid)</option>
+          <option value="normal_unpaid">Normal Unpaid (paymentStatus: unpaid)</option>
+          <option value="pending_review">Pending Review</option>
+          <option value="rejected">Rejected / Cancelled</option>
+          <option value="ultra_pass_1">Ultra Pass 1 Usage — 310 THB/hr</option>
+          <option value="ultra_pass_2">Ultra Pass 2 Usage — 295 THB/hr</option>
+          <option value="influencer_free">Influencer Free Slot</option>
+        </select>
+      </div>
+      <div class="mfield" id="acctPriceField">
+        <label id="acctPriceLabel">Price / Amount (฿)</label>
+        <input type="number" id="acctPrice" min="0" step="1" placeholder="e.g. 350"/>
+      </div>
+      <div class="mfield" id="acctInfluencerField" style="display:none">
+        <label>Marketing Expense Amount (฿)</label>
+        <input type="number" id="acctInfluencerAmt" min="1" step="1" placeholder="e.g. 350"/>
+        <p style="font-size:.7rem;color:var(--m);margin-top:3px">Auto-creates / updates a Marketing expense in Finance records.</p>
+      </div>
+      <p id="acctPreview" style="font-size:.72rem;color:var(--ac);margin:6px 0 2px;min-height:16px"></p>
+      <div class="mfield">
+        <label>Reason / Note <span style="color:var(--dan)">*required</span></label>
+        <input type="text" id="acctReason" maxlength="400" placeholder="e.g. Customer paid cash at counter, status not updated"/>
+      </div>
+    </div>
+    <div class="mftr"><button class="mcancel" id="acctCancel">Cancel</button><button class="mconfirm" id="acctConfirm">Save Changes</button></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script type="module">
@@ -812,6 +859,8 @@ function renderBookings(){
     if(r)  r.addEventListener("click",()=>openResch(b));
     if(gr) gr.addEventListener("click",()=>retrySyncGcal(b));
     if(d)  d.addEventListener("click",()=>permanentDeleteBooking(b));
+    const ae=document.querySelector(`[data-acct-edit="${b.id}"]`);
+    if(ae) ae.addEventListener("click",()=>openAcctModal(b));
   });
 }
 
@@ -878,19 +927,21 @@ function cardHTML(b){
 
   // Show paid badge separately + reschedule button even when paid
   const paidBadge=isPaid?`<span class="sp s-paid">✓ Paid</span>`:"";
-  // Art-only: permanent delete button — frontend visibility gate only;
-  // the backend /api/admin-delete-booking enforces the same restriction.
+  // Art-only buttons — frontend visibility gate only; backends enforce independently.
+  const artAcctEdit=currentAdminName==="Art"
+    ?`<button class="bp" style="background:#1e1e3d;border:1px solid #a78bfa;color:#a78bfa" data-acct-edit="${esc(b.id)}">✏️ Edit Accounting</button>`
+    :"";
   const artDelete=currentAdminName==="Art"
     ?`<button class="bc" style="background:#5a0a0a" data-delete="${esc(b.id)}">🗑 Delete Permanently</button>`
     :"";
   const actions=isCancelled
-    ?`<button class="bdone">✗ Cancelled</button>${artDelete}`
+    ?`<button class="bdone">✗ Cancelled</button>${artAcctEdit}${artDelete}`
     :`${canMarkPaid?`<button class="bp" data-paid="${esc(b.id)}">✓ Mark as Paid</button>`:""}
       ${canMarkUnpaid?`<button class="bp" data-markpaid="${esc(b.id)}">บันทึกจ่ายแล้ว</button>`:""}
       ${canConfirmNoSlip?`<button class="bp" data-paid-noslip="${esc(b.id)}">✅ Confirm Paid (No Slip)</button>`:""}
       ${canResch?`<button class="br" data-resch="${esc(b.id)}">📅 Reschedule</button>`:""}
       ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}
-      ${artDelete}`;
+      ${artAcctEdit}${artDelete}`;
 
   return `<div class="bcard" id="card-${esc(b.id)}">
     <div class="bcard-hdr"><span class="bcode">${esc(b.bookingCode||"—")}</span><div style="display:flex;gap:5px;align-items:center">${paidBadge}<span class="tbadge ${tc}">${esc(b.bookingType||"—")}</span></div></div>
@@ -2309,6 +2360,24 @@ async function moveToPendingReschedule(){
     });
     await batch.commit();
 
+    // ── Phase B: fire-and-forget admin notification ───────────────
+    // Must not block or affect the reschedule; failure is logged only.
+    if(window.notifyAdmins){
+      window.notifyAdmins({
+        type:"booking_pending_reschedule_admin",
+        bookingCode:reschBooking.bookingCode,
+        eventSuffix:`pending_${Date.now()}`,
+        customerName:reschBooking.customerName||"",
+        customerPhone:reschBooking.customerPhone||"",
+        previousDate:reschBooking.pendingRescheduleFromDate||reschBooking.previousDate||reschBooking.date||"—",
+        previousStartTime:reschBooking.pendingRescheduleFromStartTime||reschBooking.previousStartTime||reschBooking.startTime||"—",
+        previousEndTime:reschBooking.pendingRescheduleFromEndTime||reschBooking.previousEndTime||reschBooking.endTime||"—",
+        paymentStatus:reschBooking.paymentStatus||"—",
+        bookingType:reschBooking.bookingType||"—",
+        actionBy:currentAdminName||"admin",
+      });
+    }
+
     // ── Phase C: remove Calendar event since original slot is released ──
     if(reschBooking.googleCalendarEventId){
       try{
@@ -2422,6 +2491,27 @@ $("mConfirm").addEventListener("click",async()=>{
         date: newDate,
         startTime: reschTime,
         endTime: newEnd
+      });
+    }
+
+    // Fire-and-forget: notify all admins of the reschedule. Must not block admin flow.
+    // eventSuffix makes each reschedule of the same booking idempotency-unique.
+    if(window.notifyAdmins){
+      window.notifyAdmins({
+        type:"booking_rescheduled_admin",
+        bookingCode:reschBooking.bookingCode,
+        eventSuffix:`${newDate}_${reschTime}`,
+        customerName:reschBooking.customerName||"",
+        customerPhone:reschBooking.customerPhone||"",
+        previousDate:reschBooking.pendingRescheduleFromDate||reschBooking.previousDate||reschBooking.date||"—",
+        previousStartTime:reschBooking.pendingRescheduleFromStartTime||reschBooking.previousStartTime||reschBooking.startTime||"—",
+        previousEndTime:reschBooking.pendingRescheduleFromEndTime||reschBooking.previousEndTime||reschBooking.endTime||"—",
+        date:newDate,
+        startTime:reschTime,
+        endTime:newEnd,
+        bookingType:reschBooking.bookingType||"—",
+        paymentStatus:reschBooking.paymentStatus||"—",
+        actionBy:currentAdminName||"admin",
       });
     }
 
@@ -2638,6 +2728,132 @@ function renderSlipItem(b){
     `<div><div class="fl">📋 Booked</div><div class="fv dim">${esc(createdStr)}</div></div>`+
     `</div>${slipBlock}</div>`;
 }
+
+// ── ACCOUNTING EDIT (Art-only) ────────────────────────────────────
+// Read-only inspection of the booking + POST to /api/admin-edit-booking-accounting.
+// No payment logic, no Calendar sync, no customer notification happens here.
+let acctBooking=null;
+
+function calcBookingDuration(b){
+  const stored=Number(b.durationHours);
+  if(stored>0) return stored;
+  if(b.startTime&&b.endTime){
+    const[sh,sm]=b.startTime.split(":").map(Number);
+    const[eh,em]=b.endTime.split(":").map(Number);
+    const m=(eh*60+em)-(sh*60+sm);
+    if(m>0) return m/60;
+  }
+  return 1;
+}
+
+function inferAccountingType(b){
+  if(b.isInfluencerBooking)                                             return "influencer_free";
+  if(b.paymentStatus==="package"&&b.packageType==="ultra_10")           return "ultra_pass_1";
+  if(b.paymentStatus==="package"&&b.packageType==="ultra_20")           return "ultra_pass_2";
+  if(b.paymentStatus==="paid")                                          return "normal_paid";
+  if(b.paymentStatus==="unpaid")                                        return "normal_unpaid";
+  if(b.paymentStatus==="pending_review")                                return "pending_review";
+  if(b.paymentStatus==="rejected"||b.bookingStatus==="cancelled")       return "rejected";
+  return "normal_unpaid";
+}
+
+function syncAcctModal(){
+  if(!acctBooking) return;
+  const type=$("acctType").value;
+  const dur=calcBookingDuration(acctBooking);
+  const priceField=$("acctPriceField"),infField=$("acctInfluencerField");
+
+  if(type==="normal_paid"||type==="normal_unpaid"){
+    priceField.style.display="";infField.style.display="none";
+    $("acctPriceLabel").textContent="Price / Amount (฿)";
+  }else if(type==="ultra_pass_1"){
+    priceField.style.display="";infField.style.display="none";
+    $("acctPriceLabel").textContent=`Package Usage Value — ${dur}hr × ฿310`;
+    $("acctPrice").value=Math.round(dur*310);
+  }else if(type==="ultra_pass_2"){
+    priceField.style.display="";infField.style.display="none";
+    $("acctPriceLabel").textContent=`Package Usage Value — ${dur}hr × ฿295`;
+    $("acctPrice").value=Math.round(dur*295);
+  }else if(type==="influencer_free"){
+    priceField.style.display="none";infField.style.display="";
+    if(!$("acctInfluencerAmt").value) $("acctInfluencerAmt").value=Math.round(dur*350);
+  }else{
+    priceField.style.display="none";infField.style.display="none";
+  }
+
+  // Auto-set bookingStatus to the canonical value for this type
+  const bsDefaults={normal_paid:"confirmed",normal_unpaid:"confirmed",
+    ultra_pass_1:"confirmed",ultra_pass_2:"confirmed",
+    influencer_free:"confirmed",rejected:"cancelled"};
+  if(bsDefaults[type]) $("acctBookingStatus").value=bsDefaults[type];
+
+  $("acctPreview").textContent=buildAcctPreview(type,dur);
+}
+
+function buildAcctPreview(type,dur){
+  switch(type){
+    case "normal_paid":      return `→ paymentStatus: paid · bookingStatus: confirmed · price: ฿${$("acctPrice").value||350}`;
+    case "normal_unpaid":    return `→ paymentStatus: unpaid · price: ฿${$("acctPrice").value||350}`;
+    case "pending_review":   return `→ paymentStatus: pending_review`;
+    case "rejected":         return `→ paymentStatus: rejected · bookingStatus: cancelled (forced)`;
+    case "ultra_pass_1":     return `→ package · Ultra Pass 1 · usageValue: ฿${Math.round(dur*310)} (${dur}hr × ฿310)`;
+    case "ultra_pass_2":     return `→ package · Ultra Pass 2 · usageValue: ฿${Math.round(dur*295)} (${dur}hr × ฿295)`;
+    case "influencer_free":  return `→ package · Influencer Free · Marketing expense: ฿${$("acctInfluencerAmt").value||Math.round(dur*350)}`;
+    default: return "";
+  }
+}
+
+function openAcctModal(b){
+  acctBooking=b;
+  $("acctCode").textContent=b.bookingCode||"—";
+  $("acctCustInfo").textContent=`${esc(b.customerName||"—")} · ${esc(b.customerPhone||"—")} · Play: ${esc(b.date||"—")} ${esc(b.startTime||"—")}–${esc(b.endTime||"—")}`;
+  $("acctCurrentState").textContent=`Current: bookingStatus=${b.bookingStatus||"—"} · paymentStatus=${b.paymentStatus||"—"} · type=${b.bookingType||"—"} · ฿${Number(b.price)||0}`;
+  $("acctBookingStatus").value=b.bookingStatus||"confirmed";
+  $("acctType").value=inferAccountingType(b);
+  $("acctPrice").value=Number(b.price)||350;
+  $("acctInfluencerAmt").value=Number(b.influencerExpenseAmount)||Math.round(calcBookingDuration(b)*350);
+  $("acctReason").value="";
+  $("acctPreview").textContent="";
+  $("acctConfirm").disabled=false;
+  $("acctConfirm").textContent="Save Changes";
+  syncAcctModal();
+  $("acctModal").style.display="flex";
+}
+function closeAcctModal(){$("acctModal").style.display="none";acctBooking=null;}
+$("acctClose").addEventListener("click",closeAcctModal);
+$("acctCancel").addEventListener("click",closeAcctModal);
+$("acctModal").addEventListener("click",e=>{if(e.target===$("acctModal"))closeAcctModal();});
+$("acctType").addEventListener("change",syncAcctModal);
+$("acctBookingStatus").addEventListener("change",()=>{$("acctPreview").textContent=buildAcctPreview($("acctType").value,calcBookingDuration(acctBooking));});
+$("acctPrice").addEventListener("input",()=>{$("acctPreview").textContent=buildAcctPreview($("acctType").value,calcBookingDuration(acctBooking));});
+$("acctInfluencerAmt").addEventListener("input",()=>{$("acctPreview").textContent=buildAcctPreview($("acctType").value,calcBookingDuration(acctBooking));});
+
+$("acctConfirm").addEventListener("click",async()=>{
+  if(!acctBooking) return;
+  const reason=$("acctReason").value.trim();
+  if(!reason){showToast("Reason is required.",true);$("acctReason").focus();return;}
+  const type=$("acctType").value;
+  const bookingStatus=$("acctBookingStatus").value;
+  const price=Number($("acctPrice").value)||0;
+  const influencerExpenseAmount=Number($("acctInfluencerAmt").value)||350;
+  const btn=$("acctConfirm");btn.disabled=true;btn.textContent="Saving...";
+  try{
+    const res=await fetch("/api/admin-edit-booking-accounting",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({bookingId:acctBooking.id,accountingType:type,bookingStatus,price,influencerExpenseAmount,reason}),
+    });
+    const data=await res.json();
+    if(!data.ok) throw new Error(data.error||"Save failed");
+    showToast(`✓ Accounting updated: ${acctBooking.bookingCode||""}`);
+    closeAcctModal();
+    await loadBookings();
+  }catch(e){
+    console.error("[acctConfirm]",e);
+    showToast(e.message||"Failed to update accounting.",true);
+    btn.disabled=false;btn.textContent="Save Changes";
+  }
+});
 
 // ── TOAST ────────────────────────────────────────────────────────
 function showToast(msg,isErr=false){
