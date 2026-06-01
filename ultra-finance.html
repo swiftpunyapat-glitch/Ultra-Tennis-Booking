@@ -207,6 +207,11 @@
       <div class="csub" id="cManSub">—</div>
     </div>
     <div class="card">
+      <div class="cn" id="cPkgUsage" style="color:#a78bfa">฿—</div>
+      <div class="cl">Package Usage Value</div>
+      <div class="csub" id="cPkgSub">Ultra Pass usage (not cash)</div>
+    </div>
+    <div class="card">
       <div class="cn cy" id="cExpenses">฿—</div>
       <div class="cl">Total Expenses</div>
       <div class="csub" id="cExpSub">—</div>
@@ -585,26 +590,48 @@ function updateMonthLabels() {
 
 // ── SUMMARY CARDS ─────────────────────────────────────────────────
 function renderSummaryCards() {
-  const paidBookings = allBookings.filter(b => b.paymentStatus === "paid");
+  const paidBookings   = allBookings.filter(b => b.paymentStatus === "paid");
   const unpaidBookings = allBookings.filter(b =>
     (b.paymentStatus === "unpaid" || b.paymentStatus === "pending_review") &&
     b.bookingStatus !== "cancelled"
   );
+  // Package Usage: Ultra Pass bookings — value is notional, NOT cash revenue.
+  // Pass sales are recorded as Manual Income when the pass was sold.
+  // Include legacy bookings that have bookingType but no packageType field.
+  const pkgBookings = allBookings.filter(b =>
+    b.paymentStatus === "package" &&
+    (b.packageType === "ultra_10" || b.packageType === "ultra_20" ||
+     b.bookingType === "Ultra Pass 1" || b.bookingType === "Ultra Pass 2")
+  );
 
-  const bookRev    = paidBookings.reduce((s, b) => s + (Number(b.price) || 0), 0);
-  const manInc     = allManualIncome.reduce((s, i) => s + (Number(i.amount) || 0), 0);
-  const totalRev   = bookRev + manInc;
-  const totalExp   = allExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const netPL      = totalRev - totalExp;
-  const paidHrs    = paidBookings.reduce((s, b) => s + calcHours(b.startTime, b.endTime), 0);
-  const unpaidAmt  = unpaidBookings.reduce((s, b) => s + (Number(b.price) || 0), 0);
+  const bookRev  = paidBookings.reduce((s, b) => s + (Number(b.price) || 0), 0);
+  const manInc   = allManualIncome.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+  const totalRev = bookRev + manInc;
+  const totalExp = allExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const netPL    = totalRev - totalExp;
+  const paidHrs  = paidBookings.reduce((s, b) => s + calcHours(b.startTime, b.endTime), 0);
+  const unpaidAmt= unpaidBookings.reduce((s, b) => s + (Number(b.price) || 0), 0);
+
+  // Package usage value: prefer the stored packageUsageValueTotal; fall back to
+  // computed rate × duration for bookings set before the field was introduced.
+  const pkgValue = pkgBookings.reduce((s, b) => {
+    if (b.packageUsageValueTotal) return s + Number(b.packageUsageValueTotal);
+    const hrs = calcHours(b.startTime, b.endTime);
+    if (b.bookingType === "Ultra Pass 1") return s + hrs * 310;
+    if (b.bookingType === "Ultra Pass 2") return s + hrs * 295;
+    return s;
+  }, 0);
 
   $("cRevTotal").textContent  = baht(totalRev);
-  $("cRevSub").textContent    = `Bookings + Income`;
+  $("cRevSub").textContent    = `Cash bookings + manual income`;
   $("cBookRev").textContent   = baht(bookRev);
   $("cBookSub").textContent   = `${paidBookings.length} paid booking${paidBookings.length!==1?"s":""}`;
   $("cManIncome").textContent = baht(manInc);
   $("cManSub").textContent    = `${allManualIncome.length} entr${allManualIncome.length!==1?"ies":"y"}`;
+  $("cPkgUsage").textContent  = baht(pkgValue);
+  $("cPkgSub").textContent    = pkgBookings.length
+    ? `${pkgBookings.length} Ultra Pass usage · not cash`
+    : `No Ultra Pass usage this month`;
   $("cExpenses").textContent  = baht(totalExp);
   $("cExpSub").textContent    = `${allExpenses.length} item${allExpenses.length!==1?"s":""}`;
 
@@ -613,7 +640,7 @@ function renderSummaryCards() {
   netEl.className   = "cn " + (netPL >= 0 ? "cgrn" : "cr");
 
   $("cPaidHrs").textContent    = paidHrs % 1 === 0 ? `${paidHrs} hrs` : `${paidHrs.toFixed(1)} hrs`;
-  $("cPaidHrsSub").textContent = `from paid bookings`;
+  $("cPaidHrsSub").textContent = `from cash-paid bookings`;
   $("cUnpaid").textContent     = baht(unpaidAmt);
   $("cUnpaidSub").textContent  = `${unpaidBookings.length} unpaid booking${unpaidBookings.length!==1?"s":""}`;
 }
@@ -631,24 +658,65 @@ function renderBookingTable() {
   const paidRev   = allBookings.filter(b => b.paymentStatus === "paid").reduce((s,b)=>s+(Number(b.price)||0),0);
   $("bookTotalLabel").textContent = `${allBookings.length} total · ${paidCount} paid · ${baht(paidRev)} revenue`;
 
+  // Helper: compute per-booking Ultra Pass usage value.
+  // Prefers the stored packageUsageValueTotal; falls back to hours × rate
+  // for legacy bookings that pre-date the packageUsageValueTotal field.
+  function pkgUsageVal(b) {
+    if (b.packageUsageValueTotal) return Number(b.packageUsageValueTotal);
+    const h = calcHours(b.startTime, b.endTime);
+    if (b.packageType === "ultra_10" || b.bookingType === "Ultra Pass 1") return h * 310;
+    if (b.packageType === "ultra_20" || b.bookingType === "Ultra Pass 2") return h * 295;
+    return 0;
+  }
+
   const rows = allBookings.map(b => {
     const hrs   = calcHours(b.startTime, b.endTime);
     const isPaid = b.paymentStatus === "paid";
+    const isUltraPkg = b.paymentStatus === "package" &&
+      (b.packageType === "ultra_10" || b.packageType === "ultra_20" ||
+       b.bookingType === "Ultra Pass 1" || b.bookingType === "Ultra Pass 2");
     const ps     = b.paymentStatus || "—";
     const psBadge = `<span class="sp sp-${esc(ps)}">${esc(ps)}</span>`;
     const source = abbrevSource(b.bookingType || b.source || "—");
+    // Amount cell: cash revenue in gold, package usage in purple, unpaid in muted.
+    let amtCell;
+    if (isUltraPkg) {
+      const uv = pkgUsageVal(b);
+      amtCell = `<span style="color:#a78bfa;font-weight:700">${baht(uv)}</span><br><span style="font-size:.6rem;color:var(--m)">pkg usage</span>`;
+    } else if (isPaid) {
+      amtCell = `<span style="color:var(--g)">${baht(b.price||0)}</span>`;
+    } else {
+      amtCell = `<span style="color:var(--m)">${baht(b.price||0)}</span>`;
+    }
     return `<tr>
       <td>${esc(b.date||"—")}</td>
       <td style="white-space:nowrap">${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</td>
       <td>${esc(b.customerName||"—")}</td>
       <td class="tnum">${hrs > 0 ? hrs : "—"}</td>
-      <td class="tnum" style="color:${isPaid?"var(--g)":"var(--m)"}">${isPaid?baht(b.price||0):`<span style="color:var(--m)">${baht(b.price||0)}</span>`}</td>
+      <td class="tnum">${amtCell}</td>
       <td>${psBadge}</td>
       <td style="color:var(--m);font-size:.72rem">${esc(source)}</td>
     </tr>`;
   }).join("");
 
-  const paidTotalHrs = allBookings.filter(b=>b.paymentStatus==="paid").reduce((s,b)=>s+calcHours(b.startTime,b.endTime),0);
+  const paidTotalHrs = allBookings.filter(b=>b.paymentStatus==="paid")
+    .reduce((s,b)=>s+calcHours(b.startTime,b.endTime),0);
+
+  // Package usage rows (Ultra Pass) — notional value, not cash.
+  // Include legacy bookings using bookingType without packageType.
+  const pkgRows = allBookings.filter(b =>
+    b.paymentStatus === "package" &&
+    (b.packageType === "ultra_10" || b.packageType === "ultra_20" ||
+     b.bookingType === "Ultra Pass 1" || b.bookingType === "Ultra Pass 2")
+  );
+  const pkgHrs  = pkgRows.reduce((s,b)=>s+calcHours(b.startTime,b.endTime),0);
+  const pkgVal  = pkgRows.reduce((s,b)=>s+pkgUsageVal(b),0);
+  const pkgFooter = pkgRows.length ? `<tr class="tot-row" style="color:#a78bfa">
+      <td colspan="3"><strong>Package Usage Value</strong> <span style="font-size:.67rem;font-weight:500;color:var(--m)">(not cash revenue)</span></td>
+      <td class="tnum"><strong>${pkgHrs % 1===0?pkgHrs:pkgHrs.toFixed(1)}</strong></td>
+      <td class="tnum"><strong>${baht(pkgVal)}</strong></td>
+      <td colspan="2"></td>
+    </tr>` : '';
 
   wrap.innerHTML = `<div class="tscroll"><table class="ftable">
     <thead><tr>
@@ -657,12 +725,15 @@ function renderBookingTable() {
       <th>Payment</th><th>Source</th>
     </tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot><tr class="tot-row">
-      <td colspan="3"><strong>Paid Revenue Total</strong></td>
-      <td class="tnum"><strong>${paidTotalHrs}</strong></td>
-      <td class="tnum"><strong>${baht(paidRev)}</strong></td>
-      <td colspan="2"></td>
-    </tr></tfoot>
+    <tfoot>
+      <tr class="tot-row">
+        <td colspan="3"><strong>Cash Revenue Total</strong></td>
+        <td class="tnum"><strong>${paidTotalHrs % 1===0?paidTotalHrs:paidTotalHrs.toFixed(1)}</strong></td>
+        <td class="tnum"><strong>${baht(paidRev)}</strong></td>
+        <td colspan="2"></td>
+      </tr>
+      ${pkgFooter}
+    </tfoot>
   </table></div>`;
 }
 

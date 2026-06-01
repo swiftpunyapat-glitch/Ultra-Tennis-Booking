@@ -1113,6 +1113,29 @@ function cardHTML(b){
       ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}
       ${rfBtn}${artAcctEdit}${artDelete}`;
 
+  // ── Package usage value row ───────────────────────────────────────
+  // Shown when paymentStatus==="package" and bookingType is Ultra Pass 1 or 2.
+  // Uses stored packageUsageValueTotal; falls back to computed hours × rate for
+  // legacy bookings that were set before the field was introduced.
+  const isUltraPkg=b.paymentStatus==="package"&&
+    (b.packageType==="ultra_10"||b.packageType==="ultra_20"||
+     b.bookingType==="Ultra Pass 1"||b.bookingType==="Ultra Pass 2");
+  let pkgUsageRow="";
+  if(isUltraPkg){
+    const durH=calcBookingDuration(b);
+    const rate=b.packageUsageValuePerHour||
+      (b.packageType==="ultra_10"||b.bookingType==="Ultra Pass 1"?310:295);
+    const total=b.packageUsageValueTotal!=null
+      ?Number(b.packageUsageValueTotal)
+      :Math.round(durH*rate);
+    const typeLabel=b.packageType==="ultra_10"||b.bookingType==="Ultra Pass 1"
+      ?"Ultra Pass 1":"Ultra Pass 2";
+    pkgUsageRow=`<div style="grid-column:1/-1"><div style="background:#1e1e3d;border:1px solid #a78bfa;border-radius:7px;padding:7px 10px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">`+
+      `<span style="font-size:.62rem;color:#a78bfa;font-weight:800;text-transform:uppercase;letter-spacing:.4px">📦 Package Usage</span>`+
+      `<span style="font-size:.9rem;font-weight:900;color:#a78bfa">฿${total}</span>`+
+      `<span style="font-size:.7rem;color:var(--m)">฿${rate}/hr · ${esc(typeLabel)} · ${durH}hr · not cash revenue</span>`+
+      `</div></div>`;
+  }
   return `<div class="bcard" id="card-${esc(b.id)}">
     <div class="bcard-hdr"><span class="bcode">${esc(b.bookingCode||"—")}</span><div style="display:flex;gap:5px;align-items:center">${paidBadge}${refundBadge}<span class="tbadge ${tc}">${esc(b.bookingType||"—")}</span></div></div>
     <div class="bcard-body">
@@ -1123,6 +1146,7 @@ function cardHTML(b){
         <div><div class="fl">Booking Status</div><div class="fv"><span class="sp s-${esc(statusText)}">${esc(statusText)}</span></div></div>
         <div><div class="fl">Payment Status</div><div class="fv"><span class="sp s-${esc(b.paymentStatus)}">${esc(b.paymentStatus||"—")}</span></div></div>
         ${prevRow}
+        ${pkgUsageRow}
         ${timeline}
         ${refundRow}
         ${b.customerNote?`<div style="grid-column:1/-1"><div class="fl">Note</div><div class="fv dim">${esc(b.customerNote)}</div></div>`:""}
