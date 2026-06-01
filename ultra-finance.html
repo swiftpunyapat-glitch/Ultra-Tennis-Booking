@@ -429,7 +429,10 @@ function calcHours(s, e) {
   if (!s || !e) return 0;
   const [sh, sm] = s.split(":").map(Number);
   const [eh, em] = e.split(":").map(Number);
-  return Math.max(0, (eh * 60 + em - sh * 60 - sm) / 60);
+  const startMins = sh * 60 + sm;
+  let endMins = eh * 60 + em;
+  if (endMins <= startMins) endMins += 24 * 60; // midnight crossing (e.g. 23:00–00:00)
+  return (endMins - startMins) / 60;
 }
 
 function baht(n) {

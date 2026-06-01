@@ -3060,7 +3060,10 @@ function calcBookingDuration(b){
   if(b.startTime&&b.endTime){
     const[sh,sm]=b.startTime.split(":").map(Number);
     const[eh,em]=b.endTime.split(":").map(Number);
-    const m=(eh*60+em)-(sh*60+sm);
+    const startMins=sh*60+sm;
+    let endMins=eh*60+em;
+    if(endMins<=startMins) endMins+=24*60; // midnight crossing (e.g. 23:00–00:00)
+    const m=endMins-startMins;
     if(m>0) return m/60;
   }
   return 1;
