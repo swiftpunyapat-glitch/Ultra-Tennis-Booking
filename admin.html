@@ -2912,7 +2912,7 @@ $("acctConfirm").addEventListener("click",async()=>{
     const res=await fetch("/api/admin-edit-booking-accounting",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({bookingId:acctBooking.id,accountingType:type,bookingStatus,price,influencerExpenseAmount,reason}),
+      body:JSON.stringify({operation:"accounting_edit",bookingId:acctBooking.id,accountingType:type,bookingStatus,price,influencerExpenseAmount,reason}),
     });
     const data=await res.json();
     if(!data.ok) throw new Error(data.error||"Save failed");
@@ -2928,7 +2928,7 @@ $("acctConfirm").addEventListener("click",async()=>{
 
 // ── REFUND FLOW ───────────────────────────────────────────────────
 // Any logged-in admin can process a refund.  Read-only here — all writes
-// go through /api/admin-refund-booking which enforces auth independently.
+// go through /api/admin-edit-booking-accounting (operation:"refund") which enforces auth independently.
 // Original paymentStatus is preserved; the refund appears as a Finance expense.
 let rfBooking=null;
 
@@ -3007,10 +3007,10 @@ $("rfConfirm").addEventListener("click",async()=>{
 
   const btn=$("rfConfirm");btn.disabled=true;btn.textContent="Processing...";
   try{
-    const res=await fetch("/api/admin-refund-booking",{
+    const res=await fetch("/api/admin-edit-booking-accounting",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({bookingId:rfBooking.id,refundAmount,refundMode,refundReason,
+      body:JSON.stringify({operation:"refund",bookingId:rfBooking.id,refundAmount,refundMode,refundReason,
         refundNote,incidentType,incidentNote:refundNote,releaseSlot}),
     });
     const data=await res.json();
