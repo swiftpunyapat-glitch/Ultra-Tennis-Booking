@@ -670,6 +670,61 @@
   </div>
 </div>
 
+<!-- REFUND MODAL — any logged-in admin -->
+<div class="moverlay" id="rfModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>↩ Refund / คืนเงิน</h2><button class="mclose" id="rfClose">✕</button></div>
+    <div class="mbody">
+      <div class="minfo"><strong id="rfCode">—</strong><span id="rfCustInfo" style="display:block;margin-top:3px;font-size:.75rem">—</span><span id="rfCurrentState" style="display:block;margin-top:4px;font-size:.7rem;color:var(--m)">—</span></div>
+      <div class="mfield">
+        <label>Refund Mode</label>
+        <select id="rfMode">
+          <option value="full_refund">Full Refund</option>
+          <option value="partial_refund">Partial Refund</option>
+        </select>
+      </div>
+      <div class="mfield">
+        <label>Refund Amount (฿)</label>
+        <input type="number" id="rfAmount" min="1" step="1" placeholder="e.g. 350"/>
+      </div>
+      <div class="mfield">
+        <label>Refund Reason</label>
+        <select id="rfReason">
+          <option value="machine_issue">Machine Issue</option>
+          <option value="safety_incident">Safety Incident</option>
+          <option value="customer_request">Customer Request</option>
+          <option value="admin_mistake">Admin Mistake</option>
+          <option value="duplicate_payment">Duplicate Payment</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div class="mfield">
+        <label>Incident Type</label>
+        <select id="rfIncidentType">
+          <option value="none">None</option>
+          <option value="machine_malfunction">Machine Malfunction</option>
+          <option value="ball_hit_customer">Ball Hit Customer</option>
+          <option value="room_issue">Room Issue</option>
+          <option value="booking_error">Booking Error</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div class="mfield">
+        <label id="rfNoteLbl">Refund / Incident Note</label>
+        <input type="text" id="rfNote" maxlength="400" placeholder="Describe the issue or reason…"/>
+        <p id="rfNoteHint" style="font-size:.7rem;color:var(--warn);margin-top:3px;display:none">⚠ Required for Machine Issue and Safety Incident.</p>
+      </div>
+      <div class="mfield" style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+        <input type="checkbox" id="rfReleaseSlot" style="width:16px;height:16px;accent-color:var(--dan);cursor:pointer;flex-shrink:0"/>
+        <label for="rfReleaseSlot" style="font-size:.82rem;font-weight:600;text-transform:none;letter-spacing:0;color:var(--t);cursor:pointer">Release slot / cancel booking</label>
+      </div>
+      <p style="font-size:.7rem;color:var(--m);margin-bottom:8px">Leave unchecked if customer already played or session was in progress.</p>
+      <p id="rfPreview" style="font-size:.72rem;color:var(--dan);margin:4px 0;min-height:16px"></p>
+    </div>
+    <div class="mftr"><button class="mcancel" id="rfCancel">Cancel</button><button class="mconfirm" id="rfConfirm" style="background:var(--dan);border:0">↩ Process Refund</button></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script type="module">
@@ -861,6 +916,8 @@ function renderBookings(){
     if(d)  d.addEventListener("click",()=>permanentDeleteBooking(b));
     const ae=document.querySelector(`[data-acct-edit="${b.id}"]`);
     if(ae) ae.addEventListener("click",()=>openAcctModal(b));
+    const rf=document.querySelector(`[data-refund="${b.id}"]`);
+    if(rf) rf.addEventListener("click",()=>openRefundModal(b));
   });
 }
 
@@ -927,6 +984,18 @@ function cardHTML(b){
 
   // Show paid badge separately + reschedule button even when paid
   const paidBadge=isPaid?`<span class="sp s-paid">✓ Paid</span>`:"";
+  // Refund badge (shown in header when a refund has been processed)
+  const isFullyRefunded=b.refundStatus==="refunded";
+  const refundBadge=b.refundStatus
+    ?`<span class="sp" style="background:#3d1010;color:var(--dan)">↩${isFullyRefunded?" Refunded":" Part-Refund"} ฿${Number(b.refundAmount)||0}</span>`
+    :"";
+  // Refund detail row (shown in card body)
+  const refundRow=b.refundStatus
+    ?`<div style="grid-column:1/-1;background:#2d0a0a;border:1px solid var(--dan);border-radius:7px;padding:7px 10px;font-size:.75rem;color:var(--dan)">↩ ${isFullyRefunded?"Full Refund":"Partial Refund"} ฿${Number(b.refundAmount)||0} · ${esc(b.refundReason||"—")}${b.incidentType&&b.incidentType!=="none"?` · Incident: ${esc(b.incidentType)}`:""}${b.refundNote?` · "${esc(String(b.refundNote).slice(0,80))}"`:""}</div>`
+    :"";
+  // Any admin can refund if booking has a payment value and isn't fully refunded
+  const hasPaymentValue=b.paymentStatus==="paid"||b.paymentStatus==="package"||Number(b.price)>0;
+  const canRefund=hasPaymentValue&&!isFullyRefunded;
   // Art-only buttons — frontend visibility gate only; backends enforce independently.
   const artAcctEdit=currentAdminName==="Art"
     ?`<button class="bp" style="background:#1e1e3d;border:1px solid #a78bfa;color:#a78bfa" data-acct-edit="${esc(b.id)}">✏️ Edit Accounting</button>`
@@ -934,17 +1003,18 @@ function cardHTML(b){
   const artDelete=currentAdminName==="Art"
     ?`<button class="bc" style="background:#5a0a0a" data-delete="${esc(b.id)}">🗑 Delete Permanently</button>`
     :"";
+  const rfBtn=canRefund?`<button class="bc" style="background:#2d0a0a;border-color:var(--dan);color:var(--dan)" data-refund="${esc(b.id)}">↩ Refund</button>`:"";
   const actions=isCancelled
-    ?`<button class="bdone">✗ Cancelled</button>${artAcctEdit}${artDelete}`
+    ?`<button class="bdone">✗ Cancelled</button>${rfBtn}${artAcctEdit}${artDelete}`
     :`${canMarkPaid?`<button class="bp" data-paid="${esc(b.id)}">✓ Mark as Paid</button>`:""}
       ${canMarkUnpaid?`<button class="bp" data-markpaid="${esc(b.id)}">บันทึกจ่ายแล้ว</button>`:""}
       ${canConfirmNoSlip?`<button class="bp" data-paid-noslip="${esc(b.id)}">✅ Confirm Paid (No Slip)</button>`:""}
       ${canResch?`<button class="br" data-resch="${esc(b.id)}">📅 Reschedule</button>`:""}
       ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}
-      ${artAcctEdit}${artDelete}`;
+      ${rfBtn}${artAcctEdit}${artDelete}`;
 
   return `<div class="bcard" id="card-${esc(b.id)}">
-    <div class="bcard-hdr"><span class="bcode">${esc(b.bookingCode||"—")}</span><div style="display:flex;gap:5px;align-items:center">${paidBadge}<span class="tbadge ${tc}">${esc(b.bookingType||"—")}</span></div></div>
+    <div class="bcard-hdr"><span class="bcode">${esc(b.bookingCode||"—")}</span><div style="display:flex;gap:5px;align-items:center">${paidBadge}${refundBadge}<span class="tbadge ${tc}">${esc(b.bookingType||"—")}</span></div></div>
     <div class="bcard-body">
       <div class="bfields">
         <div><div class="fl">Customer</div><div class="fv">${esc(b.customerName||"—")}</div></div>
@@ -954,6 +1024,7 @@ function cardHTML(b){
         <div><div class="fl">Payment Status</div><div class="fv"><span class="sp s-${esc(b.paymentStatus)}">${esc(b.paymentStatus||"—")}</span></div></div>
         ${prevRow}
         ${timeline}
+        ${refundRow}
         ${b.customerNote?`<div style="grid-column:1/-1"><div class="fl">Note</div><div class="fv dim">${esc(b.customerNote)}</div></div>`:""}
       </div>
       ${slip}
@@ -2852,6 +2923,124 @@ $("acctConfirm").addEventListener("click",async()=>{
     console.error("[acctConfirm]",e);
     showToast(e.message||"Failed to update accounting.",true);
     btn.disabled=false;btn.textContent="Save Changes";
+  }
+});
+
+// ── REFUND FLOW ───────────────────────────────────────────────────
+// Any logged-in admin can process a refund.  Read-only here — all writes
+// go through /api/admin-refund-booking which enforces auth independently.
+// Original paymentStatus is preserved; the refund appears as a Finance expense.
+let rfBooking=null;
+
+function openRefundModal(b){
+  rfBooking=b;
+  $("rfCode").textContent=b.bookingCode||"—";
+  $("rfCustInfo").textContent=`${esc(b.customerName||"—")} · ${esc(b.customerPhone||"—")} · Play: ${esc(b.date||"—")} ${esc(b.startTime||"—")}–${esc(b.endTime||"—")}`;
+  $("rfCurrentState").textContent=`paymentStatus: ${b.paymentStatus||"—"} · bookingStatus: ${b.bookingStatus||"—"} · ฿${Number(b.price)||0}${b.refundStatus?` · Already: ${b.refundStatus} ฿${Number(b.refundAmount)||0}`:""}`;
+  const defaultAmt=Number(b.price)>0?Number(b.price):350;
+  $("rfAmount").value=defaultAmt;
+  $("rfMode").value="full_refund";
+  $("rfReason").value="machine_issue";
+  $("rfIncidentType").value="machine_malfunction";
+  $("rfNote").value="";
+  $("rfReleaseSlot").checked=false;
+  $("rfPreview").textContent="";
+  $("rfConfirm").disabled=false;
+  $("rfConfirm").textContent="↩ Process Refund";
+  syncRefundModal();
+  $("rfModal").style.display="flex";
+}
+function closeRefundModal(){$("rfModal").style.display="none";rfBooking=null;}
+$("rfClose").addEventListener("click",closeRefundModal);
+$("rfCancel").addEventListener("click",closeRefundModal);
+$("rfModal").addEventListener("click",e=>{if(e.target===$("rfModal"))closeRefundModal();});
+
+function syncRefundModal(){
+  if(!rfBooking) return;
+  const reason=$("rfReason").value;
+  const needsNote=reason==="machine_issue"||reason==="safety_incident";
+  $("rfNoteHint").style.display=needsNote?"block":"none";
+  $("rfNoteLbl").textContent=needsNote?"Incident Note *required":"Refund / Incident Note";
+  $("rfNoteLbl").style.color=needsNote?"var(--warn)":"";
+  // Auto-suggest incident type to match reason
+  if(reason==="machine_issue"&&$("rfIncidentType").value==="none")  $("rfIncidentType").value="machine_malfunction";
+  if(reason==="safety_incident"&&$("rfIncidentType").value==="none") $("rfIncidentType").value="ball_hit_customer";
+  updateRfPreview();
+}
+function updateRfPreview(){
+  if(!rfBooking) return;
+  const amt=Number($("rfAmount").value)||0;
+  const price=Number(rfBooking.price)||350;
+  if(amt<=0){$("rfPreview").textContent="";return;}
+  const isPartial=amt<price;
+  const release=$("rfReleaseSlot").checked;
+  $("rfPreview").textContent=`→ ${isPartial?"partial_refunded":"refunded"} ฿${amt}${release?" · slot released / booking cancelled":" · slot kept, booking unchanged"}`;
+}
+
+$("rfReason").addEventListener("change",syncRefundModal);
+$("rfIncidentType").addEventListener("change",updateRfPreview);
+$("rfReleaseSlot").addEventListener("change",updateRfPreview);
+$("rfAmount").addEventListener("input",()=>{
+  const amt=Number($("rfAmount").value)||0;
+  const price=Number(rfBooking?.price)||350;
+  $("rfMode").value=(amt>=price)?"full_refund":"partial_refund";
+  updateRfPreview();
+});
+$("rfMode").addEventListener("change",()=>{
+  if($("rfMode").value==="full_refund") $("rfAmount").value=Number(rfBooking?.price)||350;
+  updateRfPreview();
+});
+
+$("rfConfirm").addEventListener("click",async()=>{
+  if(!rfBooking) return;
+  const refundAmount=Number($("rfAmount").value);
+  const refundMode=$("rfMode").value;
+  const refundReason=$("rfReason").value;
+  const incidentType=$("rfIncidentType").value;
+  const refundNote=$("rfNote").value.trim();
+  const releaseSlot=$("rfReleaseSlot").checked;
+
+  if(!refundAmount||refundAmount<=0){showToast("Refund amount must be > 0.",true);return;}
+  if((refundReason==="machine_issue"||refundReason==="safety_incident")&&!refundNote){
+    showToast("Incident note is required for this reason.",true);$("rfNote").focus();return;
+  }
+
+  const btn=$("rfConfirm");btn.disabled=true;btn.textContent="Processing...";
+  try{
+    const res=await fetch("/api/admin-refund-booking",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({bookingId:rfBooking.id,refundAmount,refundMode,refundReason,
+        refundNote,incidentType,incidentNote:refundNote,releaseSlot}),
+    });
+    const data=await res.json();
+    if(!data.ok) throw new Error(data.error||"Refund failed");
+
+    // Fire-and-forget admin notification — must not block refund flow.
+    if(window.notifyAdmins){
+      window.notifyAdmins({
+        type:"booking_refunded_admin",
+        bookingCode:rfBooking.bookingCode,
+        eventSuffix:`refund_${Date.now()}`,
+        customerName:rfBooking.customerName||"",
+        customerPhone:rfBooking.customerPhone||"",
+        refundAmount,
+        refundReason,
+        incidentType,
+        date:rfBooking.date||"",
+        startTime:rfBooking.startTime||"",
+        endTime:rfBooking.endTime||"",
+        actionBy:currentAdminName||"admin",
+      });
+    }
+
+    showToast(`↩ Refund ฿${refundAmount} processed: ${rfBooking.bookingCode||""}`);
+    closeRefundModal();
+    await loadBookings();
+  }catch(e){
+    console.error("[rfConfirm]",e);
+    showToast(e.message||"Refund failed.",true);
+    btn.disabled=false;btn.textContent="↩ Process Refund";
   }
 });
 
