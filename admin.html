@@ -398,6 +398,17 @@
         </div>
       </div>
 
+      <!-- LATE NIGHT SLOTS — 00:00–06:00, manual admin control only -->
+      <div class="smcard" style="border-color:#fb923c">
+        <h2 style="color:#fb923c">🌙 Late Night Slots (00:00–06:00)</h2>
+        <p style="font-size:.75rem;color:var(--m);margin-bottom:11px;line-height:1.5">Price: ฿450 · <strong>NOT opened</strong> by Open This Day or Open Full Week. Admin must open manually before broadcasting to customers.</p>
+        <div class="smrow">
+          <div class="smf"><label>Date</label><input type="date" id="lnDate"/></div>
+          <button class="smbtn" style="background:transparent;border:1px solid #fb923c;color:#fb923c" id="openLNBtn">🌙 Open Late Night (00–06)</button>
+          <button class="smbtn smgr" id="closeLNBtn">✕ Close Late Night</button>
+        </div>
+      </div>
+
       <div class="smcard">
         <h2>Manage Slots</h2>
         <div class="smrow" style="margin-bottom:12px">
@@ -782,6 +793,8 @@ const ADMIN_NAMES = ["Art", "Aoy", "BaiMon", "Ano", "Stam"];
 let currentAdminName = null;  // set by checkSession / login; never stored in sessionStorage
 const RESOURCE_ID="room1";
 const OPEN_HOUR=6,CLOSE_HOUR=24;
+const LN_HOURS=[0,1,2,3,4,5]; // Late Night 00:00–06:00 — opened manually only, never by Open This Day/Week
+const LATE_NIGHT_PRICE=450;   // ฿/hr for Late Night Session
 
 const firebaseConfig={
   apiKey:"AIzaSyBhJSJszidFge4fKQqExLM2cB2Sx6z2lPY",
@@ -1654,10 +1667,12 @@ const fH=h=>`${String(h).padStart(2,"0")}:00`;
 const fEnd=h=>h+1>=24?"00:00":`${String(h+1).padStart(2,"0")}:00`;
 function dateRange(s,n){const d=[],b=new Date(s+"T00:00:00");for(let i=0;i<n;i++){const x=new Date(b);x.setDate(b.getDate()+i);d.push(x.toISOString().slice(0,10));}return d;}
 
-async function setSlots(dates,close=false){
+async function setSlots(dates,close=false,hours=null){
+  // hours defaults to allH() (06:00–00:00). Pass LN_HOURS for late night only.
+  const hoursToSet=hours||allH();
   const admin=currentAdminName||"admin",now=Timestamp.now(),batch=writeBatch(db);
   dates.forEach(date=>{
-    allH().forEach(h=>{
+    hoursToSet.forEach(h=>{
       const ref=doc(db,"available_slots",slId(date,h));
       batch.set(ref,close
         ?{resourceId:RESOURCE_ID,date,startTime:fH(h),endTime:fEnd(h),status:"closed",closedAt:now,closedBy:admin,openedAt:null,openedBy:null}
@@ -1696,6 +1711,34 @@ $("closeDayBtn").addEventListener("click",async()=>{
     if(getViewDate()===d)await loadSlotGrid(d);}
   catch(e){console.error(e);showToast("Failed.",true);}
   finally{btn.disabled=false;btn.textContent="✕ Close This Day";}
+});
+
+// ── LATE NIGHT SLOT CONTROLS ──────────────────────────────────────
+// Opens/closes only 00:00–05:00. Never called by normal Open This Day/Week.
+$("openLNBtn").addEventListener("click",async()=>{
+  const d=$("lnDate").value;if(!d){showToast("Pick a date.",true);return;}
+  if(!confirm(`Open Late Night slots (00:00–06:00) for ${d}?\nPrice: ฿${LATE_NIGHT_PRICE}. Broadcast to customers manually after opening.`))return;
+  const btn=$("openLNBtn");btn.disabled=true;btn.textContent="Opening...";
+  try{
+    await setSlots([d],false,LN_HOURS);
+    showToast(`🌙 Late Night slots opened for ${d}`);
+    if(getViewDate()===d) await loadSlotGrid(d);
+    if(dvLastLoad===d) loadDailyView();
+  }catch(e){console.error(e);showToast("Failed.",true);}
+  finally{btn.disabled=false;btn.textContent="🌙 Open Late Night (00–06)";}
+});
+
+$("closeLNBtn").addEventListener("click",async()=>{
+  const d=$("lnDate").value;if(!d){showToast("Pick a date.",true);return;}
+  if(!confirm(`Close Late Night slots (00:00–06:00) for ${d}?`))return;
+  const btn=$("closeLNBtn");btn.disabled=true;btn.textContent="Closing...";
+  try{
+    await setSlots([d],true,LN_HOURS);
+    showToast(`✓ Late Night slots closed for ${d}`);
+    if(getViewDate()===d) await loadSlotGrid(d);
+    if(dvLastLoad===d) loadDailyView();
+  }catch(e){console.error(e);showToast("Failed.",true);}
+  finally{btn.disabled=false;btn.textContent="✕ Close Late Night";}
 });
 
 $("loadSlotsBtn").addEventListener("click",()=>{
@@ -1751,14 +1794,20 @@ async function loadSlotGrid(dateISO){
     const booked=new Set();const now=new Date();
     bkSnap.forEach(d=>{const bd=d.data();if(isLiveBookedSlot(bd,now)) booked.add(bd.hour);});
 
-    const rows=allH().map(h=>{
+    // Show LN hours (00–05) first, then normal hours (06–23).
+    // LN rows are visually tinted orange so admin can distinguish them.
+    const allViewH=[...LN_HOURS,...allH()];
+    const rows=allViewH.map(h=>{
       const time=fH(h),av=avMap[time],isB=booked.has(time);
+      const isLN=LN_HOURS.includes(h);
       let sHtml,tHtml;
       if(!av){sHtml=`<span class="sstatus ss-none">Not Set</span>`;tHtml=`<button class="stoggle st-create" data-act="create" data-date="${dateISO}" data-h="${h}">Open</button>`;}
       else if(av.status==="open"&&isB){sHtml=`<span class="sstatus ss-booked">Booked</span>`;tHtml=`<button class="stoggle st-dis" disabled>Can't Close</button>`;}
       else if(av.status==="open"){sHtml=`<span class="sstatus ss-open">Open</span>`;tHtml=`<button class="stoggle st-close" data-act="close" data-id="${av.id}" data-date="${dateISO}" data-h="${h}">Close</button>`;}
       else{sHtml=`<span class="sstatus ss-closed">Closed</span>`;tHtml=`<button class="stoggle st-open" data-act="reopen" data-id="${av.id}" data-date="${dateISO}" data-h="${h}">Reopen</button>`;}
-      return `<div class="srow"><span class="stime">${time} – ${fEnd(h)}</span>${sHtml}${tHtml}</div>`;
+      const lnMark=isLN?` <span style="font-size:.55rem;color:#fb923c;font-weight:800;vertical-align:middle">🌙LN</span>`:"";
+      return `<div class="srow"${isLN?' style="background:rgba(251,146,60,.07);border-color:rgba(251,146,60,.3)"':''}>` +
+        `<span class="stime">${time} – ${fEnd(h)}${lnMark}</span>${sHtml}${tHtml}</div>`;
     }).join("");
 
     $("slotGrid").innerHTML=`<div class="sgrid">${rows}</div>`;
@@ -2399,14 +2448,15 @@ function syncManualPaymentStatus(){
   $("manHint").textContent=`Payment status defaults to ${status}. You can change it before saving.`;
 }
 
-// Populate the start-time dropdown once at module load
+// Populate the start-time dropdown — LN hours first (00–05), then normal (06–23).
 (function fillManTimes(){
   const sel=$("manTime");
-  for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
+  [...LN_HOURS,...Array.from({length:CLOSE_HOUR-OPEN_HOUR},(_,i)=>OPEN_HOUR+i)].forEach(h=>{
     const o=document.createElement("option");
-    o.value=fH(h); o.textContent=`${fH(h)} – ${fEnd(h)}`;
+    o.value=fH(h);
+    o.textContent=LN_HOURS.includes(h)?`🌙 ${fH(h)} – ${fEnd(h)} (Late Night)`:`${fH(h)} – ${fEnd(h)}`;
     sel.append(o);
-  }
+  });
 })();
 
 function openManualModal(prefillDate,prefillTime){
@@ -3333,7 +3383,7 @@ function showToast(msg,isErr=false){
 
 // ── BOOT ─────────────────────────────────────────────────────────
 const todayISO=new Date().toISOString().slice(0,10);
-["weekDate","dayDate","viewDate","paidSummaryDate"].forEach(id=>{const el=$(id);if(el)el.value=todayISO;});
+["weekDate","dayDate","viewDate","paidSummaryDate","lnDate"].forEach(id=>{const el=$(id);if(el)el.value=todayISO;});
 $("paidSummaryDate").addEventListener("change",renderPaidSummary);
 $("paidSummaryToday").addEventListener("click",()=>{$("paidSummaryDate").value=new Date().toISOString().slice(0,10);renderPaidSummary();});
 
