@@ -235,6 +235,17 @@
     .psum-dim{color:var(--m);}
     .psum-empty{font-size:.78rem;color:var(--m);font-style:italic;padding:4px 0;}
 
+    /* SLIP REVIEW TAB */
+    .sr-day{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;margin-bottom:11px;}
+    .sr-day-hdr{padding:8px 14px;background:var(--s2);border-bottom:1px solid var(--bd);font-size:.75rem;font-weight:900;color:var(--mid);letter-spacing:.4px;}
+    .sr-item{padding:12px 14px;border-bottom:1px solid var(--bd);display:flex;gap:14px;align-items:flex-start;}
+    .sr-item:last-child{border-bottom:0;}
+    .sr-meta{flex:1;display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;}
+    .sr-thumb{max-width:90px;max-height:90px;border-radius:6px;border:1px solid var(--bd);object-fit:contain;cursor:pointer;display:block;}
+    .sr-thumb:hover{border-color:var(--g);}
+    .sr-view{display:block;padding:4px 10px;border-radius:6px;background:var(--gd);border:1px solid var(--g);color:var(--g);font-size:.7rem;font-weight:800;text-decoration:none;margin-top:5px;text-align:center;}
+    .sr-view:hover{background:var(--gh);}
+
     @media(max-width:600px){
       .main{padding:12px 13px;}
       .bfields{grid-template-columns:1fr 1fr;}
@@ -279,6 +290,7 @@
     <button class="tab" data-tab="daily">📅 Daily View</button>
     <button class="tab" data-tab="slots">🗓 Slot Manager</button>
     <button class="tab" data-tab="passes">🎫 Add Pass</button>
+    <button class="tab" data-tab="slips">🧾 Slip Review</button>
   </div>
 
   <!-- BOOKINGS TAB -->
@@ -465,6 +477,35 @@
       </div>
 
     </div>
+  </div>
+
+  <!-- SLIP REVIEW TAB -->
+  <div id="tabSlips" style="display:none">
+    <!-- Slip Month filter -->
+    <div class="filters" style="gap:6px;align-items:center;border-bottom:0">
+      <span style="font-size:.68rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap">🧾 Slip Month</span>
+      <button class="rfbtn" id="srPrev">‹</button>
+      <input type="month" id="srInput" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:5px 9px;font-size:.78rem;min-width:0"/>
+      <button class="rfbtn" id="srNext">›</button>
+      <button class="rfbtn" id="srThisMonth">This Month</button>
+    </div>
+    <!-- Group by + Status filter -->
+    <div class="filters" style="gap:7px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:.68rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap">Group by</span>
+      <select id="srGroupBy" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:5px 9px;font-size:.78rem">
+        <option value="paid">Paid / Confirmed Date</option>
+        <option value="play">Play Date</option>
+        <option value="created">Created Date</option>
+      </select>
+      <span style="font-size:.68rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap;margin-left:4px">Status</span>
+      <button class="fbtn on" data-sr-status="all">All</button>
+      <button class="fbtn" data-sr-status="pending_review">Pending Review</button>
+      <button class="fbtn" data-sr-status="paid">Paid</button>
+      <button class="fbtn" data-sr-status="rejected">Rejected</button>
+      <button class="rfbtn" id="srRefresh" style="margin-left:auto">↻ Refresh</button>
+    </div>
+    <!-- Slip list -->
+    <div class="main"><div id="srList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
   </div>
 </div>
 
@@ -704,8 +745,10 @@ document.querySelectorAll(".tab").forEach(btn=>{
     $("tabDaily").style.display   =btn.dataset.tab==="daily"   ?"block":"none";
     $("tabSlots").style.display   =btn.dataset.tab==="slots"   ?"block":"none";
     $("tabPasses").style.display  =btn.dataset.tab==="passes"  ?"block":"none";
+    $("tabSlips").style.display   =btn.dataset.tab==="slips"   ?"block":"none";
     if(btn.dataset.tab==="passes") loadActivePasses();
     if(btn.dataset.tab==="daily")  loadDailyView();
+    if(btn.dataset.tab==="slips")  renderSlipReview();
   });
 });
 
@@ -2489,6 +2532,113 @@ $("mpConfirmBtn").addEventListener("click",async()=>{
   }
 });
 
+// ── SLIP REVIEW ───────────────────────────────────────────────────
+let srMonthFilter=currentMonthValue(), srGroupBy="paid", srStatusFilter="all";
+
+// getSlipUrl — returns the first safe HTTPS slip URL found on a booking, or null.
+// Checks all known slip field names so legacy docs still work.
+function getSlipUrl(b){
+  for(const f of["slipUrl","paymentProofUrl","proofUrl","paymentSlipUrl"]){
+    const u=b[f];
+    if(typeof u==="string"&&/^https?:\/\//.test(u)) return u;
+  }
+  return null;
+}
+
+// getSlipGroupDateStr — returns YYYY-MM-DD for the selected group mode, or null if missing.
+function getSlipGroupDateStr(b,mode){
+  if(mode==="play") return b.date||null;
+  const ts=mode==="paid"
+    ?(b.adminReviewedAt||b.paidAt||b.confirmedAt||null)
+    :(b.createdAt||null);
+  if(!ts) return null;
+  return tsToDate(ts)||null;
+}
+
+// isSlipBookingInSelectedMonth — true when the booking's effective date falls in srMonthFilter.
+// Falls back through play date then createdAt so slips without a paid/created timestamp
+// are still findable in the correct month.
+function isSlipBookingInSelectedMonth(b){
+  const d=getSlipGroupDateStr(b,srGroupBy)||b.date||tsToDate(b.createdAt)||null;
+  return !!d&&d.startsWith(srMonthFilter);
+}
+
+function slipStatusMatches(b){
+  if(srStatusFilter==="all")            return true;
+  if(srStatusFilter==="pending_review") return b.paymentStatus==="pending_review";
+  if(srStatusFilter==="paid")           return b.paymentStatus==="paid";
+  if(srStatusFilter==="rejected")       return b.paymentStatus==="rejected"||b.bookingStatus==="cancelled";
+  return true;
+}
+
+function renderSlipReview(){
+  const el=$("srList");
+  if(!el) return;
+  if(!allBookings.length){
+    el.innerHTML=`<div class="estate">📭 No booking data loaded yet.<br>Open the <strong>Bookings</strong> tab and click ↻ Refresh, then return here.</div>`;
+    return;
+  }
+  const items=allBookings
+    .filter(b=>!!getSlipUrl(b))
+    .filter(isSlipBookingInSelectedMonth)
+    .filter(slipStatusMatches);
+  if(!items.length){
+    el.innerHTML=`<div class="estate">📭 No slips found for ${esc(monthLabel(srMonthFilter))}.</div>`;
+    return;
+  }
+  // Sort: primary by group date asc; secondary by paid/created timestamp asc.
+  items.sort((a,b)=>{
+    const da=getSlipGroupDateStr(a,srGroupBy)||"zzzz";
+    const db2=getSlipGroupDateStr(b,srGroupBy)||"zzzz";
+    if(da!==db2) return da<db2?-1:1;
+    const ta=a.adminReviewedAt||a.paidAt||a.confirmedAt||a.createdAt;
+    const tb=b.adminReviewedAt||b.paidAt||b.confirmedAt||b.createdAt;
+    return (ta?.seconds||0)-(tb?.seconds||0);
+  });
+  // Group by day.
+  const groups=new Map();
+  items.forEach(b=>{
+    const d=getSlipGroupDateStr(b,srGroupBy)||"—";
+    if(!groups.has(d)) groups.set(d,[]);
+    groups.get(d).push(b);
+  });
+  let html="";
+  groups.forEach((list,day)=>{
+    const dayLabel=day==="—"?"⏳ No Date Yet":esc(day);
+    html+=`<div class="sr-day"><div class="sr-day-hdr">${dayLabel}<span style="color:var(--m);font-weight:700;font-size:.68rem;margin-left:8px">${list.length} slip${list.length!==1?"s":""}</span></div>`;
+    list.forEach(b=>{ html+=renderSlipItem(b); });
+    html+=`</div>`;
+  });
+  el.innerHTML=html;
+}
+
+function renderSlipItem(b){
+  const slipUrl=getSlipUrl(b);
+  const paidTs=b.adminReviewedAt||b.paidAt||b.confirmedAt;
+  const paidStr=formatDateTimeSafe(paidTs);
+  const createdStr=formatDateTimeSafe(b.createdAt);
+  const playStr=b.date?`${esc(b.date)} ${esc(b.startTime||"—")}–${esc(b.endTime||"—")}`:"—";
+  const paidByStr=b.paidBy?` · by ${esc(b.paidBy)}`:"";
+  const isPaid=b.paymentStatus==="paid";
+  const isRej=b.paymentStatus==="rejected"||b.bookingStatus==="cancelled";
+  const pStatusColor=isPaid?"color:var(--g)":isRej?"color:var(--dan)":"color:var(--warn)";
+  const slipBlock=slipUrl
+    ?`<div style="flex-shrink:0;text-align:center"><a href="${esc(slipUrl)}" target="_blank" rel="noopener noreferrer"><img class="sr-thumb" src="${esc(slipUrl)}" alt="Slip" loading="lazy"/></a><a class="sr-view" href="${esc(slipUrl)}" target="_blank" rel="noopener noreferrer">View Slip ↗</a></div>`
+    :"";
+  return `<div class="sr-item"><div class="sr-meta">`+
+    `<div><div class="fl">Customer</div><div class="fv">${esc(b.customerName||"—")}</div></div>`+
+    `<div><div class="fl">Phone</div><div class="fv">${esc(b.customerPhone||"—")}</div></div>`+
+    `<div><div class="fl">Code</div><div class="fv" style="color:var(--ac)">${esc(b.bookingCode||"—")}</div></div>`+
+    `<div><div class="fl">Type</div><div class="fv">${esc(b.bookingType||"—")}</div></div>`+
+    `<div><div class="fl">Price</div><div class="fv">฿${Number(b.price)||0}</div></div>`+
+    `<div><div class="fl" style="${pStatusColor}">Pay Status</div><div class="fv"><span class="sp s-${esc(b.paymentStatus)}">${esc(b.paymentStatus||"—")}</span></div></div>`+
+    `<div><div class="fl">Booking Status</div><div class="fv"><span class="sp s-${esc(b.bookingStatus)}">${esc(b.bookingStatus||"—")}</span></div></div>`+
+    `<div><div class="fl" style="color:var(--ac)">🎾 Play Date</div><div class="fv">${playStr}</div></div>`+
+    `<div><div class="fl" style="${isPaid?"color:var(--g)":""}">💳 Paid / Confirmed</div><div class="fv">${esc(paidStr)}${paidByStr}</div></div>`+
+    `<div><div class="fl">📋 Booked</div><div class="fv dim">${esc(createdStr)}</div></div>`+
+    `</div>${slipBlock}</div>`;
+}
+
 // ── TOAST ────────────────────────────────────────────────────────
 function showToast(msg,isErr=false){
   const t=$("toast");t.textContent=msg;t.className=`toast show${isErr?" err":""}`;
@@ -2523,6 +2673,27 @@ $("mfThisMonth").addEventListener("click",()=>{
 $("mfInput").addEventListener("change",()=>{
   const v=$("mfInput").value;
   if(/^\d{4}-\d{2}$/.test(v)){playMonthFilter=v;updateStats();renderBookings();}
+});
+
+// ── SLIP REVIEW WIRING ────────────────────────────────────────────
+$("srInput").value=srMonthFilter;
+$("srPrev").addEventListener("click",()=>{srMonthFilter=shiftMonth(srMonthFilter,-1);$("srInput").value=srMonthFilter;renderSlipReview();});
+$("srNext").addEventListener("click",()=>{srMonthFilter=shiftMonth(srMonthFilter,1);$("srInput").value=srMonthFilter;renderSlipReview();});
+$("srThisMonth").addEventListener("click",()=>{srMonthFilter=currentMonthValue();$("srInput").value=srMonthFilter;renderSlipReview();});
+$("srInput").addEventListener("change",()=>{const v=$("srInput").value;if(/^\d{4}-\d{2}$/.test(v)){srMonthFilter=v;renderSlipReview();}});
+$("srGroupBy").addEventListener("change",()=>{srGroupBy=$("srGroupBy").value;renderSlipReview();});
+document.querySelectorAll("[data-sr-status]").forEach(btn=>{
+  btn.addEventListener("click",()=>{
+    srStatusFilter=btn.dataset.srStatus;
+    document.querySelectorAll("[data-sr-status]").forEach(b=>b.classList.remove("on"));
+    btn.classList.add("on");
+    renderSlipReview();
+  });
+});
+$("srRefresh").addEventListener("click",async()=>{
+  $("srList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Refreshing...</p></div>`;
+  await loadBookings();
+  renderSlipReview();
 });
 
 (async()=>{if(await checkSession()){loadBookings();}})();
