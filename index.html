@@ -422,13 +422,30 @@
       <button class="back" id="regBack">← <span data-i18n="back">Back</span></button>
       <div class="ptitle" id="regTitle" data-i18n="registerProfile">Register Profile</div>
       
-      <div class="card" id="regIntroCard" style="display:none; background: var(--soft); border-color: var(--ut-border);">
+      <!-- Already Registered View (Details State) -->
+      <div class="card" id="regExistsCard" style="display:none; background: var(--soft); border-color: var(--ut-border); margin-bottom: 14px;">
+        <div style="text-align:center; margin-bottom:12px;">
+          <div style="font-size: 1.1rem; font-weight: bold; color: var(--success);" id="regExistsHeader" data-i18n="alreadyRegisteredTitle">✅ เคยลงทะเบียนแล้ว</div>
+          <p style="font-size: .8rem; margin-top: 6px; color: var(--muted); line-height: 1.4;" id="regExistsSub" data-i18n="alreadyRegisteredSub">
+            LINE นี้อยู่ในระบบ Ultra Tennis แล้ว แอดมินสามารถเติมแพ็กเข้าบัญชีนี้ได้
+          </p>
+        </div>
+        <div style="border-top: 1px solid var(--ut-border); padding-top: 12px; font-size: .85rem; display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; justify-content: space-between;"><span style="color: var(--muted);" data-i18n="name">Name</span><span style="font-weight: 600;" id="valRegName">—</span></div>
+          <div style="display: flex; justify-content: space-between;"><span style="color: var(--muted);" data-i18n="phone">Phone</span><span style="font-weight: 600;" id="valRegPhone">—</span></div>
+          <div style="display: flex; justify-content: space-between;"><span style="color: var(--muted);">LINE Display</span><span style="font-weight: 600;" id="valRegLine">—</span></div>
+        </div>
+      </div>
+
+      <!-- Intro Card for unregistered users -->
+      <div class="card" id="regIntroCard" style="display:none; background: var(--soft); border-color: var(--ut-border); margin-bottom: 14px;">
         <p style="font-size:.78rem;line-height:1.5;color:var(--ut-navy);" data-i18n="regIntroText">
           ถ้ายังไม่เคยจอง กรุณากด Register ก่อน เพื่อให้แอดมินเติมแพ็กเข้าบัญชี LINE ของคุณได้ถูกต้อง
         </p>
       </div>
 
-      <div class="card">
+      <!-- Normal registration form fields (visible either for new users OR when editing) -->
+      <div class="card" id="regFormFields" style="margin-bottom: 14px;">
         <div class="slabel" data-i18n="yourInfo">Your Info</div>
         <div class="fgrid" style="grid-template-columns: 1fr;">
           <label class="full"><span data-i18n="name">Name</span><input type="text" id="regName" placeholder="Full name"/></label>
@@ -436,6 +453,10 @@
         </div>
       </div>
 
+      <!-- Edit name/phone button for existing registered profile -->
+      <button class="btn-slip" id="btnEditRegister" style="width:100%; display:none; margin-bottom: 10px;" data-i18n="editProfileBtn">Edit name/phone</button>
+
+      <!-- Save button -->
       <button class="btn-slip" id="btnSaveRegister" style="width:100%" data-i18n="registerSubmit">Register</button>
     </div>
   </div>
@@ -477,17 +498,6 @@
           </div>
         </div>
 
-        <!-- Coaching at Ultra -->
-        <div class="pkgcard" style="margin-top: 10px;">
-          <div class="pkgcard-top">
-            <div class="pkg-name">Coaching at Ultra</div>
-            <div class="pkg-price" style="white-space:nowrap">฿3,000</div>
-          </div>
-          <div class="pkg-desc" style="margin-top:5px;">10 Hours (600 mins) · Valid 60 days · Reserved for coaches</div>
-          <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
-            <a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener noreferrer" class="btn-rpay" style="text-decoration:none; text-align:center;" data-i18n="contactToBuy">Contact admin to buy</a>
-          </div>
-        </div>
 
         <!-- Beginner Coaching -->
         <div class="pkgcard" style="margin-top: 10px;">
@@ -683,7 +693,11 @@ const I18N = {
     registerSubmit:"ลงทะเบียน",
     alreadyRegistered:"ข้อมูลการลงทะเบียน",
     regSuccess:"ลงทะเบียนสมาชิกเรียบร้อยแล้ว",
-    regUpdateSuccess:"อัปเดตข้อมูลการลงทะเบียนเรียบร้อยแล้ว",
+    regUpdateSuccess:"อัปเดตข้อมูลเรียบร้อยแล้ว",
+    alreadyRegisteredTitle:"✅ เคยลงทะเบียนแล้ว",
+    alreadyRegisteredSub:"LINE นี้อยู่ในระบบ Ultra Tennis แล้ว แอดมินสามารถเติมแพ็กเข้าบัญชีนี้ได้",
+    editProfileBtn:"แก้ไขข้อมูล / Edit",
+    saveChangesBtn:"บันทึกการแก้ไข",
     passPurchases:"รายการซื้อแพ็กเกจ",
     bookings:"รายการจอง",
     activePasses:"แพ็กเกจที่ใช้งานอยู่",
@@ -801,6 +815,10 @@ const I18N = {
     alreadyRegistered:"Registered Profile",
     regSuccess:"Registration successful!",
     regUpdateSuccess:"Profile updated successfully!",
+    alreadyRegisteredTitle:"✅ Already Registered",
+    alreadyRegisteredSub:"This LINE account is registered with Ultra Tennis. Admins can add packages to this account.",
+    editProfileBtn:"Edit name/phone",
+    saveChangesBtn:"Save changes",
     passPurchases:"Pass Purchases",
     bookings:"Bookings",
     activePasses:"Active Passes",
@@ -958,6 +976,16 @@ function setupNav() {
   $("promoBack").addEventListener("click",()=>showView("viewHome"));
   $("succHomeBtn").addEventListener("click",()=>showView("viewHome"));
   $("btnSaveRegister").addEventListener("click", ()=>saveRegisterProfile());
+  $("btnEditRegister").addEventListener("click", () => {
+    $("regExistsCard").style.display = "none";
+    $("regFormFields").style.display = "block";
+    $("btnEditRegister").style.display = "none";
+    
+    // Set Save button to edit mode and display it
+    $("btnSaveRegister").dataset.i18n = "saveChangesBtn";
+    $("btnSaveRegister").textContent = t("saveChangesBtn");
+    $("btnSaveRegister").style.display = "block";
+  });
 }
 
 let isAlreadyRegistered = false;
@@ -974,6 +1002,9 @@ async function openRegisterView() {
   
   $("regName").value = "";
   $("regPhone").value = "";
+  $("valRegName").textContent = "—";
+  $("valRegPhone").textContent = "—";
+  $("valRegLine").textContent = "—";
   
   let exists = false;
   let registeredData = null;
@@ -994,14 +1025,25 @@ async function openRegisterView() {
     
     if (exists && registeredData) {
       isAlreadyRegistered = true;
+      
+      // Populate inputs in background for editing
       $("regName").value = registeredData.name || "";
       $("regPhone").value = registeredData.phone || "";
+      
+      // Populate detail display fields
+      $("valRegName").textContent = registeredData.name || "";
+      $("valRegPhone").textContent = registeredData.phone || "";
+      $("valRegLine").textContent = state.lineProfile?.displayName || registeredData.lineDisplayName || "";
+      
+      // Configure view for Already Registered state
+      $("regExistsCard").style.display = "block";
+      $("regFormFields").style.display = "none";
       $("regIntroCard").style.display = "none";
+      $("btnEditRegister").style.display = "block";
+      $("btnSaveRegister").style.display = "none";
       $("regTitle").textContent = t("alreadyRegistered");
     } else {
       isAlreadyRegistered = false;
-      $("regIntroCard").style.display = "block";
-      $("regTitle").textContent = t("registerProfile");
       
       // Default pre-fill to LINE display name
       if (state.lineProfile && state.lineProfile.displayName !== "Guest") {
@@ -1024,14 +1066,29 @@ async function openRegisterView() {
         }
       } catch (err) {
         console.warn("Failed to prefill registration from bookings history (possibly missing index or rules):", err);
-        // Suppress error so register form is still displayed
       }
+      
+      // Configure view for Normal Registration state
+      $("regExistsCard").style.display = "none";
+      $("regFormFields").style.display = "block";
+      $("regIntroCard").style.display = "block";
+      $("btnEditRegister").style.display = "none";
+      $("btnSaveRegister").dataset.i18n = "registerSubmit";
+      $("btnSaveRegister").textContent = t("registerSubmit");
+      $("btnSaveRegister").style.display = "block";
+      $("regTitle").textContent = t("registerProfile");
     }
   } catch (globalErr) {
     console.error("Global error in openRegisterView:", globalErr);
-    // Safe fallback: reset state to show registration form with default pre-fills
+    // Safe fallback: show registration form with default pre-fills
     isAlreadyRegistered = false;
+    $("regExistsCard").style.display = "none";
+    $("regFormFields").style.display = "block";
     $("regIntroCard").style.display = "block";
+    $("btnEditRegister").style.display = "none";
+    $("btnSaveRegister").dataset.i18n = "registerSubmit";
+    $("btnSaveRegister").textContent = t("registerSubmit");
+    $("btnSaveRegister").style.display = "block";
     $("regTitle").textContent = t("registerProfile");
     if (state.lineProfile && state.lineProfile.displayName !== "Guest") {
       $("regName").value = state.lineProfile.displayName || "";
@@ -1088,7 +1145,7 @@ async function saveRegisterProfile() {
     showToast(t("bookingFailed"), true);
   } finally {
     btn.disabled = false;
-    btn.textContent = t("registerSubmit");
+    btn.textContent = isAlreadyRegistered ? t("saveChangesBtn") : t("registerSubmit");
   }
 }
 
