@@ -437,34 +437,26 @@
   <div id="tabPasses" style="display:none">
     <div class="main">
 
-      <!-- Search Customer -->
+      <!-- Search Registered User -->
       <div class="smcard">
         <h2>Add Pass for Customer</h2>
         <div class="smrow" style="margin-bottom:12px">
-          <div class="smf"><label>Search by Phone Number</label><input type="tel" id="searchPhone" placeholder="Enter customer phone number"/></div>
-          <button class="smbtn smg" id="searchCustomerBtn">Search</button>
+          <div class="smf"><label>Search Registered User</label><input type="text" id="searchUser" placeholder="Search by name, phone, or LINE name..."/></div>
+          <button class="smbtn smg" id="searchUserBtn">Search</button>
         </div>
 
-        <!-- Search Result -->
-        <div id="searchResult" style="display:none;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:12px;margin-bottom:12px">
-          <div style="font-size:.7rem;color:var(--m);text-transform:uppercase;font-weight:800;margin-bottom:8px">Customer Found</div>
+        <!-- Selectable Search Results -->
+        <div id="userSearchResults" style="display:none; margin-bottom:14px; max-height:220px; overflow-y:auto; border:1px solid var(--bd); border-radius:8px; padding:8px; background:var(--s2); flex-direction:column; gap:8px;"></div>
+
+        <!-- Selected User Panel -->
+        <div id="selectedUserPanel" style="display:none;background:var(--s2);border:1px solid var(--success);border-radius:8px;padding:12px;margin-bottom:12px">
+          <div style="font-size:.7rem;color:var(--success);text-transform:uppercase;font-weight:800;margin-bottom:8px">Selected Registered User</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.82rem">
-            <div><div class="fl">Name</div><div class="fv" id="foundName">—</div></div>
-            <div><div class="fl">Phone</div><div class="fv" id="foundPhone">—</div></div>
-            <div><div class="fl">LINE User ID</div><div class="fv" id="foundLineId" style="font-size:.72rem;word-break:break-all">—</div></div>
-            <div><div class="fl">LINE Name</div><div class="fv" id="foundLineName">—</div></div>
+            <div><div class="fl">Name</div><div class="fv" id="selectedUserName" style="font-weight:bold">—</div></div>
+            <div><div class="fl">Phone</div><div class="fv" id="selectedUserPhone">—</div></div>
+            <div><div class="fl">LINE Display</div><div class="fv" id="selectedUserLineName">—</div></div>
+            <div><div class="fl">LINE User ID</div><div class="fv" id="selectedUserLineId" style="font-size:.72rem;word-break:break-all">—</div></div>
           </div>
-        </div>
-
-        <!-- Not Found -->
-        <div id="notFound" style="display:none;background:#3d101020;border:1px solid var(--dan);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:.8rem;color:var(--dan)">
-          ⚠️ No booking found for this phone. You can still add a pass — LINE User ID will be linked when customer books for the first time.
-        </div>
-
-        <!-- Customer History Panel (Phase 2.4) -->
-        <div id="customerHistoryPanel" style="display:none;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:12px;margin-bottom:12px">
-          <div style="font-size:.7rem;color:var(--m);text-transform:uppercase;font-weight:800;margin-bottom:8px">📊 Customer History</div>
-          <div id="customerHistoryBody" style="font-size:.82rem;color:var(--mid);display:grid;gap:4px">—</div>
         </div>
 
         <!-- Add Pass Form -->
@@ -475,17 +467,19 @@
               <label>Package</label>
               <select id="packageSelect" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%">
                 <option value="">Select package...</option>
-                <option value="ultra_10">⚡ Ultra Pass 10 Hours (600 min · 90 days)</option>
-                <option value="ultra_20">⚡ Ultra Pass 20 Hours (1,200 min · 180 days)</option>
-                <option value="offpeak">🌙 Off-Peak Pass (Mon–Fri 09:00–15:00 · 30 days)</option>
+                <option value="ultra_starter_3">⚡ Ultra Starter (3 Hours · ฿999)</option>
+                <option value="ultra_pass_10">⚡ Ultra Pass 10 Hours (10 Hours · ฿3,100)</option>
+                <option value="ultra_pass_20">⚡ Ultra Pass 20 Hours (20 Hours · ฿5,900)</option>
+                <option value="beginner_coaching_5">🎓 Beginner Coaching (5 Hours · ฿3,500)</option>
+                <option value="coach_at_ultra_10">🎾 Coaching at Ultra (10 Hours · ฿3,000)</option>
               </select>
             </div>
           </div>
           <div class="smrow" style="margin-bottom:12px">
-            <div class="smf"><label>Customer Name (if not found)</label><input type="text" id="manualName" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%" placeholder="Auto-filled from search"/></div>
             <div class="smf"><label>Valid From</label><input type="date" id="validFromDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%"/></div>
+            <div class="smf"><label>Admin Note (optional)</label><input type="text" id="passNote" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%" placeholder="e.g. Paid via bank transfer"/></div>
           </div>
-          <button class="smbtn smg" id="addPassBtn" style="width:100%;padding:12px;font-size:.88rem">✓ Add Pass for Customer</button>
+          <button class="smbtn smg" id="addPassBtn" style="width:100%;padding:12px;font-size:.88rem" disabled>✓ Add Pass for User</button>
         </div>
       </div>
 
@@ -1851,179 +1845,153 @@ $("holSave").addEventListener("click",async()=>{
 
 // ── ADD PASS ─────────────────────────────────────────────────────
 const PACKAGES = {
-  ultra_10:{ packageType:"ultra_10", packageName:"Ultra Pass 10 Hours",  totalMinutes:600,  validityDays:90,  weeklyLimitHours:null, monthlyLimitHours:null },
-  ultra_20:{ packageType:"ultra_20", packageName:"Ultra Pass 20 Hours",  totalMinutes:1200, validityDays:180, weeklyLimitHours:null, monthlyLimitHours:null },
-  offpeak: { packageType:"offpeak",  packageName:"Off-Peak Pass",         totalMinutes:null, validityDays:30,  weeklyLimitHours:5,    monthlyLimitHours:20   },
+  ultra_starter_3:      { packageType: "ultra_starter_3",      packageName: "Ultra Starter",        totalMinutes: 180,  validityDays: 30 },
+  ultra_pass_10:        { packageType: "ultra_pass_10",        packageName: "Ultra Pass 10 Hours",  totalMinutes: 600,  validityDays: 90 },
+  ultra_pass_20:        { packageType: "ultra_pass_20",        packageName: "Ultra Pass 20 Hours",  totalMinutes: 1200, validityDays: 180 },
+  beginner_coaching_5:  { packageType: "beginner_coaching_5",  packageName: "Beginner Coaching",    totalMinutes: 300,  validityDays: 60 },
+  coach_at_ultra_10:    { packageType: "coach_at_ultra_10",    packageName: "Coaching at Ultra",    totalMinutes: 600,  validityDays: 60 },
+  // Legacy
+  ultra_10:             { packageType: "ultra_10",             packageName: "Ultra Pass 10 Hours",  totalMinutes: 600,  validityDays: 90 },
+  ultra_20:             { packageType: "ultra_20",             packageName: "Ultra Pass 20 Hours",  totalMinutes: 1200, validityDays: 180 },
+  offpeak:              { packageType: "offpeak",              packageName: "Off-Peak Pass",        totalMinutes: null, validityDays: 30 }
 };
 
-let foundCustomer = null;
+let selectedUser = null;
 
-$("searchCustomerBtn").addEventListener("click", async()=>{
-  const phone=$("searchPhone").value.trim();
-  if(!phone){ showToast("Enter a phone number to search.",true); return; }
-  const btn=$("searchCustomerBtn"); btn.disabled=true; btn.textContent="Searching...";
-  $("searchResult").style.display="none"; $("notFound").style.display="none";
-  $("customerHistoryPanel").style.display="none";
-  foundCustomer=null;
+$("searchUserBtn").addEventListener("click", async()=>{
+  const queryText = $("searchUser").value.trim().toLowerCase();
+  const btn = $("searchUserBtn");
+  btn.disabled = true;
+  btn.textContent = "Searching...";
+  $("userSearchResults").style.display = "none";
+  $("userSearchResults").innerHTML = "";
+  $("selectedUserPanel").style.display = "none";
+  selectedUser = null;
+  $("addPassBtn").disabled = true;
 
-  try{
-    const normalized=normalizePhone(phone);
-    // Search bookings (normalized + raw fallback for legacy docs) PLUS all active
-    // packages — needed for the customer history panel below.
-    const [snapNorm, snapRaw, pkgSnap] = await Promise.all([
-      getDocs(query(collection(db,"bookings"),where("customerPhoneNormalized","==",normalized))),
-      getDocs(query(collection(db,"bookings"),where("customerPhone","==",phone))),
-      getDocs(query(collection(db,"customer_packages"),where("status","==","active"))),
-    ]);
-    const seen=new Set();
-    const docs=[];
-    [...snapNorm.docs, ...snapRaw.docs].forEach(d=>{
-      if(seen.has(d.id)) return;
-      seen.add(d.id);
-      docs.push(d.data());
+  try {
+    const snap = await getDocs(collection(db, "registered_users"));
+    const matched = [];
+    snap.forEach(docSnap => {
+      const u = { id: docSnap.id, ...docSnap.data() };
+      const name = (u.name || "").toLowerCase();
+      const phone = (u.phone || "");
+      const phoneNorm = (u.phoneNormalized || "");
+      const lineDisp = (u.lineDisplayName || "").toLowerCase();
+      
+      if (!queryText || name.includes(queryText) || phone.includes(queryText) || phoneNorm.includes(queryText) || lineDisp.includes(queryText)) {
+        matched.push(u);
+      }
     });
-    docs.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
-    if(docs.length){
-      foundCustomer=docs[0];
-      $("foundName").textContent=foundCustomer.customerName||"—";
-      $("foundPhone").textContent=foundCustomer.customerPhone||"—";
-      $("foundLineId").textContent=foundCustomer.lineUserId||"Not linked yet";
-      $("foundLineName").textContent=foundCustomer.lineDisplayName||"—";
-      $("manualName").value=foundCustomer.customerName||"";
-      $("searchResult").style.display="block";
+
+    if (matched.length) {
+      $("userSearchResults").style.display = "flex";
+      matched.forEach(u => {
+        const card = document.createElement("div");
+        card.style.cssText = "padding: 10px; background: var(--s1); border: 1px solid var(--bd); border-radius: 6px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; transition: border-color .15s;";
+        card.innerHTML = `
+          <div style="font-weight: bold; font-size: .85rem; color: var(--t);">${esc(u.name || "—")}</div>
+          <div style="font-size: .78rem; color: var(--m);">Phone: ${esc(u.phone || "—")} · LINE: ${esc(u.lineDisplayName || "—")}</div>
+        `;
+        card.addEventListener("click", () => {
+          Array.from($("userSearchResults").children).forEach(c => c.style.borderColor = "var(--bd)");
+          card.style.borderColor = "var(--success)";
+          selectRegisteredUser(u);
+        });
+        $("userSearchResults").appendChild(card);
+      });
     } else {
-      $("notFound").style.display="block";
-      foundCustomer={ lineUserId:"", lineDisplayName:"", customerName:"", customerPhone:phone };
-      $("manualName").value="";
+      $("userSearchResults").style.display = "flex";
+      $("userSearchResults").innerHTML = `<div style="text-align: center; padding: 12px; color: var(--m); font-size: .8rem;">No registered users found matching "${esc(queryText)}"</div>`;
     }
-    // Render the customer history panel — runs whether or not a booking was found,
-    // because admin-added passes might exist for customers who haven't booked yet.
-    renderCustomerHistoryPanel(docs, pkgSnap.docs.map(d=>d.data()), normalized, foundCustomer.lineUserId);
-  }catch(e){ console.error(e); showToast("Search failed.",true); }
-  finally{ btn.disabled=false; btn.textContent="Search"; }
+  } catch (e) {
+    console.error(e);
+    showToast("Failed to load registered users.", true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Search";
+  }
 });
 
-// ── CUSTOMER HISTORY PANEL (Phase 2.4) ──────────────────────────
-// Renders the aggregate stats for the searched phone. Matches active packages
-// by normalizedPhone first; falls back to lineUserId (when known) so packages
-// added before the customer LINE-linked still show up.
-function renderCustomerHistoryPanel(bookings, activePkgs, normalizedPhone, lineUserId){
-  const panel=$("customerHistoryPanel"), body=$("customerHistoryBody");
-  const matchedPkgs=activePkgs.filter(p=>{
-    const pnp=p.customerPhoneNormalized||normalizePhone(p.customerPhone);
-    if(pnp&&normalizedPhone&&pnp===normalizedPhone) return true;
-    if(lineUserId&&lineUserId!=="guest"&&lineUserId!=="manual"&&p.lineUserId===lineUserId) return true;
-    return false;
-  });
-
-  // No bookings AND no active packages → genuinely new customer.
-  if(!bookings.length && !matchedPkgs.length){
-    body.innerHTML=`<div><em>New customer — no previous booking history found.</em></div>`;
-    panel.style.display="block";
-    return;
-  }
-
-  const total     = bookings.length;
-  const confirmed = bookings.filter(b=>b.bookingStatus==="confirmed").length;
-  const cancelled = bookings.filter(b=>b.bookingStatus==="cancelled").length;
-  const pending   = bookings.filter(b=>b.bookingStatus==="pending_payment").length;
-  const lastDate  = bookings.reduce((m,b)=>(b.date||"")>m?(b.date||""):m,"");
-  const latest    = bookings[0]||null;
-
-  const passNames = matchedPkgs.map(p=>p.packageName||"").filter(Boolean);
-  const ultraRemaining = matchedPkgs
-    .filter(p=>String(p.packageType||"").includes("ultra"))
-    .reduce((s,p)=>s+(Number(p.remainingMinutes)||0),0);
-  const validUntilList = matchedPkgs
-    .map(p=>{ const d=p.validUntil?.toDate?.(); return d?d.toLocaleDateString("en-GB"):""; })
-    .filter(Boolean);
-
-  const lbl = (k,v) => `<div><span style="color:var(--m)">${k}:</span> ${v}</div>`;
-  const rows=[];
-  if(latest && latest.customerName)    rows.push(lbl("Latest name", `<strong>${esc(latest.customerName)}</strong>`));
-  if(latest && latest.lineDisplayName) rows.push(lbl("LINE name", esc(latest.lineDisplayName)));
-  rows.push(lbl("LINE userId", esc(latest&&latest.lineUserId ? latest.lineUserId : "Not linked yet")));
-  if(total>0){
-    let stats=`<strong>${total}</strong> total · <strong style="color:var(--ac)">${confirmed}</strong> confirmed · ${cancelled} cancelled`;
-    if(pending>0) stats+=` · ${pending} pending`;
-    rows.push(lbl("Bookings", stats));
-  } else {
-    rows.push(lbl("Bookings", `<em>No bookings yet</em>`));
-  }
-  if(lastDate) rows.push(lbl("Last visit", esc(lastDate)));
-  if(passNames.length){
-    rows.push(lbl("Active passes", `<strong>${esc(passNames.join(" · "))}</strong>`));
-    if(ultraRemaining>0) rows.push(lbl("Ultra remaining", `<strong>${ultraRemaining} min</strong>`));
-    if(validUntilList.length) rows.push(lbl("Valid until", esc(validUntilList.join(" · "))));
-  }
-
-  body.innerHTML=rows.join("");
-  panel.style.display="block";
+function selectRegisteredUser(user) {
+  selectedUser = user;
+  $("selectedUserName").textContent = user.name || "—";
+  $("selectedUserPhone").textContent = user.phone || "—";
+  $("selectedUserLineName").textContent = user.lineDisplayName || "—";
+  $("selectedUserLineId").textContent = user.id || "—";
+  $("selectedUserPanel").style.display = "block";
+  $("addPassBtn").disabled = false;
 }
 
 $("addPassBtn").addEventListener("click", async()=>{
-  const pkgType=$("packageSelect").value;
-  const name=$("manualName").value.trim();
-  const validFrom=$("validFromDate").value;
-  if(!pkgType){ showToast("Please select a package.",true); return; }
-  if(!name){ showToast("Customer name is required.",true); return; }
-  if(!validFrom){ showToast("Please select a valid from date.",true); return; }
-  if(!foundCustomer){ showToast("Please search for a customer first.",true); return; }
+  if(!selectedUser) { showToast("Please select a user first.", true); return; }
+  const pkgType = $("packageSelect").value;
+  const validFrom = $("validFromDate").value;
+  const note = $("passNote").value.trim();
 
-  const btn=$("addPassBtn"); btn.disabled=true; btn.textContent="Adding...";
-  try{
-    const pkg=PACKAGES[pkgType];
-    const admin=currentAdminName||"admin";
-    const vFrom=new Date(validFrom+"T00:00:00");
-    const vUntil=new Date(vFrom.getTime()+pkg.validityDays*24*60*60*1000);
+  if (!pkgType) { showToast("Please select a package.", true); return; }
 
-    const phoneRaw=foundCustomer.customerPhone||$("searchPhone").value.trim();
-    await addDoc(collection(db,"customer_packages"),{
-      lineUserId:              foundCustomer.lineUserId||"",
-      lineDisplayName:         foundCustomer.lineDisplayName||"",
-      customerName:            name,
-      customerPhone:           phoneRaw,
-      customerPhoneNormalized: normalizePhone(phoneRaw),
-      packageType:             pkg.packageType,
-      packageName:             pkg.packageName,
-      totalMinutes:            pkg.totalMinutes,
-      remainingMinutes:        pkg.totalMinutes,
-      weeklyLimitHours:        pkg.weeklyLimitHours||null,
-      monthlyLimitHours:       pkg.monthlyLimitHours||null,
-      // Off-Peak quota counters — Maps keyed by ISO week / calendar month.
-      // Empty by default; booking transaction reads + increments these atomically.
-      weeklyUsage:             {},
-      monthlyUsage:            {},
-      validFrom:               Timestamp.fromDate(vFrom),
-      validUntil:              Timestamp.fromDate(vUntil),
-      status:                  "active",
-      addedByAdmin:            admin,
-      createdFromPurchaseCode: null,
-      createdAt:               serverTimestamp(),
+  const btn = $("addPassBtn");
+  btn.disabled = true;
+  btn.textContent = "Adding...";
+
+  try {
+    const res = await fetch("/api/admin-user-action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "add_pass_to_registered_user",
+        targetUserId: selectedUser.id,
+        packageType: pkgType,
+        validFrom: validFrom || undefined,
+        note: note || undefined
+      })
     });
 
-    // Fire-and-forget: notify the customer their pass is active. Must not block admin flow.
-    // If lineUserId is empty (customer not LINE-linked yet), the API logs it as skipped.
-    if (window.sendLineNotification) {
+    const data = await res.json();
+    if (!data.ok) {
+      throw new Error(data.error || "Failed to add pass.");
+    }
+
+    const pkg = PACKAGES[pkgType];
+    showToast(`✓ ${pkg.packageName} added for ${selectedUser.name}`);
+
+    // Fire-and-forget LINE notification
+    if (window.sendLineNotification && selectedUser.id) {
+      const vFrom = validFrom ? new Date(validFrom + "T00:00:00") : new Date();
+      const vUntil = new Date(vFrom.getTime() + pkg.validityDays * 24 * 60 * 60 * 1000);
       window.sendLineNotification({
-        eventId: `pass_${foundCustomer.lineUserId}_${pkgType}_${Date.now()}`,
+        eventId: `pass_${selectedUser.id}_${pkgType}_${Date.now()}`,
         type: "pass_activated_customer",
-        lineUserId: foundCustomer.lineUserId,
+        lineUserId: selectedUser.id,
         packageName: pkg.packageName,
         remainingMinutes: pkg.totalMinutes,
         validUntil: vUntil.toLocaleDateString("en-GB")
       });
     }
 
-    showToast(`✓ ${pkg.packageName} added for ${name}`);
-    // Reset form
-    $("searchPhone").value=""; $("packageSelect").value=""; $("manualName").value="";
-    $("searchResult").style.display="none"; $("notFound").style.display="none";
-    foundCustomer=null;
+    // Reset Form
+    selectedUser = null;
+    $("selectedUserPanel").style.display = "none";
+    $("searchUser").value = "";
+    $("userSearchResults").style.display = "none";
+    $("userSearchResults").innerHTML = "";
+    $("packageSelect").value = "";
+    $("validFromDate").value = "";
+    $("passNote").value = "";
+    $("addPassBtn").disabled = true;
+    
+    // Refresh display
     loadActivePasses();
-  }catch(e){ console.error(e); showToast("Failed to add pass.",true); }
-  finally{ btn.disabled=false; btn.textContent="✓ Add Pass for Customer"; }
+  } catch (e) {
+    console.error(e);
+    showToast(e.message || "Failed to add pass.", true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "✓ Add Pass for User";
+  }
 });
+
 
 async function loadActivePasses(){
   $("activePassesList").innerHTML=`<div class="smload"><div class="spinner"></div><p>Loading...</p></div>`;
