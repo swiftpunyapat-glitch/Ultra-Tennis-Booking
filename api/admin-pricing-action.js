@@ -91,8 +91,8 @@ export default async function handler(req, res) {
         specialPromoStartsAt: startTS,
         specialPromoEndsAt: endTS,
         normalQrUrl: "/payment-qr.png",
-        specialQrUrl: String(specialQrUrl || "").trim(),
-        lateNightQrUrl: "",
+        specialQrUrl: "/payment-qr-special.png",
+        lateNightQrUrl: "/late-night-qr.png",
         updatedAt: FieldValue.serverTimestamp(),
         updatedBy: adminName
       }, { merge: true });
