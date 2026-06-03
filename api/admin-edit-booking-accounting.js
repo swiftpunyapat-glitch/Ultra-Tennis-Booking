@@ -147,8 +147,8 @@ export default async function handler(req, res) {
   // ── Route by operation ────────────────────────────────────────────
   const operation = body.operation || 'accounting_edit';
 
-  if (operation !== 'accounting_edit' && operation !== 'refund') {
-    return res.status(400).json({ ok: false, error: 'Invalid operation. Must be "accounting_edit" or "refund".' });
+  if (operation !== 'accounting_edit' && operation !== 'refund' && operation !== 'mark_paid') {
+    return res.status(400).json({ ok: false, error: 'Invalid operation. Must be "accounting_edit", "refund", or "mark_paid".' });
   }
 
   // ── Per-operation auth + input validation (before any DB call) ────
@@ -181,7 +181,18 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: `refundNote is required for refundReason "${refundReason}"` });
   }
 
-  // ── bookingId — required for both operations ──────────────────────
+  if (operation === 'mark_paid') {
+    const { amount, paymentMethod } = body;
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ ok: false, error: 'Amount must be a positive number' });
+    }
+    const VALID_MARK_PAID_METHODS = ['cash', 'transfer', 'manual_confirmed', 'other'];
+    if (!VALID_MARK_PAID_METHODS.includes(paymentMethod)) {
+      return res.status(400).json({ ok: false, error: `Invalid paymentMethod. Must be one of: ${VALID_MARK_PAID_METHODS.join(', ')}` });
+    }
+  }
+
+  // ── bookingId — required for all operations ──────────────────────
   const { bookingId } = body;
   if (!bookingId || typeof bookingId !== 'string' || !bookingId.trim())
     return res.status(400).json({ ok: false, error: 'Missing bookingId' });
@@ -210,7 +221,10 @@ export default async function handler(req, res) {
   if (operation === 'accounting_edit') {
     return handleAccountingEdit({ req, res, adminName, db, booking, bookingRef, bookingId: bookingId.trim(), body });
   }
-  return handleRefund({ req, res, adminName, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+  if (operation === 'refund') {
+    return handleRefund({ req, res, adminName, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+  }
+  return handleMarkPaid({ req, res, adminName, db, booking, bookingRef, bookingId: bookingId.trim(), body });
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -549,4 +563,52 @@ async function handleRefund({ res, adminName, db, booking, bookingRef, bookingId
 
   console.log(`[refund] OK — booking:${bookingId} amount:${refundAmount} status:${refundStatus} admin:${adminName}`);
   return res.status(200).json({ ok: true, refundStatus, refundExpenseId: newExpId });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handleMarkPaid — any valid admin, marks unpaid booking as paid
+// ════════════════════════════════════════════════════════════════════
+async function handleMarkPaid({ res, adminName, db, booking, bookingRef, bookingId, body }) {
+  const { amount, paymentMethod, paymentNote = '' } = body;
+
+  if (booking.bookingStatus === 'cancelled') {
+    return res.status(409).json({ ok: false, error: 'Cannot mark a cancelled booking as paid' });
+  }
+  if (booking.paymentStatus === 'paid') {
+    return res.status(409).json({ ok: false, error: 'Booking is already paid' });
+  }
+  if (booking.paymentStatus !== 'unpaid') {
+    return res.status(409).json({ ok: false, error: `Cannot mark paid: current paymentStatus is "${booking.paymentStatus}"` });
+  }
+
+  const slotId  = `${booking.resourceId || RESOURCE_ID}_${booking.date}_${booking.startTime?.replace(':', '')}`;
+  const slotRef = db.collection('booking_slots').doc(slotId);
+
+  try {
+    const batch = db.batch();
+    batch.update(bookingRef, {
+      paymentStatus:   'paid',
+      bookingStatus:   'confirmed',
+      status:          'confirmed',
+      price:           Number(amount),
+      paidAt:          FieldValue.serverTimestamp(),
+      paidBy:          adminName,
+      paymentMethod:   paymentMethod,
+      paymentNote:     String(paymentNote).slice(0, 400),
+      adminReviewedAt: FieldValue.serverTimestamp(),
+      confirmedAt:     FieldValue.serverTimestamp(),
+      updatedAt:       FieldValue.serverTimestamp(),
+    });
+    batch.update(slotRef, {
+      paymentStatus: 'paid',
+      bookingStatus: 'confirmed',
+    });
+    await batch.commit();
+  } catch (e) {
+    console.error('[mark-paid] write:', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to update booking' });
+  }
+
+  console.log(`[mark-paid] id:${bookingId} amount:${amount} method:${paymentMethod} admin:${adminName}`);
+  return res.status(200).json({ ok: true });
 }
