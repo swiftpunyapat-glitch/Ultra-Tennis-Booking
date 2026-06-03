@@ -921,9 +921,9 @@ $("expSubmitBtn").addEventListener("click", async () => {
 
   try {
     const body = expEditId
-      ? { id: expEditId, date, category: cat, amount, paymentMethod: method, vendor, note }
-      : { date, category: cat, amount, paymentMethod: method, vendor, note };
-    const res  = await fetch("/api/finance-expense", {
+      ? { type: "expense", id: expEditId, date, category: cat, amount, paymentMethod: method, vendor, note }
+      : { type: "expense", date, category: cat, amount, paymentMethod: method, vendor, note };
+    const res  = await fetch("/api/finance-data", {
       method: expEditId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -946,10 +946,10 @@ async function deleteExpense(id) {
   const label = exp ? `${exp.category} ${baht(exp.amount)} on ${exp.date}` : "this expense";
   if (!confirm(`Delete ${label}?\n\nThe record will be hidden but retained in Firestore for audit purposes.`)) return;
   try {
-    const res  = await fetch("/api/finance-expense", {
+    const res  = await fetch("/api/finance-data", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, deleted: true }),
+      body: JSON.stringify({ type: "expense", id, deleted: true }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Delete failed");
@@ -1003,9 +1003,9 @@ $("incSubmitBtn").addEventListener("click", async () => {
 
   try {
     const body = incEditId
-      ? { id: incEditId, date, category: cat, amount, description: desc }
-      : { date, category: cat, amount, description: desc };
-    const res  = await fetch("/api/finance-income", {
+      ? { type: "income", id: incEditId, date, category: cat, amount, description: desc }
+      : { type: "income", date, category: cat, amount, description: desc };
+    const res  = await fetch("/api/finance-data", {
       method: incEditId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1028,10 +1028,10 @@ async function deleteIncome(id) {
   const label = inc ? `${inc.category} ${baht(inc.amount)} on ${inc.date}` : "this entry";
   if (!confirm(`Delete ${label}?\n\nThe record will be hidden but retained in Firestore for audit purposes.`)) return;
   try {
-    const res  = await fetch("/api/finance-income", {
+    const res  = await fetch("/api/finance-data", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, deleted: true }),
+      body: JSON.stringify({ type: "income", id, deleted: true }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Delete failed");

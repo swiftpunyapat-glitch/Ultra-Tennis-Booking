@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
@@ -2899,10 +2899,10 @@ $("mpConfirmBtn").addEventListener("click",async()=>{
 
   const btn=$("mpConfirmBtn");btn.disabled=true;btn.textContent="Saving...";
   try{
-    const res=await fetch("/api/admin-mark-booking-paid",{
+    const res=await fetch("/api/admin-edit-booking-accounting",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({bookingId:markPaidBooking.id,amount,paymentMethod,paymentNote}),
+      body:JSON.stringify({operation:"mark_paid",bookingId:markPaidBooking.id,amount,paymentMethod,paymentNote}),
     });
     const data=await res.json();
     if(!data.ok) throw new Error(data.error||"Failed");
