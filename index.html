@@ -963,7 +963,7 @@ function setupNav() {
 let isAlreadyRegistered = false;
 
 async function openRegisterView() {
-  const userId = state.lineProfile.userId;
+  const userId = state.lineProfile?.userId;
   if (!userId || userId === "guest") {
     showToast("Please log in with LINE to register your profile.", true);
     return;
@@ -975,15 +975,27 @@ async function openRegisterView() {
   $("regName").value = "";
   $("regPhone").value = "";
   
+  let exists = false;
+  let registeredData = null;
+  
   try {
-    const docRef = doc(db, "registered_users", userId);
-    const snap = await getDoc(docRef);
+    // 1. Try to read registered_users/{lineUserId}
+    try {
+      const docRef = doc(db, "registered_users", userId);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        exists = true;
+        registeredData = snap.data();
+      }
+    } catch (err) {
+      console.warn("Failed to read registered_users collection (possibly rules or network):", err);
+      // Continue anyway, treating as not registered
+    }
     
-    if (snap.exists()) {
+    if (exists && registeredData) {
       isAlreadyRegistered = true;
-      const data = snap.data();
-      $("regName").value = data.name || "";
-      $("regPhone").value = data.phone || "";
+      $("regName").value = registeredData.name || "";
+      $("regPhone").value = registeredData.phone || "";
       $("regIntroCard").style.display = "none";
       $("regTitle").textContent = t("alreadyRegistered");
     } else {
@@ -991,29 +1003,41 @@ async function openRegisterView() {
       $("regIntroCard").style.display = "block";
       $("regTitle").textContent = t("registerProfile");
       
-      const bookSnap = await getDocs(query(
-        collection(db, "bookings"),
-        where("lineUserId", "==", userId),
-        orderBy("createdAt", "desc"),
-        limit(1)
-      ));
+      // Default pre-fill to LINE display name
+      if (state.lineProfile && state.lineProfile.displayName !== "Guest") {
+        $("regName").value = state.lineProfile.displayName || "";
+      }
       
-      if (!bookSnap.empty) {
-        const latest = bookSnap.docs[0].data();
-        $("regName").value = latest.customerName || "";
-        $("regPhone").value = latest.customerPhone || "";
-      } else {
-        if (state.lineProfile.displayName !== "Guest") {
-          $("regName").value = state.lineProfile.displayName;
+      // 2. Try to pre-fill from bookings (optional)
+      try {
+        const bookSnap = await getDocs(query(
+          collection(db, "bookings"),
+          where("lineUserId", "==", userId),
+          orderBy("createdAt", "desc"),
+          limit(1)
+        ));
+        
+        if (bookSnap && !bookSnap.empty) {
+          const latest = bookSnap.docs[0].data();
+          if (latest.customerName) $("regName").value = latest.customerName;
+          if (latest.customerPhone) $("regPhone").value = latest.customerPhone;
         }
+      } catch (err) {
+        console.warn("Failed to prefill registration from bookings history (possibly missing index or rules):", err);
+        // Suppress error so register form is still displayed
       }
     }
-    
-    showView("viewRegister");
-  } catch (e) {
-    console.error("Error opening register view:", e);
-    showToast(t("failedLoad"), true);
+  } catch (globalErr) {
+    console.error("Global error in openRegisterView:", globalErr);
+    // Safe fallback: reset state to show registration form with default pre-fills
+    isAlreadyRegistered = false;
+    $("regIntroCard").style.display = "block";
+    $("regTitle").textContent = t("registerProfile");
+    if (state.lineProfile && state.lineProfile.displayName !== "Guest") {
+      $("regName").value = state.lineProfile.displayName || "";
+    }
   } finally {
+    showView("viewRegister");
     $("loverlay").style.display = "none";
   }
 }
