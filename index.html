@@ -109,6 +109,7 @@
 
     /* Payment type */
     .ptgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+    .ptgrid.no-offpeak{grid-template-columns:repeat(2,1fr);}
     .ptbtn{padding:10px 6px;border:1.5px solid var(--line);border-radius:var(--r);background:#fff;text-align:left;transition:all .15s;cursor:pointer;}
     .ptbtn:hover:not(:disabled){border-color:#a9d7f3;background:#f8fcff;}
     .ptbtn.on{border-color:var(--brand);background:var(--soft);box-shadow:0 0 0 3px rgba(31,122,224,.10);}
@@ -557,6 +558,11 @@ const LATE_NIGHT_QR_URL = ""; // TODO: set to "/late-night-qr.png" (or full URL)
 function isLateNightHour(h){ return h >= LN_START && h < LN_END; }
 
 const PACKAGES = {
+  ultra_starter_3: { packageType:"ultra_starter_3", packageName:"Ultra Starter", price:999, totalMinutes:180, validityDays:30, weeklyLimitHours:null, monthlyLimitHours:null, desc:"180 minutes · Valid 30 days · avg ฿333/hr" },
+  ultra_pass_10: { packageType:"ultra_pass_10", packageName:"Ultra Pass 10 Hours", price:3100, totalMinutes:600, validityDays:90, weeklyLimitHours:null, monthlyLimitHours:null, desc:"600 minutes · Valid 90 days · avg ฿310/hr · Save ฿40/hr" },
+  ultra_pass_20: { packageType:"ultra_pass_20", packageName:"Ultra Pass 20 Hours", price:5900, totalMinutes:1200, validityDays:180, weeklyLimitHours:null, monthlyLimitHours:null, desc:"1,200 minutes · Valid 180 days · avg ฿295/hr · Save ฿55/hr" },
+  beginner_coaching_5: { packageType:"beginner_coaching_5", packageName:"Beginner Coaching", price:3500, totalMinutes:300, validityDays:60, weeklyLimitHours:null, monthlyLimitHours:null, desc:"300 minutes · Valid 60 days" },
+  coach_at_ultra_10: { packageType:"coach_at_ultra_10", packageName:"Coaching at Ultra", price:3000, totalMinutes:600, validityDays:60, weeklyLimitHours:null, monthlyLimitHours:null, desc:"600 minutes · Valid 60 days" },
   ultra_10:{ packageType:"ultra_10", packageName:"Ultra Pass 10 Hours",  price:3100, totalMinutes:600,  validityDays:90,  weeklyLimitHours:null, monthlyLimitHours:null, desc:"600 minutes · Valid 90 days · avg ฿310/hr · Save ฿40/hr" },
   ultra_20:{ packageType:"ultra_20", packageName:"Ultra Pass 20 Hours",  price:5900, totalMinutes:1200, validityDays:180, weeklyLimitHours:null, monthlyLimitHours:null, desc:"1,200 minutes · Valid 180 days · avg ฿295/hr · Save ฿55/hr" },
   offpeak: { packageType:"offpeak",  packageName:"Off-Peak Pass",         price:3500, totalMinutes:null, validityDays:30,  weeklyLimitHours:5,    monthlyLimitHours:20,   desc:"Mon–Fri · 09:00–15:00 · Up to 20 hrs/month · Valid 30 days" },
@@ -714,7 +720,8 @@ const I18N = {
     weeklyLimit:"จำกัดต่อสัปดาห์: {week} ชม. · ต่อเดือน: {month} ชม.",
     couldNotLoadBooking:"โหลดรายการจองไม่ได้",
     couldNotLoadPurchase:"โหลดรายการซื้อไม่ได้",
-    appLoadFailed:"โหลดแอปไม่ได้ กรุณารีเฟรชหรือตรวจสอบการเชื่อมต่อ"
+    appLoadFailed:"โหลดแอปไม่ได้ กรุณารีเฟรชหรือตรวจสอบการเชื่อมต่อ",
+    beginnerCoachingNote:"ใช้สำหรับคอร์ส Beginner Coaching กรุณาติดต่อแอดมินเพื่อจัดเวลา"
   },
   en: {
     loading:"Loading...",
@@ -835,7 +842,8 @@ const I18N = {
     weeklyLimit:"Weekly limit: {week} hrs · Monthly: {month} hrs",
     couldNotLoadBooking:"Could not load booking.",
     couldNotLoadPurchase:"Could not load purchase.",
-    appLoadFailed:"Couldn't load the app. Please refresh, or check your connection."
+    appLoadFailed:"Couldn't load the app. Please refresh, or check your connection.",
+    beginnerCoachingNote:"Used for Beginner Coaching course. Please contact admin to schedule."
   }
 };
 function t(key, vars={}) {
@@ -937,7 +945,10 @@ async function initLiff() {
 }
 
 // ── ELIGIBILITY ─────────────────────────────────────────────────
+const ROOM_PASS_TYPES = ["ultra_starter_3", "ultra_pass_10", "ultra_pass_20", "ultra_10", "ultra_20"];
+
 async function checkEligibility() {
+  state.eligibility = { hasUltra: false, ultraPkg: null, hasOffpeak: false, offpeakPkg: null };
   if(state.lineProfile.userId === "guest") return;
   try {
     const snap = await getDocs(query(
@@ -946,21 +957,34 @@ async function checkEligibility() {
       where("status","==","active")
     ));
     const now = new Date();
+    const roomPkgs = [];
+    const offpeakPkgs = [];
+
     snap.forEach(d => {
       const p = { id:d.id, ...d.data() };
       const validUntil = p.validUntil?.toDate?.();
       if(!validUntil || validUntil < now) return; // expired
-      if(p.packageType==="ultra_10"||p.packageType==="ultra_20") {
-        if((p.remainingMinutes||0)>=60 && !state.eligibility.hasUltra) {
-          state.eligibility.hasUltra=true;
-          state.eligibility.ultraPkg=p;
+
+      if(ROOM_PASS_TYPES.includes(p.packageType)) {
+        if((p.remainingMinutes||0) >= 60) {
+          roomPkgs.push({ ...p, validUntilDate: validUntil });
         }
       }
-      if(p.packageType==="offpeak" && !state.eligibility.hasOffpeak) {
-        state.eligibility.hasOffpeak=true;
-        state.eligibility.offpeakPkg=p;
+      if(p.packageType === "offpeak") {
+        offpeakPkgs.push({ ...p, validUntilDate: validUntil });
       }
     });
+
+    if (roomPkgs.length > 0) {
+      roomPkgs.sort((a, b) => a.validUntilDate - b.validUntilDate);
+      state.eligibility.hasUltra = true;
+      state.eligibility.ultraPkg = roomPkgs[0];
+    }
+    if (offpeakPkgs.length > 0) {
+      offpeakPkgs.sort((a, b) => a.validUntilDate - b.validUntilDate);
+      state.eligibility.hasOffpeak = true;
+      state.eligibility.offpeakPkg = offpeakPkgs[0];
+    }
   } catch(e) { console.error("Eligibility check failed:",e); }
 }
 
@@ -985,6 +1009,22 @@ function setupNav() {
     $("btnSaveRegister").dataset.i18n = "saveChangesBtn";
     $("btnSaveRegister").textContent = t("saveChangesBtn");
     $("btnSaveRegister").style.display = "block";
+  });
+
+  document.querySelectorAll(".ptbtn").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      if(btn.disabled){ showToast(t("noPassOption"),true); return; }
+      document.querySelectorAll(".ptbtn").forEach(b=>b.classList.remove("on"));
+      btn.classList.add("on");
+      state.bookingPaymentType=btn.dataset.pt;
+      // Re-validate selected time BEFORE rendering — otherwise the disabled tile keeps
+      // its "on" class while the Confirm button is disabled, which looks broken.
+      if(state.time && getDisabledReason(state.time, parseInt(state.time))) state.time=null;
+      renderTimes();
+      updateBookingConfirmBtn();
+      // Update price display
+      updateBookingPriceNote();
+    });
   });
 }
 
@@ -1262,10 +1302,28 @@ function getDisabledReason(time, h) {
 }
 
 function updatePaymentTypeButtons() {
-  const el=state.eligibility;
-  const uBtn=$("ptUltra"), oBtn=$("ptOffpeak");
+  const el = state.eligibility;
+  const uBtn = $("ptUltra"), oBtn = $("ptOffpeak");
   uBtn.disabled = !el.hasUltra;
   oBtn.disabled = !el.hasOffpeak;
+
+  const grid = document.querySelector(".ptgrid");
+  if (!el.hasOffpeak) {
+    oBtn.style.display = "none";
+    if (grid) grid.classList.add("no-offpeak");
+    if (state.bookingPaymentType === "offpeak") {
+      state.bookingPaymentType = "single";
+    }
+  } else {
+    oBtn.style.display = "";
+    if (grid) grid.classList.remove("no-offpeak");
+  }
+
+  // Update visual selection class "on" based on state.bookingPaymentType
+  document.querySelectorAll(".ptbtn").forEach(btn => {
+    btn.classList.toggle("on", btn.dataset.pt === state.bookingPaymentType);
+  });
+
   $("ptUltraSub").textContent = el.hasUltra
     ? t("ultraMinLeft",{min:el.ultraPkg.remainingMinutes})
     : t("noActivePass");
@@ -1273,21 +1331,6 @@ function updatePaymentTypeButtons() {
     ? t("validUntil",{date:el.offpeakPkg.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—"})
     : t("noActivePass");
 
-  document.querySelectorAll(".ptbtn").forEach(btn=>{
-    btn.addEventListener("click",()=>{
-      if(btn.disabled){ showToast(t("noPassOption"),true); return; }
-      document.querySelectorAll(".ptbtn").forEach(b=>b.classList.remove("on"));
-      btn.classList.add("on");
-      state.bookingPaymentType=btn.dataset.pt;
-      // Re-validate selected time BEFORE rendering — otherwise the disabled tile keeps
-      // its "on" class while the Confirm button is disabled, which looks broken.
-      if(state.time && getDisabledReason(state.time, parseInt(state.time))) state.time=null;
-      renderTimes();
-      updateBookingConfirmBtn();
-      // Update price display
-      updateBookingPriceNote();
-    });
-  });
   updateBookingPriceNote();
 }
 
@@ -1700,14 +1743,16 @@ function renderMyBookings(bookings, packages, purchases) {
     html+=`<div class="sec-title">${t("activePasses")}</div>`;
     packages.forEach(p=>{
       const validUntil=p.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—";
-      const isUltra=p.packageType==="ultra_10"||p.packageType==="ultra_20";
+      const hasMinutes=p.remainingMinutes !== undefined && p.remainingMinutes !== null;
+      const isBeginnerCoaching = p.packageType === "beginner_coaching_5";
       html+=`<div class="passitem">
         <div class="passitem-top"><div class="pass-name">${esc(p.packageName)}</div><span class="pass-active">${t("active")}</span></div>
-        ${isUltra?`<div class="pass-mins">${t("minRemaining",{min:Number(p.remainingMinutes)||0})}</div>`:""}
+        ${hasMinutes?`<div class="pass-mins">${t("minRemaining",{min:Number(p.remainingMinutes)||0})}</div>`:""}
         <div class="pass-info">
           <span>${t("validUntilLabel")}: <strong>${esc(validUntil)}</strong></span>
           ${p.weeklyLimitHours?`<span>${t("weeklyLimit",{week:Number(p.weeklyLimitHours)||0,month:Number(p.monthlyLimitHours)||0})}</span>`:""}
         </div>
+        ${isBeginnerCoaching?`<div style="color:var(--warning); font-size:.72rem; margin-top:8px; font-weight:700; line-height:1.4;">⚠️ ${t("beginnerCoachingNote")}</div>`:""}
       </div>`;
     });
   }
