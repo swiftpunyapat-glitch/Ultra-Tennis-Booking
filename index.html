@@ -1754,17 +1754,24 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
   // when LATE_NIGHT_QR_URL is not yet configured.
   const qrWrap=$("payQrWrap");
   if(qrWrap){
-    let isLateNightBooking = isLateNight;
-    let isSpecialBooking = false;
     const pricing = state.pricing;
     const bData = state.currentBookingData;
+    let isLateNightBooking = isLateNight;
+    let qrUrl = "/payment-qr.png";
     
     if (state.paymentMode === "booking" && bData) {
       if (bData.paymentQrType === "late_night" || bData.pricingMode === "late_night") {
         isLateNightBooking = true;
+      } else if (bData.paymentQrType === "special" || bData.pricingMode === "special_promotion") {
+        qrUrl = "/payment-qr-special.png";
+      } else {
+        qrUrl = "/payment-qr.png";
       }
-      if (bData.paymentQrType === "special" || bData.pricingMode === "special_promotion") {
-        isSpecialBooking = true;
+    } else {
+      if (isLateNightBooking) {
+        qrUrl = "";
+      } else {
+        qrUrl = "/payment-qr.png";
       }
     }
 
@@ -1776,16 +1783,17 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
       if (!finalLateNightQr) {
         qrWrap.innerHTML = `<div style="padding:18px 10px;text-align:center;font-size:.78rem;color:var(--muted);line-height:1.7">🌙 <strong>Late Night Session</strong><br>กรุณาติดต่อแอดมินเพื่อรับ QR โอนเงิน<br><span style="font-size:.7rem">Please contact staff for payment QR.</span></div>`;
       } else {
-        qrWrap.innerHTML = `<img src="${finalLateNightQr}" alt="QR" style="width:100%;height:100%;object-fit:contain"
+        const paymentQrType = (state.paymentMode === "booking" && bData) ? (bData.paymentQrType || "late_night") : "late_night";
+        const price = (state.paymentMode === "booking" && bData) ? (bData.price || "") : amount;
+        const qrSrc = `${finalLateNightQr}?v=${paymentQrType}-${price}`;
+        qrWrap.innerHTML = `<img src="${qrSrc}" alt="QR" style="width:100%;height:100%;object-fit:contain"
           onerror="this.parentElement.innerHTML='<p style=\\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\\'>⚠️ '+(window.utT?window.utT(\\'qrNotFound\\'):\\'QR not found. Please contact staff.\\')+'</p>'"/>`;
       }
-    } else if (isSpecialBooking) {
-      const specialQr = (pricing?.specialQrUrl || "").trim() || (pricing?.normalQrUrl || "").trim() || "/payment-qr.png";
-      qrWrap.innerHTML = `<img src="${specialQr}" alt="QR" style="width:100%;height:100%;object-fit:contain"
-        onerror="this.parentElement.innerHTML='<p style=\\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\\'>⚠️ '+(window.utT?window.utT(\\'qrNotFound\\'):\\'QR not found. Please contact staff.\\')+'</p>'"/>`;
     } else {
-      const normalQr = (pricing?.normalQrUrl || "").trim() || "/payment-qr.png";
-      qrWrap.innerHTML = `<img src="${normalQr}" alt="QR" style="width:100%;height:100%;object-fit:contain"
+      const paymentQrType = (state.paymentMode === "booking" && bData) ? (bData.paymentQrType || "normal") : "normal";
+      const price = (state.paymentMode === "booking" && bData) ? (bData.price || "") : amount;
+      const qrSrc = `${qrUrl}?v=${paymentQrType}-${price}`;
+      qrWrap.innerHTML = `<img src="${qrSrc}" alt="QR" style="width:100%;height:100%;object-fit:contain"
         onerror="this.parentElement.innerHTML='<p style=\\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\\'>⚠️ '+(window.utT?window.utT(\\'qrNotFound\\'):\\'QR not found. Please contact staff.\\')+'</p>'"/>`;
     }
   }
