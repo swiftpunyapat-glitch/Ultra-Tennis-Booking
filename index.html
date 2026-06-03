@@ -110,6 +110,7 @@
     /* Payment type */
     .ptgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
     .ptgrid.no-offpeak{grid-template-columns:repeat(2,1fr);}
+    .ptgrid.single-only{grid-template-columns:1fr;}
     .ptbtn{padding:10px 6px;border:1.5px solid var(--line);border-radius:var(--r);background:#fff;text-align:left;transition:all .15s;cursor:pointer;}
     .ptbtn:hover:not(:disabled){border-color:#a9d7f3;background:#f8fcff;}
     .ptbtn.on{border-color:var(--brand);background:var(--soft);box-shadow:0 0 0 3px rgba(31,122,224,.10);}
@@ -269,7 +270,7 @@
         <div class="hcard-icon" style="font-size:2rem">🎾</div>
         <div>
           <div class="hcard-label" style="font-size:1rem" data-i18n="bookSingle">Book Single Use</div>
-          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="singleSub">฿350 / hour · Pay by QR slip</div>
+          <div class="hcard-sub" id="homeSingleSub" style="font-size:.8rem;margin-top:3px" data-i18n="singleSub">฿350 / hour · Pay by QR slip</div>
         </div>
       </button>
       <button class="hcard" id="btnRegister" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
@@ -302,6 +303,9 @@
       <button class="back" id="bkBack">← <span data-i18n="back">Back</span></button>
       <div class="ptitle" data-i18n="bookPracticeRoom">Book Practice Room</div>
 
+      <!-- Dynamic Promo Banner Container -->
+      <div id="promoBannerWrap" style="display:none; margin-bottom:12px;"></div>
+
       <div class="card">
         <div class="slabel" data-i18n="selectDate">Select Date</div>
         <div class="dstrip" id="dateStrip"></div>
@@ -323,7 +327,7 @@
       <div class="card" id="ptCard">
         <div class="slabel" data-i18n="paymentType">Payment Type</div>
         <div class="ptgrid">
-          <button class="ptbtn on" data-pt="single"><span class="pt-name" data-i18n="singleUse">Single Use</span><small class="pt-sub">฿350</small></button>
+          <button class="ptbtn on" data-pt="single"><span class="pt-name" data-i18n="singleUse">Single Use</span><small class="pt-sub" id="ptSingleSub">฿350</small></button>
           <button class="ptbtn" data-pt="ultra" id="ptUltra" disabled><span class="pt-name" data-i18n="usePackage">Use Package</span><small class="pt-sub" id="ptUltraSub">No active pass</small></button>
           <button class="ptbtn" data-pt="offpeak" id="ptOffpeak" disabled><span class="pt-name" data-i18n="offPeak">Off-Peak</span><small class="pt-sub" id="ptOffpeakSub">No active pass</small></button>
         </div>
@@ -874,6 +878,7 @@ function applyI18n() {
   if($("confirmBkBtn") && !$("confirmBkBtn").disabled) $("confirmBkBtn").textContent=t("confirmBooking");
   if($("submitSlipBtn") && !$("submitSlipBtn").disabled) $("submitSlipBtn").textContent=t("submitSlip");
   updateBookingPriceNote();
+  updateHomeSingleUsePricing();
 }
 function setupLanguageToggle() {
   document.querySelectorAll(".lang-btn").forEach(btn=>{
@@ -940,6 +945,15 @@ async function initLiff() {
   else av.textContent = state.lineProfile.displayName.charAt(0).toUpperCase();
 
   $("ltext").textContent=t("loadingPass");
+  try {
+    const pDoc = await getDoc(doc(db, "system_settings", "pricing"));
+    if (pDoc.exists()) {
+      state.pricing = pDoc.data();
+    }
+  } catch(e) {
+    console.warn("Failed to load pricing config on app init:", e);
+  }
+  updateHomeSingleUsePricing();
   await checkEligibility();
 
   $("loverlay").style.display="none";
@@ -1194,12 +1208,98 @@ async function saveRegisterProfile() {
 }
 
 // ── BOOKING VIEW ────────────────────────────────────────────────
-function openBookingView() {
+function getPromoState() {
+  const cfg = state.pricing;
+  if (!cfg) return { active: false };
+  if (cfg.specialPromoActive !== true) return { active: false };
+  
+  const now = new Date();
+  const starts = cfg.specialPromoStartsAt?.toDate?.() || (cfg.specialPromoStartsAt ? new Date(cfg.specialPromoStartsAt) : null);
+  const ends = cfg.specialPromoEndsAt?.toDate?.() || (cfg.specialPromoEndsAt ? new Date(cfg.specialPromoEndsAt) : null);
+  
+  if (starts && now < starts) return { active: false };
+  if (ends && now > ends) return { active: false };
+  
+  return {
+    active: true,
+    name: cfg.specialPromoName,
+    price: Number(cfg.specialPromoPrice) || 350,
+    label: cfg.specialPromoLabel,
+    startsAt: starts,
+    endsAt: ends
+  };
+}
+
+function updatePromoBanner() {
+  const banner = $("promoBannerWrap");
+  if (!banner) return;
+  
+  const promo = getPromoState();
+  if (promo.active) {
+    const startsStr = promo.startsAt ? promo.startsAt.toLocaleDateString("th-TH", {day:"numeric", month:"numeric", year:"2-digit"}) : "";
+    const endsStr = promo.endsAt ? promo.endsAt.toLocaleDateString("th-TH", {day:"numeric", month:"numeric", year:"2-digit"}) : "";
+    const dateRangeStr = startsStr && endsStr ? `${startsStr}–${endsStr}` : "";
+    
+    let rangeText = promo.name;
+    if (dateRangeStr) {
+      rangeText += ` · ${dateRangeStr}`;
+    }
+    
+    const thText = `Single Use เหลือ ${promo.price} บาท/ชม. จากปกติ 350 บาท/ชม.`;
+    const enText = `Single Use only ฿${promo.price}/hr (Regular ฿350/hr)`;
+    const descText = currentLang === "th" ? thText : enText;
+    
+    banner.innerHTML = `
+      <div class="card" style="background: linear-gradient(135deg, #fef3c7, #fde68a); border: 2px solid #f59e0b; box-shadow: 0 4px 14px rgba(245, 158, 11, 0.15); margin-bottom: 12px; padding:12px;">
+        <div style="display: flex; align-items: flex-start; gap: 10px;">
+          <span style="font-size: 1.5rem; line-height: 1;">🔥</span>
+          <div>
+            <div style="font-weight: 900; color: #b45309; font-size: .88rem; margin-bottom: 2px;">${currentLang === "th" ? "โปรโมชั่นพิเศษ" : "SPECIAL PROMOTION"}</div>
+            <div style="font-weight: 800; color: #1e293b; font-size: .8rem; margin-bottom: 4px;">${esc(rangeText)}</div>
+            <div style="font-size: .75rem; color: #475569; line-height: 1.4;">${esc(promo.label || descText)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+    banner.style.display = "block";
+  } else {
+    banner.style.display = "none";
+  }
+}
+
+function updateHomeSingleUsePricing() {
+  const subEl = $("homeSingleSub");
+  if (!subEl) return;
+  const promo = getPromoState();
+  if (promo.active) {
+    if (currentLang === "th") {
+      subEl.textContent = `${promo.price} บาท / ชั่วโมง · ชำระผ่าน QR และอัปโหลดสลิป`;
+    } else {
+      subEl.textContent = `฿${promo.price} / hour · Pay by QR slip`;
+    }
+  } else {
+    subEl.textContent = t("singleSub");
+  }
+}
+
+async function openBookingView() {
   state.time=null;
   state.bookingPaymentType="single";
   state.dateOffset=0;
   showView("viewBooking");
   buildDates();
+
+  try {
+    const pDoc = await getDoc(doc(db, "system_settings", "pricing"));
+    if (pDoc.exists()) {
+      state.pricing = pDoc.data();
+    }
+  } catch(e) {
+    console.warn("Failed to load pricing config on booking view open:", e);
+  }
+
+  updatePromoBanner();
+  updateHomeSingleUsePricing();
   loadSlotsAndRender(getSelectedDateISO());
   updatePaymentTypeButtons();
   updateBookingConfirmBtn();
@@ -1279,8 +1379,15 @@ function renderTimes() {
       state.time=time;
       grid.querySelectorAll(".tbtn").forEach(b=>b.classList.remove("on"));
       btn.classList.add("on");
+      
+      const isLN = isLateNightHour(h);
+      if (isLN) {
+        state.bookingPaymentType = "single";
+      }
+
+      updatePaymentTypeButtons();
       updateBookingConfirmBtn();
-      updateBookingPriceNote(); // price changes between LN (฿450) and normal (฿350)
+      updateBookingPriceNote();
     });
     grid.append(btn);
     if(!reason) avail++;
@@ -1308,19 +1415,35 @@ function getDisabledReason(time, h) {
 function updatePaymentTypeButtons() {
   const el = state.eligibility;
   const uBtn = $("ptUltra"), oBtn = $("ptOffpeak");
-  uBtn.disabled = !el.hasUltra;
-  oBtn.disabled = !el.hasOffpeak;
-
   const grid = document.querySelector(".ptgrid");
-  if (!el.hasOffpeak) {
+  const isLN = state.time && isLateNightHour(parseInt(state.time, 10));
+
+  if (isLN) {
+    uBtn.disabled = true;
+    oBtn.disabled = true;
+    uBtn.style.display = "none";
     oBtn.style.display = "none";
-    if (grid) grid.classList.add("no-offpeak");
-    if (state.bookingPaymentType === "offpeak") {
-      state.bookingPaymentType = "single";
+    if (grid) {
+      grid.classList.add("single-only");
+      grid.classList.remove("no-offpeak");
     }
+    state.bookingPaymentType = "single";
   } else {
-    oBtn.style.display = "";
-    if (grid) grid.classList.remove("no-offpeak");
+    if (grid) grid.classList.remove("single-only");
+    uBtn.disabled = !el.hasUltra;
+    oBtn.disabled = !el.hasOffpeak;
+    uBtn.style.display = "";
+
+    if (!el.hasOffpeak) {
+      oBtn.style.display = "none";
+      if (grid) grid.classList.add("no-offpeak");
+      if (state.bookingPaymentType === "offpeak") {
+        state.bookingPaymentType = "single";
+      }
+    } else {
+      oBtn.style.display = "";
+      if (grid) grid.classList.remove("no-offpeak");
+    }
   }
 
   // Update visual selection class "on" based on state.bookingPaymentType
@@ -1328,10 +1451,28 @@ function updatePaymentTypeButtons() {
     btn.classList.toggle("on", btn.dataset.pt === state.bookingPaymentType);
   });
 
-  $("ptUltraSub").textContent = el.hasUltra
+  // Update Single Use button subtitle
+  const promo = getPromoState();
+  const singleSub = $("ptSingleSub");
+  if (singleSub) {
+    if (isLN) {
+      singleSub.textContent = `฿${LATE_NIGHT_PRICE}`;
+    } else if (promo.active) {
+      singleSub.textContent = `฿${promo.price}`;
+    } else {
+      singleSub.textContent = `฿350`;
+    }
+  }
+
+  $("ptUltraSub").textContent = isLN
+    ? t("noPassOption")
+    : el.hasUltra
     ? t("usePackageSub",{name:el.ultraPkg.packageName, min:el.ultraPkg.remainingMinutes})
     : t("noActivePass");
-  $("ptOffpeakSub").textContent = el.hasOffpeak
+    
+  $("ptOffpeakSub").textContent = isLN
+    ? t("noPassOption")
+    : el.hasOffpeak
     ? t("validUntil",{date:el.offpeakPkg.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—"})
     : t("noActivePass");
 
@@ -1342,7 +1483,8 @@ function updateBookingPriceNote(){
   if(!$("bkPrice")||!$("bkNote2")) return;
   if(state.bookingPaymentType==="single"){
     const isLN=state.time && isLateNightHour(parseInt(state.time,10));
-    const price=isLN ? LATE_NIGHT_PRICE : 350;
+    const promo = getPromoState();
+    const price = isLN ? LATE_NIGHT_PRICE : (promo.active ? promo.price : 350);
     $("bkPrice").textContent=`฿${price}`;
     $("bkNote2").textContent=t("paymentDue");
   } else {
@@ -1389,7 +1531,8 @@ $("confirmBkBtn").addEventListener("click", async()=>{
     const slotDocId = `${RESOURCE_ID}_${dateISO}_${state.time.replace(":","")}`;
     const isSingle  = payType==="single";
     const isLN      = isSingle && isLateNightHour(parseInt(state.time,10));
-    const singlePrice = isLN ? LATE_NIGHT_PRICE : 350;
+    const promo     = isSingle && !isLN ? getPromoState() : { active: false };
+    const singlePrice = isLN ? LATE_NIGHT_PRICE : (promo.active ? promo.price : 350);
     const singleType  = isLN ? "Late Night Session" : "Single Use";
     const expiresAt = isSingle ? new Date(Date.now()+PAY_MINS*60*1000) : null;
     const expiresTS = isSingle ? Timestamp.fromDate(expiresAt) : null;
@@ -1415,6 +1558,34 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       paymentExpiresAt:        expiresTS,
       slipUrl:                 null, slipUploadedAt:null, cancelReason:null,
     };
+
+    if (isSingle) {
+      if (isLN) {
+        bookingPayload.basePrice = LATE_NIGHT_PRICE;
+        bookingPayload.effectivePrice = LATE_NIGHT_PRICE;
+        bookingPayload.pricingMode = "late_night";
+        bookingPayload.promoApplied = false;
+        bookingPayload.paymentQrType = "late_night";
+      } else if (promo.active) {
+        bookingPayload.basePrice = 350;
+        bookingPayload.effectivePrice = promo.price;
+        bookingPayload.pricingMode = "special_promotion";
+        bookingPayload.promoApplied = true;
+        bookingPayload.promoName = promo.name || "";
+        bookingPayload.promoPrice = promo.price;
+        bookingPayload.promoLabel = promo.label || "";
+        bookingPayload.promoStartAt = promo.startsAt ? Timestamp.fromDate(promo.startsAt) : null;
+        bookingPayload.promoEndAt = promo.endsAt ? Timestamp.fromDate(promo.endsAt) : null;
+        bookingPayload.promoSnapshotAt = serverTimestamp();
+        bookingPayload.paymentQrType = "special";
+      } else {
+        bookingPayload.basePrice = 350;
+        bookingPayload.effectivePrice = 350;
+        bookingPayload.pricingMode = "normal_single_use";
+        bookingPayload.promoApplied = false;
+        bookingPayload.paymentQrType = "normal";
+      }
+    }
 
     if (payType==="ultra" && selectedPkg) {
       bookingPayload.packageId = selectedPkg.id;
@@ -1583,11 +1754,38 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
   // when LATE_NIGHT_QR_URL is not yet configured.
   const qrWrap=$("payQrWrap");
   if(qrWrap){
-    if(isLateNight && !LATE_NIGHT_QR_URL){
-      qrWrap.innerHTML=`<div style="padding:18px 10px;text-align:center;font-size:.78rem;color:var(--muted);line-height:1.7">🌙 <strong>Late Night Session</strong><br>กรุณาติดต่อแอดมินเพื่อรับ QR โอนเงิน<br><span style="font-size:.7rem">Please contact staff for payment QR.</span></div>`;
+    let isLateNightBooking = isLateNight;
+    let isSpecialBooking = false;
+    const pricing = state.pricing;
+    const bData = state.currentBookingData;
+    
+    if (state.paymentMode === "booking" && bData) {
+      if (bData.paymentQrType === "late_night" || bData.pricingMode === "late_night") {
+        isLateNightBooking = true;
+      }
+      if (bData.paymentQrType === "special" || bData.pricingMode === "special_promotion") {
+        isSpecialBooking = true;
+      }
+    }
+
+    if (isLateNightBooking) {
+      const dbLateNightQr = (pricing?.lateNightQrUrl || "").trim();
+      const localLateNightQr = (LATE_NIGHT_QR_URL || "").trim();
+      const finalLateNightQr = dbLateNightQr || localLateNightQr;
+      
+      if (!finalLateNightQr) {
+        qrWrap.innerHTML = `<div style="padding:18px 10px;text-align:center;font-size:.78rem;color:var(--muted);line-height:1.7">🌙 <strong>Late Night Session</strong><br>กรุณาติดต่อแอดมินเพื่อรับ QR โอนเงิน<br><span style="font-size:.7rem">Please contact staff for payment QR.</span></div>`;
+      } else {
+        qrWrap.innerHTML = `<img src="${finalLateNightQr}" alt="QR" style="width:100%;height:100%;object-fit:contain"
+          onerror="this.parentElement.innerHTML='<p style=\\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\\'>⚠️ '+(window.utT?window.utT(\\'qrNotFound\\'):\\'QR not found. Please contact staff.\\')+'</p>'"/>`;
+      }
+    } else if (isSpecialBooking) {
+      const specialQr = (pricing?.specialQrUrl || "").trim() || (pricing?.normalQrUrl || "").trim() || "/payment-qr.png";
+      qrWrap.innerHTML = `<img src="${specialQr}" alt="QR" style="width:100%;height:100%;object-fit:contain"
+        onerror="this.parentElement.innerHTML='<p style=\\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\\'>⚠️ '+(window.utT?window.utT(\\'qrNotFound\\'):\\'QR not found. Please contact staff.\\')+'</p>'"/>`;
     } else {
-      const src = isLateNight ? LATE_NIGHT_QR_URL : "/payment-qr.png";
-      qrWrap.innerHTML=`<img src="${src}" alt="QR" style="width:100%;height:100%;object-fit:contain"
+      const normalQr = (pricing?.normalQrUrl || "").trim() || "/payment-qr.png";
+      qrWrap.innerHTML = `<img src="${normalQr}" alt="QR" style="width:100%;height:100%;object-fit:contain"
         onerror="this.parentElement.innerHTML='<p style=\\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\\'>⚠️ '+(window.utT?window.utT(\\'qrNotFound\\'):\\'QR not found. Please contact staff.\\')+'</p>'"/>`;
     }
   }
