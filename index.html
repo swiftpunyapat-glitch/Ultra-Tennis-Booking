@@ -271,6 +271,20 @@
           <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="singleSub">฿350 / hour · Pay by QR slip</div>
         </div>
       </button>
+      <button class="hcard" id="btnRegister" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
+        <div class="hcard-icon" style="font-size:2rem">👤</div>
+        <div>
+          <div class="hcard-label" style="font-size:1rem" data-i18n="registerProfile">Register Profile</div>
+          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="registerSub">Verify name/phone for passes</div>
+        </div>
+      </button>
+      <button class="hcard" id="btnPromotions" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
+        <div class="hcard-icon" style="font-size:2rem">🎫</div>
+        <div>
+          <div class="hcard-label" style="font-size:1rem" data-i18n="promotions">Promotions</div>
+          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="promotionsSub">Ultra Starter, Pass, and Coaching</div>
+        </div>
+      </button>
       <button class="hcard" id="btnMyBookings" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
         <div class="hcard-icon" style="font-size:2rem">📋</div>
         <div>
@@ -402,6 +416,94 @@
     </div>
   </div>
 
+  <!-- VIEW: REGISTER -->
+  <div id="viewRegister" style="display:none">
+    <div class="view">
+      <button class="back" id="regBack">← <span data-i18n="back">Back</span></button>
+      <div class="ptitle" id="regTitle" data-i18n="registerProfile">Register Profile</div>
+      
+      <div class="card" id="regIntroCard" style="display:none; background: var(--soft); border-color: var(--ut-border);">
+        <p style="font-size:.78rem;line-height:1.5;color:var(--ut-navy);" data-i18n="regIntroText">
+          ถ้ายังไม่เคยจอง กรุณากด Register ก่อน เพื่อให้แอดมินเติมแพ็กเข้าบัญชี LINE ของคุณได้ถูกต้อง
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="slabel" data-i18n="yourInfo">Your Info</div>
+        <div class="fgrid" style="grid-template-columns: 1fr;">
+          <label class="full"><span data-i18n="name">Name</span><input type="text" id="regName" placeholder="Full name"/></label>
+          <label class="full" style="margin-top: 10px;"><span data-i18n="phone">Phone</span><input type="tel" id="regPhone" placeholder="Phone number"/></label>
+        </div>
+      </div>
+
+      <button class="btn-slip" id="btnSaveRegister" style="width:100%" data-i18n="registerSubmit">Register</button>
+    </div>
+  </div>
+
+  <!-- VIEW: PROMOTIONS -->
+  <div id="viewPromotions" style="display:none">
+    <div class="view">
+      <button class="back" id="promoBack">← <span data-i18n="back">Back</span></button>
+      <div class="ptitle" data-i18n="activePromotions">Promotions</div>
+
+      <div class="card" style="background: var(--soft); border-color: var(--ut-border); margin-bottom: 14px;">
+        <p style="font-size:.78rem;line-height:1.5;color:var(--ut-navy);text-align:center" data-i18n="promoNote">
+          ถ้ายังไม่เคยจอง กรุณากด Register ก่อน เพื่อให้แอดมินเติมแพ็กเข้าบัญชี LINE ของคุณได้ถูกต้อง
+        </p>
+      </div>
+
+      <div class="pkggrid">
+        <!-- Ultra Starter -->
+        <div class="pkgcard">
+          <div class="pkgcard-top">
+            <div class="pkg-name">Ultra Starter</div>
+            <div class="pkg-price" style="white-space:nowrap">฿999</div>
+          </div>
+          <div class="pkg-desc" style="margin-top:5px;">3 Hours (180 mins) · Valid 30 days · Average ฿333/hr</div>
+          <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
+            <a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener noreferrer" class="btn-rpay" style="text-decoration:none; text-align:center;" data-i18n="contactToBuy">Contact admin to buy</a>
+          </div>
+        </div>
+
+        <!-- Ultra Pass -->
+        <div class="pkgcard" style="margin-top: 10px;">
+          <div class="pkgcard-top">
+            <div class="pkg-name">Ultra Pass</div>
+            <div class="pkg-price" style="white-space:nowrap">฿3,100</div>
+          </div>
+          <div class="pkg-desc" style="margin-top:5px;">10 Hours (600 mins) · Valid 90 days · Average ฿310/hr · Save ฿40/hr</div>
+          <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
+            <a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener noreferrer" class="btn-rpay" style="text-decoration:none; text-align:center;" data-i18n="contactToBuy">Contact admin to buy</a>
+          </div>
+        </div>
+
+        <!-- Coaching at Ultra -->
+        <div class="pkgcard" style="margin-top: 10px;">
+          <div class="pkgcard-top">
+            <div class="pkg-name">Coaching at Ultra</div>
+            <div class="pkg-price" style="white-space:nowrap">฿3,000</div>
+          </div>
+          <div class="pkg-desc" style="margin-top:5px;">10 Hours (600 mins) · Valid 60 days · Reserved for coaches</div>
+          <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
+            <a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener noreferrer" class="btn-rpay" style="text-decoration:none; text-align:center;" data-i18n="contactToBuy">Contact admin to buy</a>
+          </div>
+        </div>
+
+        <!-- Beginner Coaching -->
+        <div class="pkgcard" style="margin-top: 10px;">
+          <div class="pkgcard-top">
+            <div class="pkg-name">Beginner Coaching</div>
+            <div class="pkg-price" style="white-space:nowrap">฿3,500</div>
+          </div>
+          <div class="pkg-desc" style="margin-top:5px;">5 Hours (300 mins) · Valid 60 days · Includes court and coach</div>
+          <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
+            <a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener noreferrer" class="btn-rpay" style="text-decoration:none; text-align:center;" data-i18n="contactToBuy">Contact admin to buy</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div><!-- /shell -->
 
 <div class="toast" id="toast"></div>
@@ -411,7 +513,7 @@ import { initializeApp }             from "https://www.gstatic.com/firebasejs/12
 import { isSupported, getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
 import {
   getFirestore, collection, doc, getDoc, getDocs, addDoc, updateDoc,
-  runTransaction, setDoc, query, where, serverTimestamp, Timestamp
+  runTransaction, setDoc, query, where, limit, orderBy, serverTimestamp, Timestamp
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 import {
   getStorage, ref as sRef, uploadBytes, getDownloadURL
@@ -478,7 +580,7 @@ const state = {
 
 // ── DOM ─────────────────────────────────────────────────────────
 const $     = id => document.getElementById(id);
-const VIEWS = ["viewHome","viewBooking","viewPayment","viewMyBookings","viewSuccess"];
+const VIEWS = ["viewHome","viewBooking","viewPayment","viewMyBookings","viewSuccess","viewRegister","viewPromotions"];
 const LANG_KEY = "ultra_lang";
 let currentLang = localStorage.getItem(LANG_KEY) || "th";
 if(!["th","en"].includes(currentLang)) currentLang="th";
@@ -570,6 +672,18 @@ const I18N = {
     noBookings:"ยังไม่มีรายการจอง",
     bookNow:"จองเลย",
     failedLoad:"โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่",
+    registerProfile:"ลงทะเบียนสมาชิก",
+    registerSub:"ยืนยันชื่อ/เบอร์โทรเพื่อเติมแพ็กเกจ",
+    promotions:"โปรโมชั่น",
+    promotionsSub:"แพ็กเกจ Starter, Pass และ Coaching",
+    activePromotions:"โปรโมชั่นทั้งหมด",
+    contactToBuy:"ทักแอดมินเพื่อซื้อ",
+    regIntroText:"ถ้ายังไม่เคยจอง กรุณากด Register ก่อน เพื่อให้แอดมินเติมแพ็กเข้าบัญชี LINE ของคุณได้ถูกต้อง",
+    promoNote:"ถ้ายังไม่เคยจอง กรุณากด Register ก่อน เพื่อให้แอดมินเติมแพ็กเข้าบัญชี LINE ของคุณได้ถูกต้อง",
+    registerSubmit:"ลงทะเบียน",
+    alreadyRegistered:"ข้อมูลการลงทะเบียน",
+    regSuccess:"ลงทะเบียนสมาชิกเรียบร้อยแล้ว",
+    regUpdateSuccess:"อัปเดตข้อมูลการลงทะเบียนเรียบร้อยแล้ว",
     passPurchases:"รายการซื้อแพ็กเกจ",
     bookings:"รายการจอง",
     activePasses:"แพ็กเกจที่ใช้งานอยู่",
@@ -675,6 +789,18 @@ const I18N = {
     noBookings:"No bookings yet",
     bookNow:"Book now",
     failedLoad:"Failed to load. Please try again.",
+    registerProfile:"Register Profile",
+    registerSub:"Verify name/phone for passes",
+    promotions:"Promotions",
+    promotionsSub:"Ultra Starter, Pass, and Coaching",
+    activePromotions:"Promotions",
+    contactToBuy:"Contact admin to buy",
+    regIntroText:"If you have never booked, please Register first so the admin can add the package to your LINE account correctly.",
+    promoNote:"If you have never booked, please Register first so the admin can add the package to your LINE account correctly.",
+    registerSubmit:"Register",
+    alreadyRegistered:"Registered Profile",
+    regSuccess:"Registration successful!",
+    regUpdateSuccess:"Profile updated successfully!",
     passPurchases:"Pass Purchases",
     bookings:"Bookings",
     activePasses:"Active Passes",
@@ -706,6 +832,8 @@ function applyI18n() {
   $("bkName").placeholder=t("fullName");
   $("bkPhone").placeholder=t("phoneNumber");
   $("bkNote").placeholder=t("specialRequests");
+  if ($("regName")) $("regName").placeholder=t("fullName");
+  if ($("regPhone")) $("regPhone").placeholder=t("phoneNumber");
   document.querySelectorAll(".lang-btn").forEach(btn=>btn.classList.toggle("on",btn.dataset.lang===currentLang));
   if($("transferTextA")) $("transferTextA").textContent=t("transferA");
   if($("transferTextB")) $("transferTextB").textContent=t("transferB");
@@ -822,9 +950,122 @@ async function checkEligibility() {
 function setupNav() {
   $("btnSingle").addEventListener("click", ()=>{ openBookingView(); });
   $("btnMyBookings").addEventListener("click",()=>{ openMyBookings(); });
+  $("btnRegister").addEventListener("click", ()=>{ openRegisterView(); });
+  $("btnPromotions").addEventListener("click", ()=>{ showView("viewPromotions"); });
   $("bkBack").addEventListener("click",   ()=>showView("viewHome"));
   $("myBack").addEventListener("click",   ()=>showView("viewHome"));
+  $("regBack").addEventListener("click",  ()=>showView("viewHome"));
+  $("promoBack").addEventListener("click",()=>showView("viewHome"));
   $("succHomeBtn").addEventListener("click",()=>showView("viewHome"));
+  $("btnSaveRegister").addEventListener("click", ()=>saveRegisterProfile());
+}
+
+let isAlreadyRegistered = false;
+
+async function openRegisterView() {
+  const userId = state.lineProfile.userId;
+  if (!userId || userId === "guest") {
+    showToast("Please log in with LINE to register your profile.", true);
+    return;
+  }
+  
+  $("loverlay").style.display = "flex";
+  $("ltext").textContent = t("loading");
+  
+  $("regName").value = "";
+  $("regPhone").value = "";
+  
+  try {
+    const docRef = doc(db, "registered_users", userId);
+    const snap = await getDoc(docRef);
+    
+    if (snap.exists()) {
+      isAlreadyRegistered = true;
+      const data = snap.data();
+      $("regName").value = data.name || "";
+      $("regPhone").value = data.phone || "";
+      $("regIntroCard").style.display = "none";
+      $("regTitle").textContent = t("alreadyRegistered");
+    } else {
+      isAlreadyRegistered = false;
+      $("regIntroCard").style.display = "block";
+      $("regTitle").textContent = t("registerProfile");
+      
+      const bookSnap = await getDocs(query(
+        collection(db, "bookings"),
+        where("lineUserId", "==", userId),
+        orderBy("createdAt", "desc"),
+        limit(1)
+      ));
+      
+      if (!bookSnap.empty) {
+        const latest = bookSnap.docs[0].data();
+        $("regName").value = latest.customerName || "";
+        $("regPhone").value = latest.customerPhone || "";
+      } else {
+        if (state.lineProfile.displayName !== "Guest") {
+          $("regName").value = state.lineProfile.displayName;
+        }
+      }
+    }
+    
+    showView("viewRegister");
+  } catch (e) {
+    console.error("Error opening register view:", e);
+    showToast(t("failedLoad"), true);
+  } finally {
+    $("loverlay").style.display = "none";
+  }
+}
+
+async function saveRegisterProfile() {
+  const userId = state.lineProfile.userId;
+  const name = $("regName").value.trim();
+  const phone = $("regPhone").value.trim();
+  
+  if (!name) {
+    showToast(t("nameRequired"), true);
+    $("regName").focus();
+    return;
+  }
+  if (!phone) {
+    showToast(t("phoneRequired"), true);
+    $("regPhone").focus();
+    return;
+  }
+  
+  const btn = $("btnSaveRegister");
+  btn.disabled = true;
+  btn.textContent = t("saving");
+  
+  try {
+    const docRef = doc(db, "registered_users", userId);
+    const data = {
+      lineUserId: userId,
+      lineDisplayName: state.lineProfile.displayName || "",
+      pictureUrl: state.lineProfile.pictureUrl || null,
+      name,
+      phone,
+      phoneNormalized: normalizePhone(phone),
+      updatedAt: serverTimestamp(),
+      source: "liff_register"
+    };
+    
+    if (!isAlreadyRegistered) {
+      data.createdAt = serverTimestamp();
+    }
+    
+    await setDoc(docRef, data, { merge: true });
+    
+    showToast(isAlreadyRegistered ? t("regUpdateSuccess") : t("regSuccess"));
+    showView("viewHome");
+  } catch (e) {
+    console.error("Save registration error:", e);
+    showToast(t("bookingFailed"), true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = t("registerSubmit");
+  }
 }
 
 // ── BOOKING VIEW ────────────────────────────────────────────────
