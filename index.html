@@ -324,7 +324,7 @@
         <div class="slabel" data-i18n="paymentType">Payment Type</div>
         <div class="ptgrid">
           <button class="ptbtn on" data-pt="single"><span class="pt-name" data-i18n="singleUse">Single Use</span><small class="pt-sub">฿350</small></button>
-          <button class="ptbtn" data-pt="ultra" id="ptUltra" disabled><span class="pt-name" data-i18n="ultraPass">Ultra Pass</span><small class="pt-sub" id="ptUltraSub">No active pass</small></button>
+          <button class="ptbtn" data-pt="ultra" id="ptUltra" disabled><span class="pt-name" data-i18n="usePackage">Use Package</span><small class="pt-sub" id="ptUltraSub">No active pass</small></button>
           <button class="ptbtn" data-pt="offpeak" id="ptOffpeak" disabled><span class="pt-name" data-i18n="offPeak">Off-Peak</span><small class="pt-sub" id="ptOffpeakSub">No active pass</small></button>
         </div>
       </div>
@@ -666,7 +666,9 @@ const I18N = {
     ultraMinLeft:"เหลือ {min} นาที",
     validUntil:"ใช้ได้ถึง {date}",
     noPassOption:"ยังไม่มีแพ็กเกจสำหรับตัวเลือกนี้",
-    passNoteUltra:"หัก 60 นาทีจาก Ultra Pass",
+    passNoteUltra:"หัก 60 นาทีจาก {packageName}",
+    usePackage:"ใช้แพ็กเกจ",
+    usePackageSub:"{name} · เหลือ {min} นาที",
     passNoteOffpeak:"หัก 1 ครั้งจาก Off-Peak Pass",
     selectFile:"กรุณาเลือกไฟล์",
     imageOnly:"กรุณาอัปโหลดรูปภาพ (JPG, PNG)",
@@ -788,7 +790,9 @@ const I18N = {
     ultraMinLeft:"{min} min left",
     validUntil:"Valid until {date}",
     noPassOption:"No active pass for this option.",
-    passNoteUltra:"60 min deducted from Ultra Pass",
+    passNoteUltra:"60 minutes deducted from {packageName}",
+    usePackage:"Use Package",
+    usePackageSub:"{name} · {min} min left",
     passNoteOffpeak:"1 session deducted from Off-Peak Pass",
     selectFile:"Please select a file",
     imageOnly:"Please upload an image (JPG, PNG)",
@@ -1325,7 +1329,7 @@ function updatePaymentTypeButtons() {
   });
 
   $("ptUltraSub").textContent = el.hasUltra
-    ? t("ultraMinLeft",{min:el.ultraPkg.remainingMinutes})
+    ? t("usePackageSub",{name:el.ultraPkg.packageName, min:el.ultraPkg.remainingMinutes})
     : t("noActivePass");
   $("ptOffpeakSub").textContent = el.hasOffpeak
     ? t("validUntil",{date:el.offpeakPkg.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—"})
@@ -1343,9 +1347,11 @@ function updateBookingPriceNote(){
     $("bkNote2").textContent=t("paymentDue");
   } else {
     $("bkPrice").textContent="฿0 (Pass)";
-    $("bkNote2").textContent=state.bookingPaymentType==="ultra"
-      ? t("passNoteUltra")
-      : t("passNoteOffpeak");
+    if(state.bookingPaymentType==="ultra" && state.eligibility.ultraPkg) {
+      $("bkNote2").textContent=t("passNoteUltra",{packageName:state.eligibility.ultraPkg.packageName});
+    } else {
+      $("bkNote2").textContent=t("passNoteOffpeak");
+    }
   }
 }
 
@@ -1388,10 +1394,11 @@ $("confirmBkBtn").addEventListener("click", async()=>{
     const expiresAt = isSingle ? new Date(Date.now()+PAY_MINS*60*1000) : null;
     const expiresTS = isSingle ? Timestamp.fromDate(expiresAt) : null;
 
+    const selectedPkg = payType==="ultra" ? state.eligibility.ultraPkg : null;
     const bookingPayload = {
       bookingCode:             code,
       resourceId:              RESOURCE_ID,
-      bookingType:             isSingle?singleType:payType==="ultra"?"Ultra Pass":"Off-Peak Pass",
+      bookingType:             isSingle ? singleType : payType==="ultra" ? (selectedPkg?.packageName || "Package Booking") : "Off-Peak Pass",
       lineUserId:              state.lineProfile.userId,
       lineDisplayName:         state.lineProfile.displayName,
       customerName:            name,
@@ -1408,6 +1415,15 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       paymentExpiresAt:        expiresTS,
       slipUrl:                 null, slipUploadedAt:null, cancelReason:null,
     };
+
+    if (payType==="ultra" && selectedPkg) {
+      bookingPayload.packageId = selectedPkg.id;
+      bookingPayload.packageType = selectedPkg.packageType;
+      bookingPayload.packageName = selectedPkg.packageName;
+      bookingPayload.usedPackageId = selectedPkg.id;
+      bookingPayload.usedPackageType = selectedPkg.packageType;
+      bookingPayload.usedPackageName = selectedPkg.packageName;
+    }
 
     const bookingRef = doc(collection(db,"bookings"));
     const slotRef    = doc(db,"booking_slots",slotDocId);
