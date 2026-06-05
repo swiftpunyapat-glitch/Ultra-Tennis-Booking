@@ -249,8 +249,8 @@ async function handleAccountingEdit({ res, adminName, db, booking, bookingRef, b
   switch (accountingType) {
     case 'normal_paid':
       accountingFields = {
-        bookingStatus:            requestedBookingStatus || 'confirmed',
-        status:                   requestedBookingStatus || 'confirmed',
+        bookingStatus:            requestedBookingStatus || booking.bookingStatus || 'confirmed',
+        status:                   requestedBookingStatus || booking.bookingStatus || 'confirmed',
         paymentStatus:            'paid',
         price,
         packageType:              null,
@@ -263,8 +263,8 @@ async function handleAccountingEdit({ res, adminName, db, booking, bookingRef, b
 
     case 'normal_unpaid':
       accountingFields = {
-        bookingStatus:            requestedBookingStatus || 'confirmed',
-        status:                   requestedBookingStatus || 'confirmed',
+        bookingStatus:            requestedBookingStatus || booking.bookingStatus || 'confirmed',
+        status:                   requestedBookingStatus || booking.bookingStatus || 'confirmed',
         paymentStatus:            'unpaid',
         price,
         packageType:              null,
@@ -295,8 +295,8 @@ async function handleAccountingEdit({ res, adminName, db, booking, bookingRef, b
 
     case 'ultra_pass_1':
       accountingFields = {
-        bookingStatus:            requestedBookingStatus || 'confirmed',
-        status:                   requestedBookingStatus || 'confirmed',
+        bookingStatus:            requestedBookingStatus || booking.bookingStatus || 'confirmed',
+        status:                   requestedBookingStatus || booking.bookingStatus || 'confirmed',
         paymentStatus:            'package',
         bookingType:              'Ultra Pass 1',
         packageType:              'ultra_10',
@@ -310,8 +310,8 @@ async function handleAccountingEdit({ res, adminName, db, booking, bookingRef, b
 
     case 'ultra_pass_2':
       accountingFields = {
-        bookingStatus:            requestedBookingStatus || 'confirmed',
-        status:                   requestedBookingStatus || 'confirmed',
+        bookingStatus:            requestedBookingStatus || booking.bookingStatus || 'confirmed',
+        status:                   requestedBookingStatus || booking.bookingStatus || 'confirmed',
         paymentStatus:            'package',
         bookingType:              'Ultra Pass 2',
         packageType:              'ultra_20',
@@ -325,8 +325,8 @@ async function handleAccountingEdit({ res, adminName, db, booking, bookingRef, b
 
     case 'influencer_free':
       accountingFields = {
-        bookingStatus:            requestedBookingStatus || 'confirmed',
-        status:                   requestedBookingStatus || 'confirmed',
+        bookingStatus:            requestedBookingStatus || booking.bookingStatus || 'confirmed',
+        status:                   requestedBookingStatus || booking.bookingStatus || 'confirmed',
         paymentStatus:            'package',
         bookingType:              'Influencer Free',
         packageType:              null,
@@ -414,11 +414,15 @@ async function handleAccountingEdit({ res, adminName, db, booking, bookingRef, b
   try {
     const slotSnap = await slotRef.get();
     if (slotSnap.exists) {   // Admin SDK: .exists is a boolean property, not a method
-      batch.update(slotRef, {
-        paymentStatus: accountingFields.paymentStatus,
-        bookingStatus: accountingFields.bookingStatus || booking.bookingStatus,
-        updatedAt:     FieldValue.serverTimestamp(),
-      });
+      const slotData = slotSnap.data();
+      const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+      if (ownsSlot) {
+        batch.update(slotRef, {
+          paymentStatus: accountingFields.paymentStatus,
+          bookingStatus: accountingFields.bookingStatus || booking.bookingStatus,
+          updatedAt:     FieldValue.serverTimestamp(),
+        });
+      }
     }
   } catch (e) {
     console.error('[acct-edit] slot read (non-fatal):', e.message);
@@ -540,11 +544,15 @@ async function handleRefund({ res, adminName, db, booking, bookingRef, bookingId
     try {
       const slotSnap = await slotRef.get();
       if (slotSnap.exists) {   // Admin SDK: .exists is a boolean property, not a method
-        batch.update(slotRef, {
-          bookingStatus: 'cancelled',
-          paymentStatus: 'refunded',   // distinct from normal "rejected" cancels
-          updatedAt:     FieldValue.serverTimestamp(),
-        });
+        const slotData = slotSnap.data();
+        const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+        if (ownsSlot) {
+          batch.update(slotRef, {
+            bookingStatus: 'cancelled',
+            paymentStatus: 'refunded',   // distinct from normal "rejected" cancels
+            updatedAt:     FieldValue.serverTimestamp(),
+          });
+        }
         // NOTE: available_slots intentionally NOT reopened — machine/safety incidents
         // warrant admin review before the slot is offered again (use Slot Manager).
       }
@@ -585,6 +593,16 @@ async function handleMarkPaid({ res, adminName, db, booking, bookingRef, booking
   const slotRef = db.collection('booking_slots').doc(slotId);
 
   try {
+    const slotSnap = await slotRef.get();
+    if (!slotSnap.exists) {
+      return res.status(409).json({ ok: false, error: 'Slot does not exist' });
+    }
+    const slotData = slotSnap.data();
+    const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+    if (!ownsSlot) {
+      return res.status(409).json({ ok: false, error: 'Conflict: Slot is owned by another booking' });
+    }
+
     const batch = db.batch();
     batch.update(bookingRef, {
       paymentStatus:   'paid',

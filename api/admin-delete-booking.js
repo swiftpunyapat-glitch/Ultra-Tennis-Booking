@@ -179,7 +179,8 @@ export default async function handler(req, res) {
         console.log(`[admin-delete-booking] booking_slot ${slotId} — not found, skipped`);
       } else {
         const slotData = slotSnap.data();
-        if (slotData.bookingCode === bookingCode) {
+        const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === bookingCode;
+        if (ownsSlot) {
           await slotRef.delete();
           console.log(`[admin-delete-booking] booking_slot deleted: ${slotId}`);
         } else {
