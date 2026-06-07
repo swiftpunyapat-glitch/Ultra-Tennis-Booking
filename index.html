@@ -932,6 +932,7 @@ function getMonthKey(date) {
 
 // ── LIFF INIT ───────────────────────────────────────────────────
 async function initLiff() {
+  const tStart = performance.now();
   $("ltext").textContent=t("connectingLine");
   try {
     await liff.init({ liffId:LIFF_ID });
@@ -944,22 +945,85 @@ async function initLiff() {
   if(state.lineProfile.pictureUrl) av.innerHTML=`<img src="${state.lineProfile.pictureUrl}" alt="Avatar"/>`;
   else av.textContent = state.lineProfile.displayName.charAt(0).toUpperCase();
 
-  $("ltext").textContent=t("loadingPass");
-  try {
-    const pDoc = await getDoc(doc(db, "system_settings", "pricing"));
-    if (pDoc.exists()) {
-      state.pricing = pDoc.data();
-    }
-  } catch(e) {
-    console.warn("Failed to load pricing config on app init:", e);
-  }
+  // Set default pricing text first, then immediately hide loading screen
   updateHomeSingleUsePricing();
-  await checkEligibility();
-
   $("loverlay").style.display="none";
   $("shell").style.display="block";
-  showView("viewHome");
+
+  // Fetch pricing config asynchronously in the background
+  const fetchPricingPromise = (async () => {
+    try {
+      console.log("[perf] Fetching pricing config asynchronously...");
+      const t0 = performance.now();
+      const pDoc = await getDoc(doc(db, "system_settings", "pricing"));
+      if (pDoc.exists()) {
+        state.pricing = pDoc.data();
+        updateHomeSingleUsePricing();
+        console.log(`[perf] Async pricing config loaded in ${(performance.now() - t0).toFixed(1)}ms`);
+      }
+    } catch(e) {
+      console.warn("Failed to load pricing config on app init:", e);
+    }
+  })();
+
+  // Recover pending payment screen if app reloaded during customer checkout
+  const pendingRaw = localStorage.getItem("ut_pending_booking");
+  let restored = false;
+  if (pendingRaw) {
+    try {
+      const pending = JSON.parse(pendingRaw);
+      const now = Date.now();
+      if (pending && pending.expiresAt > now) {
+        console.log("[perf] Found pending booking in cache. Checking document status...");
+        const t0 = performance.now();
+        const bDoc = await getDoc(doc(db, "bookings", pending.docId));
+        console.log(`[perf] Verified booking status in ${(performance.now() - t0).toFixed(1)}ms`);
+        if (bDoc.exists()) {
+          const bData = bDoc.data();
+          const dbExpiresAt = bData.paymentExpiresAt?.toDate?.() || (bData.paymentExpiresAt ? new Date(bData.paymentExpiresAt) : null);
+          const isUnexpired = dbExpiresAt ? dbExpiresAt.getTime() > now : pending.expiresAt > now;
+          const isCorrectUser = bData.lineUserId === state.lineProfile.userId;
+          const isPending = bData.bookingStatus === "pending_payment";
+
+          if (isPending && isCorrectUser && isUnexpired) {
+            console.log("[perf] Booking is still pending payment and user/expiry are valid. Restoring payment panel view.");
+            state.paymentMode = "booking";
+            state.currentBookingCode = pending.code;
+            state.currentBookingDocId = pending.docId;
+            state.currentBookingData = { ...bData, expiresAt: dbExpiresAt || new Date(pending.expiresAt) };
+            showPaymentPanel(
+              pending.code,
+              pending.price,
+              dbExpiresAt || new Date(pending.expiresAt),
+              pending.date,
+              `${pending.startTime} – ${pending.endTime}`,
+              pending.isLN
+            );
+            showView("viewPayment");
+            restored = true;
+          } else {
+            console.log("[perf] Verification failed (Pending:", isPending, "User:", isCorrectUser, "Unexpired:", isUnexpired, "). Clearing cache.");
+            localStorage.removeItem("ut_pending_booking");
+          }
+        } else {
+          console.log("[perf] Booking document does not exist in Firestore. Clearing cache.");
+          localStorage.removeItem("ut_pending_booking");
+        }
+      } else {
+        console.log("[perf] Cached pending booking has expired. Clearing cache.");
+        localStorage.removeItem("ut_pending_booking");
+      }
+    } catch (e) {
+      console.warn("Failed to restore pending booking status:", e);
+      localStorage.removeItem("ut_pending_booking");
+    }
+  }
+
+  if (!restored) {
+    showView("viewHome");
+  }
   setupNav();
+  console.log(`[perf] LIFF initialization & boot complete in ${(performance.now() - tStart).toFixed(1)}ms`);
 }
 
 // ── ELIGIBILITY ─────────────────────────────────────────────────
@@ -1286,21 +1350,42 @@ async function openBookingView() {
   state.time=null;
   state.bookingPaymentType="single";
   state.dateOffset=0;
+
+  // Set visual loading state on pass buttons while eligibility loads
+  const uBtn = $("ptUltra"), oBtn = $("ptOffpeak");
+  if (uBtn) uBtn.disabled = true;
+  if (oBtn) oBtn.disabled = true;
+  if ($("ptUltraSub")) $("ptUltraSub").textContent = t("loading");
+  if ($("ptOffpeakSub")) $("ptOffpeakSub").textContent = t("loading");
+
   showView("viewBooking");
   buildDates();
 
-  try {
-    const pDoc = await getDoc(doc(db, "system_settings", "pricing"));
-    if (pDoc.exists()) {
-      state.pricing = pDoc.data();
+  if (!state.pricing) {
+    console.log("[perf] Fetching pricing config...");
+    try {
+      const pDoc = await getDoc(doc(db, "system_settings", "pricing"));
+      if (pDoc.exists()) {
+        state.pricing = pDoc.data();
+      }
+    } catch(e) {
+      console.warn("Failed to load pricing config on booking view open:", e);
     }
-  } catch(e) {
-    console.warn("Failed to load pricing config on booking view open:", e);
+  } else {
+    console.log("[perf] Using cached pricing config");
   }
 
   updatePromoBanner();
   updateHomeSingleUsePricing();
-  loadSlotsAndRender(getSelectedDateISO());
+
+  // Load slots and eligibility concurrently to improve performance
+  const t0 = performance.now();
+  await Promise.all([
+    loadSlotsAndRender(getSelectedDateISO()),
+    checkEligibility()
+  ]);
+  console.log(`[perf] Slots & eligibility loaded in ${(performance.now() - t0).toFixed(1)}ms`);
+
   updatePaymentTypeButtons();
   updateBookingConfirmBtn();
 
@@ -1689,8 +1774,13 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       // ── Writes ────────────────────────────────────────────────
       t.set(bookingRef,{ ...bookingPayload, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
       t.set(slotRef,{
-        bookingCode:code, resourceId:RESOURCE_ID, date:dateISO, hour:state.time,
-        bookingStatus:bookingPayload.bookingStatus, paymentStatus:bookingPayload.paymentStatus,
+        bookingCode:code,
+        bookingId:bookingRef.id,
+        resourceId:RESOURCE_ID,
+        date:dateISO,
+        hour:state.time,
+        bookingStatus:bookingPayload.bookingStatus,
+        paymentStatus:bookingPayload.paymentStatus,
         expiresAt:expiresTS,
       });
     });
@@ -1715,6 +1805,24 @@ $("confirmBkBtn").addEventListener("click", async()=>{
 
     if(isSingle){
       state.paymentMode="booking";
+
+      // Save pending booking state in localStorage to survive potential page reloads
+      try {
+        localStorage.setItem("ut_pending_booking", JSON.stringify({
+          code: code,
+          docId: bookingRef.id,
+          expiresAt: expiresAt.getTime(),
+          date: dateISO,
+          startTime: state.time,
+          endTime: endTime,
+          price: singlePrice,
+          isLN: isLN
+        }));
+        console.log("[perf] Stored pending booking state in localStorage:", code);
+      } catch (err) {
+        console.warn("Failed to store pending booking in localStorage:", err);
+      }
+
       showPaymentPanel(code, singlePrice, expiresAt, dateISO, `${state.time} – ${endTime}`, isLN);
       showView("viewPayment");
     } else {
@@ -1816,8 +1924,11 @@ $("submitSlipBtn").addEventListener("click", async()=>{
   if(file.size>5*1024*1024){ showToast(t("fileTooLarge"),true); return; }
 
   const btn=$("submitSlipBtn"); btn.disabled=true; btn.textContent=t("uploading");
-  let didTimeout=false;
-  const tid=setTimeout(()=>{ didTimeout=true; showToast(t("uploadTimeout"),true); btn.disabled=false; btn.textContent=t("submitSlip"); },20000);
+  
+  // Show a warning if it takes longer than 25 seconds, but do NOT abort the upload process
+  const warningTimer = setTimeout(() => {
+    btn.textContent = currentLang === "th" ? "กำลังอัปโหลด กรุณารอสักครู่..." : "Still uploading, please wait...";
+  }, 25000);
 
   try {
     const ts=Date.now();
@@ -1829,26 +1940,50 @@ $("submitSlipBtn").addEventListener("click", async()=>{
 
     const ref=sRef(storage,path);
     await uploadBytes(ref,file);
-    if(didTimeout) return;
     console.log("Upload complete");
 
     const url=await getDownloadURL(ref);
-    if(didTimeout) return;
     console.log("Download URL received");
-
-    clearTimeout(tid);
 
     if(isPass){
       const pRef=doc(db,"pass_purchases",state.currentPurchaseDocId);
       await updateDoc(pRef,{ status:"pending_review", paymentStatus:"pending_review", slipUrl:url, slipUploadedAt:serverTimestamp(), updatedAt:serverTimestamp() });
       console.log("Pass purchase updated");
+      clearTimeout(warningTimer);
       showSuccess("📨",t("slipReceived"),code,t("passPending"));
     } else {
-      const bRef=doc(db,"bookings",state.currentBookingDocId);
-      await updateDoc(bRef,{ bookingStatus:"confirmed", paymentStatus:"pending_review", slipUrl:url, slipUploadedAt:serverTimestamp(), updatedAt:serverTimestamp() });
       const slotId=`${RESOURCE_ID}_${state.currentBookingData.date}_${state.currentBookingData.startTime.replace(":","")}`; 
-      await updateDoc(doc(db,"booking_slots",slotId),{ bookingStatus:"confirmed", paymentStatus:"pending_review" });
+      await runTransaction(db, async (t) => {
+        const slotRef = doc(db, "booking_slots", slotId);
+        const bookingRef = doc(db, "bookings", state.currentBookingDocId);
+        const slotSnap = await t.get(slotRef);
+        if (!slotSnap.exists()) {
+          throw new Error("Hold expired and slot has been rebooked.");
+        }
+        const slotData = slotSnap.data();
+        const ownsSlot = slotData.bookingId === state.currentBookingDocId || slotData.bookingCode === state.currentBookingCode;
+        if (!ownsSlot) {
+          throw new Error("Hold expired and slot has been rebooked.");
+        }
+        t.update(bookingRef, {
+          bookingStatus: "confirmed",
+          paymentStatus: "pending_review",
+          slipUrl: url,
+          slipUploadedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+        t.update(slotRef, {
+          bookingStatus: "confirmed",
+          paymentStatus: "pending_review"
+        });
+      });
       console.log("Booking + slot updated");
+      clearTimeout(warningTimer);
+      
+      // Clear recovered booking state from localStorage since it was successfully submitted
+      localStorage.removeItem("ut_pending_booking");
+      console.log("[perf] Cleared pending booking cache from localStorage");
+
       // Fire-and-forget: notify admins a slip was uploaded. Must not block the
       // success screen — no await, no error surfaced.
       if (window.notifyAdmins) {
@@ -1867,7 +2002,7 @@ $("submitSlipBtn").addEventListener("click", async()=>{
     showView("viewSuccess");
 
   } catch(e){
-    clearTimeout(tid); if(didTimeout) return;
+    clearTimeout(warningTimer);
     console.error("Slip upload failed:",e);
     showToast(e.message||t("uploadFailed"),true);
     btn.disabled=false; btn.textContent=t("submitSlip");
@@ -1883,13 +2018,12 @@ async function openMyBookings() {
     const uid=state.lineProfile.userId;
 
     const [bookSnap, pkgSnap, purchSnap] = await Promise.all([
-      getDocs(query(collection(db,"bookings"), where("lineUserId","==",uid))),
+      getDocs(query(collection(db,"bookings"), where("lineUserId","==",uid), orderBy("createdAt","desc"), limit(20))),
       getDocs(query(collection(db,"customer_packages"), where("lineUserId","==",uid), where("status","==","active"))),
       getDocs(query(collection(db,"pass_purchases"), where("lineUserId","==",uid))),
     ]);
 
-    const bookings = bookSnap.docs.map(d=>({id:d.id,...d.data()}))
-      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    const bookings = bookSnap.docs.map(d=>({id:d.id,...d.data()}));
     const packages = pkgSnap.docs.map(d=>({id:d.id,...d.data()}));
     const purchases= purchSnap.docs.map(d=>({id:d.id,...d.data()}))
       .filter(p=>p.status==="pending_payment"||p.status==="pending_review")
@@ -1993,6 +2127,24 @@ window.resumeBookingPayment = async(docId)=>{
     state.currentBookingDocId=b.id;
     state.currentBookingData=b;
     const exp=b.paymentExpiresAt?.toDate?.()||new Date();
+
+    // Store in localStorage to survive reloads during checkout
+    try {
+      localStorage.setItem("ut_pending_booking", JSON.stringify({
+        code: b.bookingCode,
+        docId: b.id,
+        expiresAt: exp.getTime(),
+        date: b.date,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        price: b.price || 350,
+        isLN: b.pricingMode === "late_night" || b.paymentQrType === "late_night"
+      }));
+      console.log("[perf] Stored resumed pending booking in localStorage:", b.bookingCode);
+    } catch (err) {
+      console.warn("Failed to store pending booking in localStorage:", err);
+    }
+
     showPaymentPanel(b.bookingCode,b.price||350,exp,b.date||"—",`${b.startTime||"—"}–${b.endTime||"—"}`);
     showView("viewPayment");
   } catch(e){ showToast(t("couldNotLoadBooking"),true); }
