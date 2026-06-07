@@ -845,6 +845,13 @@ const normalizePhone = p => String(p||"").replace(/\D/g,"");
 function canNotifyLine(lineUserId) {
   return !!lineUserId && lineUserId !== "guest" && lineUserId !== "manual";
 }
+function formatLocalISODate(d){
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+function todayLocalISO(){
+  return formatLocalISODate(new Date());
+}
 
 function isLiveBookedSlot(slotData, now = new Date()) {
   if (!slotData) return false;
@@ -938,6 +945,10 @@ document.querySelectorAll(".tab").forEach(btn=>{
     $("tabPromo").style.display     =btn.dataset.tab==="promo"     ?"block":"none";
     if(btn.dataset.tab==="passes")   loadActivePasses();
     if(btn.dataset.tab==="daily")    loadDailyView();
+    if(btn.dataset.tab==="slots")    {
+      if(!$("viewDate").value) $("viewDate").value = todayLocalISO();
+      loadSlotGrid($("viewDate").value);
+    }
     if(btn.dataset.tab==="slips")    renderSlipReview();
     if(btn.dataset.tab==="pending")  renderPendingTab();
     if(btn.dataset.tab==="customers") renderCustomerListTab();
@@ -1082,6 +1093,8 @@ function renderPendingTab(){
         </div>
         <div class="acts">
           <button class="smbtn smg" data-pt-assign="${esc(b.id)}">📅 Assign New Slot</button>
+          <button class="bc" style="background:#2d1e00;border-color:var(--warn);color:var(--warn)" data-pt-cancel-pending="${esc(b.id)}">✕ Cancel Pending</button>
+          ${currentAdminName==="Art"?`<button class="bc" style="background:#5a0a0a" data-pt-delete="${esc(b.id)}">🗑 Delete Permanently</button>`:""}
         </div>
       </div>
     </div>`;
@@ -1089,6 +1102,14 @@ function renderPendingTab(){
   el.querySelectorAll("[data-pt-assign]").forEach(btn=>{
     const bk=pending.find(x=>x.id===btn.dataset.ptAssign);
     if(bk) btn.addEventListener("click",()=>openResch(bk));
+  });
+  el.querySelectorAll("[data-pt-cancel-pending]").forEach(btn=>{
+    const bk=pending.find(x=>x.id===btn.dataset.ptCancelPending);
+    if(bk) btn.addEventListener("click",()=>cancelPendingReschedule(bk));
+  });
+  el.querySelectorAll("[data-pt-delete]").forEach(btn=>{
+    const bk=pending.find(x=>x.id===btn.dataset.ptDelete);
+    if(bk) btn.addEventListener("click",()=>permanentDeleteBooking(bk));
   });
 }
 
@@ -1314,7 +1335,7 @@ async function permanentDeleteBooking(b){
   if(!step1) return;
   const typed=prompt("Type  DELETE  (all caps) to confirm permanent deletion:");
   if(typed!=="DELETE"){showToast("Cancelled — type DELETE exactly to confirm.",true);return;}
-  const btn=document.querySelector(`[data-delete="${b.id}"]`);
+  const btn=document.querySelector(`[data-delete="${b.id}"]`) || document.querySelector(`[data-pt-delete="${b.id}"]`);
   if(btn){btn.disabled=true;btn.textContent="Deleting…";}
   try{
     const res=await fetch("/api/admin-delete-booking",{
@@ -1326,6 +1347,7 @@ async function permanentDeleteBooking(b){
     if(data.ok){
       showToast(`🗑 ${b.bookingCode||"Booking"} permanently deleted`);
       await loadBookings();
+      if ($("tabPending").style.display !== "none") renderPendingTab();
     }else{
       showToast(data.error||"Delete failed.",true);
       if(btn){btn.disabled=false;btn.textContent="🗑 Delete Permanently";}
@@ -1716,7 +1738,7 @@ const allH=()=>{const h=[];for(let i=OPEN_HOUR;i<CLOSE_HOUR;i++)h.push(i);return
 const slId=(date,h)=>`${RESOURCE_ID}_${date}_${String(h).padStart(2,"0")}00`;
 const fH=h=>`${String(h).padStart(2,"0")}:00`;
 const fEnd=h=>h+1>=24?"00:00":`${String(h+1).padStart(2,"0")}:00`;
-function dateRange(s,n){const d=[],b=new Date(s+"T00:00:00");for(let i=0;i<n;i++){const x=new Date(b);x.setDate(b.getDate()+i);d.push(x.toISOString().slice(0,10));}return d;}
+function dateRange(s,n){const d=[],b=new Date(s+"T00:00:00");for(let i=0;i<n;i++){const x=new Date(b);x.setDate(b.getDate()+i);d.push(formatLocalISODate(x));}return d;}
 
 async function setSlots(dates,close=false,hours=null){
   // hours defaults to allH() (06:00–00:00). Pass LN_HOURS for late night only.
@@ -2199,7 +2221,7 @@ $("minConfirm").addEventListener("click",async()=>{
 
 // Set valid from to today by default when tab opens
 document.querySelector("[data-tab='passes']").addEventListener("click",()=>{
-  if(!$("validFromDate").value) $("validFromDate").value=new Date().toISOString().slice(0,10);
+  if(!$("validFromDate").value) $("validFromDate").value=todayLocalISO();
   loadActivePasses();
 });
 
@@ -2316,6 +2338,12 @@ async function loadDailyView(){
         if(bk) cancelBooking(bk); else showToast("Booking not found.",true);
       });
     });
+    $("dvList").querySelectorAll("[data-dv-alert]").forEach(b=>{
+      b.addEventListener("click",()=>{
+        const bk=bookingByCode[b.dataset.dvAlert];
+        if(bk) openAlertModal(bk); else showToast("Booking not found.",true);
+      });
+    });
   } catch(e){
     console.error(e);
     $("dvList").innerHTML=`<div class="estate">❌ Failed to load Daily View.</div>`;
@@ -2345,7 +2373,12 @@ function renderDailyRow(r,lookupHistory){
     </div>`;
     const canResch=!["cancelled","expired","completed","no_show"].includes(booking.bookingStatus);
     const canCancel=booking.bookingStatus!=="cancelled"&&booking.paymentStatus!=="paid";
+    const hasLine=canNotifyLine(booking.lineUserId);
+    const alertBtn=hasLine
+      ? `<button class="stoggle st-open" data-dv-alert="${esc(booking.bookingCode)}" style="padding:4px 9px;font-size:.7rem">Alert</button>`
+      : `<button class="stoggle st-dis" disabled title="No LINE ID linked" style="padding:4px 9px;font-size:.7rem">No LINE</button>`;
     actions = `<div class="dv-actions">
+      ${alertBtn}
       ${canResch?`<button class="stoggle st-open" data-dv-resch="${esc(booking.bookingCode)}" style="padding:4px 9px;font-size:.7rem">Reschedule</button>`:""}
       ${canCancel?`<button class="stoggle st-close" data-dv-cancel="${esc(booking.bookingCode)}" style="padding:4px 9px;font-size:.7rem">Cancel</button>`:""}
     </div>`;
@@ -2924,6 +2957,109 @@ $("mConfirm").addEventListener("click",async()=>{
   }catch(e){console.error(e);showToast(e.message||"Reschedule failed.",true);btn.disabled=false;btn.textContent=wasPendingReschedule?"Assign New Slot":"Confirm Reschedule";}
 });
 
+async function cancelPendingReschedule(b) {
+  if (!b) return;
+  const origDate = b.pendingRescheduleFromDate || b.previousDate || b.date;
+  const origStart = b.pendingRescheduleFromStartTime || b.previousStartTime || b.startTime;
+  const origEnd = b.pendingRescheduleFromEndTime || b.previousEndTime || b.endTime;
+
+  const msg = `Cancel Pending Reschedule for ${b.bookingCode}?\n\n` +
+    `This will attempt to restore the booking back to its original slot:\n` +
+    `${origDate} from ${origStart} to ${origEnd}.\n\n` +
+    `If the slot is no longer open or occupied by another booking, the booking will remain pending reschedule.`;
+
+  if (!confirm(msg)) return;
+
+  const btn = document.querySelector(`[data-pt-cancel-pending="${b.id}"]`);
+  const originalText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Checking...";
+  }
+
+  try {
+    const slotId = `${RESOURCE_ID}_${origDate}_${origStart?.replace(":", "")}`;
+    const slotRef = doc(db, "booking_slots", slotId);
+    const availRef = doc(db, "available_slots", slotId);
+
+    let restoreSuccess = false;
+
+    await runTransaction(db, async t => {
+      const [availSnap, slotSnap] = await Promise.all([
+        t.get(availRef),
+        t.get(slotRef)
+      ]);
+
+      const slotOpen = availSnap.exists() && availSnap.data().status === "open";
+      const slotNotOccupiedByOther = !slotSnap.exists() || 
+        !isLiveBookedSlot(slotSnap.data()) || 
+        slotSnap.data().bookingId === b.id || 
+        slotSnap.data().bookingCode === b.bookingCode;
+
+      if (origDate && origStart && origEnd && slotOpen && slotNotOccupiedByOther) {
+        restoreSuccess = true;
+        t.set(slotRef, {
+          bookingCode: b.bookingCode,
+          bookingId: b.id,
+          resourceId: RESOURCE_ID,
+          date: origDate,
+          hour: origStart,
+          bookingStatus: "confirmed",
+          paymentStatus: b.paymentStatus,
+          expiresAt: null,
+          updatedAt: serverTimestamp()
+        });
+        t.update(doc(db, "bookings", b.id), {
+          date: origDate,
+          startTime: origStart,
+          endTime: origEnd,
+          bookingStatus: "confirmed",
+          pendingReschedule: false,
+          pendingRescheduleStatus: "cancelled_restored",
+          cancelledRestoredAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        restoreSuccess = false;
+        console.log(`[Cancel Pending] Restoration skipped for booking ${b.bookingCode}. Reason: Slot ${origDate} ${origStart} is occupied, closed, or holiday.`);
+      }
+    });
+
+    if (restoreSuccess) {
+      if (b.paymentStatus === "paid" && !b.googleCalendarEventId) {
+        try {
+          const calBooking = { ...b, date: origDate, startTime: origStart, endTime: origEnd, bookingStatus: "confirmed" };
+          const gcalResult = await callGcal({ action: "create", booking: calBooking });
+          if (gcalResult.ok) {
+            await updateDoc(doc(db, "bookings", b.id), {
+              googleCalendarEventId: gcalResult.eventId,
+              googleCalendarHtmlLink: gcalResult.htmlLink,
+              googleCalendarSyncStatus: "created",
+              googleCalendarSyncedAt: serverTimestamp()
+            });
+          }
+        } catch (gcalErr) {
+          console.error("[Cancel Pending] GCal sync error (booking was already restored):", gcalErr);
+        }
+      }
+      showToast(`✓ restored to ${origDate} ${origStart}`);
+    } else {
+      alert("Cannot restore original slot because it is no longer available. Please assign a new slot or handle cancellation/refund manually.");
+    }
+
+    await loadBookings();
+    if ($("tabPending").style.display !== "none") renderPendingTab();
+  } catch (e) {
+    console.error(e);
+    showToast(e.message || "Operation failed.", true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  }
+}
+
 // ── MARK PAID MODAL (unpaid manual bookings) ─────────────────────
 let markPaidBooking=null;
 
@@ -3002,7 +3138,12 @@ let alertCustomer=null;
 function openAlertModal(c){
   alertCustomer=c;
   $("alertCustName").textContent=c.customerName||"—";
-  $("alertCustMeta").textContent=`${c.customerPhone||"—"}${c.lineUserId?` · LINE: ${c.lineUserId.slice(0,16)}…`:" · No LINE ID"}`;
+  let meta = `${c.customerPhone||"—"}${c.lineUserId?` · LINE: ${c.lineUserId.slice(0,16)}…`:" · No LINE ID"}`;
+  if (c.bookingCode) {
+    meta += `\nBooking: ${c.bookingCode} · Play: ${c.date || "—"} ${c.startTime || "—"}–${c.endTime || "—"}`;
+  }
+  $("alertCustMeta").textContent=meta;
+  $("alertCustMeta").style.whiteSpace="pre-line";
   $("alertMessage").value="";
   const canSend=canNotifyLine(c.lineUserId);
   $("alertHint").textContent=canSend
@@ -3435,10 +3576,10 @@ function showToast(msg,isErr=false){
 }
 
 // ── BOOT ─────────────────────────────────────────────────────────
-const todayISO=new Date().toISOString().slice(0,10);
+const todayISO=todayLocalISO();
 ["weekDate","dayDate","viewDate","paidSummaryDate","lnDate"].forEach(id=>{const el=$(id);if(el)el.value=todayISO;});
 $("paidSummaryDate").addEventListener("change",renderPaidSummary);
-$("paidSummaryToday").addEventListener("click",()=>{$("paidSummaryDate").value=new Date().toISOString().slice(0,10);renderPaidSummary();});
+$("paidSummaryToday").addEventListener("click",()=>{$("paidSummaryDate").value=todayLocalISO();renderPaidSummary();});
 
 // ── MONTH FILTER WIRING ───────────────────────────────────────────
 // playMonthFilter is already set to currentMonthValue() by the let declaration above.
