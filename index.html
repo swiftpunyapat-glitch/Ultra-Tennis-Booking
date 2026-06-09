@@ -935,11 +935,17 @@ function getMonthKey(date) {
 function showLiffRecoveryUI() {
   const lt=$("ltext");
   if(lt){
-    lt.style.color="var(--danger)";
-    lt.style.maxWidth="300px";
+    lt.style.color="var(--ut-navy, #0b2742)";
+    lt.style.maxWidth="320px";
     lt.style.textAlign="center";
     lt.style.lineHeight="1.7";
-    lt.innerHTML='เชื่อมต่อ LINE ไม่สำเร็จ<br>กรุณากดโหลดใหม่อีกครั้ง<br><br><button onclick="location.reload()" style="padding:10px 22px;border-radius:8px;background:#1f7ae0;color:#fff;font-weight:800;font-size:.88rem;border:0;cursor:pointer">🔄 โหลดใหม่</button><br><br><a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener" style="font-size:.8rem;color:#1f7ae0;text-decoration:underline">💬 ทักแอดมิน</a>';
+    lt.innerHTML=
+      '<span style="color:var(--danger,#d94b4b);font-weight:800;font-size:.95rem">ระบบเชื่อมต่อ LINE นานผิดปกติ</span><br>' +
+      '<span style="font-size:.85rem">กรุณากลับไปที่หน้า LINE แล้วกด Book Now ใหม่อีกครั้ง</span><br><br>' +
+      '<a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener" ' +
+        'style="display:inline-block;padding:12px 24px;border-radius:8px;background:linear-gradient(135deg,#06c755,#00a041);color:#fff;font-weight:900;font-size:.95rem;text-decoration:none;box-shadow:0 8px 20px rgba(6,199,85,.30)">' +
+        '💬 กรุณากด Book Now ใหม่อีกครั้ง</a><br><br>' +
+      '<span style="font-size:.75rem;color:var(--ut-muted,#64758a)">หลังกลับไปหน้าแชท Ultra Tennis ให้กดปุ่ม Book Now อีกครั้งค่ะ</span>';
   }
   const sp=document.querySelector(".loverlay .spinner");
   if(sp) sp.style.display="none";
