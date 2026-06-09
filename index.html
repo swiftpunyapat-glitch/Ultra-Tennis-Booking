@@ -551,6 +551,7 @@ isSupported().then(ok=>{ if(ok) getAnalytics(fbApp); }).catch(()=>{});
 
 // ── CONSTANTS ───────────────────────────────────────────────────
 const LIFF_ID     = "2010034901-ClPr9N5v";
+const _isLineApp  = /Line\//i.test(navigator.userAgent); // true inside LINE's in-app browser
 const RESOURCE_ID = "room1";
 const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
 const PAY_MINS    = 15;
@@ -930,21 +931,46 @@ function getMonthKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}`;
 }
 
+// ── LIFF RECOVERY UI ────────────────────────────────────────────
+function showLiffRecoveryUI() {
+  const lt=$("ltext");
+  if(lt){
+    lt.style.color="var(--danger)";
+    lt.style.maxWidth="300px";
+    lt.style.textAlign="center";
+    lt.style.lineHeight="1.7";
+    lt.innerHTML='เชื่อมต่อ LINE ไม่สำเร็จ<br>กรุณากดโหลดใหม่อีกครั้ง<br><br><button onclick="location.reload()" style="padding:10px 22px;border-radius:8px;background:#1f7ae0;color:#fff;font-weight:800;font-size:.88rem;border:0;cursor:pointer">🔄 โหลดใหม่</button><br><br><a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener" style="font-size:.8rem;color:#1f7ae0;text-decoration:underline">💬 ทักแอดมิน</a>';
+  }
+  const sp=document.querySelector(".loverlay .spinner");
+  if(sp) sp.style.display="none";
+}
+
 // ── LIFF INIT ───────────────────────────────────────────────────
 async function initLiff() {
   const tStart = performance.now();
   $("ltext").textContent=t("connectingLine");
+  let liffInitOk = false;
   try {
     await Promise.race([
       liff.init({ liffId:LIFF_ID }),
       new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF init timeout after 10s")),10000))
     ]);
-    if(!liff.isLoggedIn()){ liff.login(); return; }
+    liffInitOk = true;
+    if(!liff.isLoggedIn()){ liff.login({ redirectUri: window.location.href }); return; }
     state.lineProfile = await Promise.race([
       liff.getProfile(),
       new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF getProfile timeout after 5s")),5000))
     ]);
-  } catch(e) { console.warn("LIFF init failed (browser mode):",e); }
+  } catch(e) {
+    console.warn("LIFF init/profile failed:", e);
+    if (_isLineApp) {
+      // Inside LINE's browser — show recovery UI; do not silently fall to Guest.
+      showLiffRecoveryUI();
+      return;
+    }
+    // External browser — continue as Guest for Single Use browsing.
+    console.log("[liff] External browser, continuing as Guest.");
+  }
 
   $("pname").textContent = state.lineProfile.displayName;
   const av = $("avatarEl");
@@ -2241,31 +2267,13 @@ setupLanguageToggle();
 // show a Thai reload prompt so the customer is never stuck forever.
 setTimeout(()=>{
   if($("loverlay").style.display==="none") return; // boot succeeded in time — nothing to do
-  const lt=$("ltext");
-  if(lt){
-    lt.style.color="var(--danger)";
-    lt.style.maxWidth="300px";
-    lt.style.textAlign="center";
-    lt.style.lineHeight="1.6";
-    lt.innerHTML='โหลดหน้านานผิดปกติ กรุณากดโหลดใหม่อีกครั้ง<br>หากยังใช้งานไม่ได้สามารถทักแอดมินได้เลยค่ะ<br><br><button onclick="location.reload()" style="margin-top:4px;padding:10px 22px;border-radius:8px;background:#1f7ae0;color:#fff;font-weight:800;font-size:.88rem;border:0;cursor:pointer">🔄 โหลดใหม่</button>';
-  }
-  const sp=document.querySelector(".loverlay .spinner");
-  if(sp) sp.style.display="none";
+  showLiffRecoveryUI();
   console.warn("[watchdog] Boot took >12 s – showing reload prompt");
 },12000);
 
 initLiff().catch(err=>{
-  console.error("App boot failed:",err);
-  const lt=$("ltext");
-  if(lt){
-    lt.style.color="var(--danger)";
-    lt.style.maxWidth="300px";
-    lt.style.textAlign="center";
-    lt.style.lineHeight="1.6";
-    lt.innerHTML='โหลดหน้านานผิดปกติ กรุณากดโหลดใหม่อีกครั้ง<br>หากยังใช้งานไม่ได้สามารถทักแอดมินได้เลยค่ะ<br><br><button onclick="location.reload()" style="margin-top:4px;padding:10px 22px;border-radius:8px;background:#1f7ae0;color:#fff;font-weight:800;font-size:.88rem;border:0;cursor:pointer">🔄 โหลดใหม่</button>';
-  }
-  const sp=document.querySelector(".loverlay .spinner");
-  if(sp) sp.style.display="none";
+  console.error("App boot failed:", err);
+  showLiffRecoveryUI();
 });
 </script>
 </body>
