@@ -935,9 +935,15 @@ async function initLiff() {
   const tStart = performance.now();
   $("ltext").textContent=t("connectingLine");
   try {
-    await liff.init({ liffId:LIFF_ID });
+    await Promise.race([
+      liff.init({ liffId:LIFF_ID }),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF init timeout after 10s")),10000))
+    ]);
     if(!liff.isLoggedIn()){ liff.login(); return; }
-    state.lineProfile = await liff.getProfile();
+    state.lineProfile = await Promise.race([
+      liff.getProfile(),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF getProfile timeout after 5s")),5000))
+    ]);
   } catch(e) { console.warn("LIFF init failed (browser mode):",e); }
 
   $("pname").textContent = state.lineProfile.displayName;
@@ -949,6 +955,7 @@ async function initLiff() {
   updateHomeSingleUsePricing();
   $("loverlay").style.display="none";
   $("shell").style.display="block";
+  setupNav(); // bind nav immediately so buttons work during pending-booking restore
 
   // Fetch pricing config asynchronously in the background
   const fetchPricingPromise = (async () => {
@@ -976,7 +983,10 @@ async function initLiff() {
       if (pending && pending.expiresAt > now) {
         console.log("[perf] Found pending booking in cache. Checking document status...");
         const t0 = performance.now();
-        const bDoc = await getDoc(doc(db, "bookings", pending.docId));
+        const bDoc = await Promise.race([
+          getDoc(doc(db, "bookings", pending.docId)),
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error("Pending booking restore timeout")),5000))
+        ]);
         console.log(`[perf] Verified booking status in ${(performance.now() - t0).toFixed(1)}ms`);
         if (bDoc.exists()) {
           const bData = bDoc.data();
@@ -1022,7 +1032,6 @@ async function initLiff() {
   if (!restored) {
     showView("viewHome");
   }
-  setupNav();
   console.log(`[perf] LIFF initialization & boot complete in ${(performance.now() - tStart).toFixed(1)}ms`);
 }
 
@@ -1071,7 +1080,10 @@ async function checkEligibility() {
 }
 
 // ── NAVIGATION ──────────────────────────────────────────────────
+let _navBound = false;
 function setupNav() {
+  if (_navBound) return;
+  _navBound = true;
   $("btnSingle").addEventListener("click", ()=>{ openBookingView(); });
   $("btnMyBookings").addEventListener("click",()=>{ openMyBookings(); });
   $("btnRegister").addEventListener("click", ()=>{ openRegisterView(); });
@@ -2011,6 +2023,11 @@ $("submitSlipBtn").addEventListener("click", async()=>{
 
 // ── MY BOOKINGS ─────────────────────────────────────────────────
 async function openMyBookings() {
+  if (state.lineProfile.userId === "guest") {
+    showView("viewMyBookings");
+    $("myContent").innerHTML=`<div class="empty"><p style="font-size:.85rem;line-height:1.7;color:var(--muted)">กรุณาเปิดผ่าน LINE เพื่อดูรายการจองและแพ็กเกจของคุณ<br>หากยังใช้งานไม่ได้สามารถทักแอดมินได้เลยค่ะ</p></div>`;
+    return;
+  }
   showView("viewMyBookings");
   $("myContent").innerHTML=`<div style="text-align:center;padding:32px"><div class="spinner" style="margin:0 auto 10px"></div><p style="color:var(--muted);font-size:.82rem">${t("loading")}</p></div>`;
 
@@ -2219,14 +2236,33 @@ function displayStatus(status){
 // Wrap initLiff so an uncaught error (LIFF init, eligibility fetch, anything) can't
 // leave the user staring at a forever-spinning overlay. Always surface a message.
 setupLanguageToggle();
+
+// Watchdog: if the loading overlay is still visible after 12 s (LIFF / network hung),
+// show a Thai reload prompt so the customer is never stuck forever.
+setTimeout(()=>{
+  if($("loverlay").style.display==="none") return; // boot succeeded in time — nothing to do
+  const lt=$("ltext");
+  if(lt){
+    lt.style.color="var(--danger)";
+    lt.style.maxWidth="300px";
+    lt.style.textAlign="center";
+    lt.style.lineHeight="1.6";
+    lt.innerHTML='โหลดหน้านานผิดปกติ กรุณากดโหลดใหม่อีกครั้ง<br>หากยังใช้งานไม่ได้สามารถทักแอดมินได้เลยค่ะ<br><br><button onclick="location.reload()" style="margin-top:4px;padding:10px 22px;border-radius:8px;background:#1f7ae0;color:#fff;font-weight:800;font-size:.88rem;border:0;cursor:pointer">🔄 โหลดใหม่</button>';
+  }
+  const sp=document.querySelector(".loverlay .spinner");
+  if(sp) sp.style.display="none";
+  console.warn("[watchdog] Boot took >12 s – showing reload prompt");
+},12000);
+
 initLiff().catch(err=>{
   console.error("App boot failed:",err);
   const lt=$("ltext");
   if(lt){
     lt.style.color="var(--danger)";
-    lt.style.maxWidth="280px";
+    lt.style.maxWidth="300px";
     lt.style.textAlign="center";
-    lt.textContent=t("appLoadFailed");
+    lt.style.lineHeight="1.6";
+    lt.innerHTML='โหลดหน้านานผิดปกติ กรุณากดโหลดใหม่อีกครั้ง<br>หากยังใช้งานไม่ได้สามารถทักแอดมินได้เลยค่ะ<br><br><button onclick="location.reload()" style="margin-top:4px;padding:10px 22px;border-radius:8px;background:#1f7ae0;color:#fff;font-weight:800;font-size:.88rem;border:0;cursor:pointer">🔄 โหลดใหม่</button>';
   }
   const sp=document.querySelector(".loverlay .spinner");
   if(sp) sp.style.display="none";
