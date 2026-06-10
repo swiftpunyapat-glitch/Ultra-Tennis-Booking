@@ -4,7 +4,10 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Ultra Tennis Booking</title>
-  <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <!-- HOTFIX: `defer` stops this SDK from render-blocking <body>. Deferred classic
+       scripts still execute before the main module (document order), so `liff` is
+       defined on the happy path; waitForLiffSdk() in the module guards the rest. -->
+  <script charset="utf-8" defer src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     :root{
       --ut-navy:#0b2742;
@@ -244,6 +247,50 @@
   <div class="spinner"></div>
   <p id="ltext" data-i18n="loading">Loading...</p>
 </div>
+
+<script>
+/* ── EARLY BOOT WATCHDOG (hotfix) ─────────────────────────────────
+   Runs at parse time, before the (deferred) LIFF SDK, Firebase, and the
+   main module. Dependency-free: no liff, no i18n, no module functions —
+   so a recovery message can appear even if every external script hangs.
+   Disarmed by the module once boot succeeds. */
+(function(){
+  var ua=navigator.userAgent;
+  var isLine=/Line\//i.test(ua), isAndroid=/Android/i.test(ua);
+  var bootCount=-1;
+  try{
+    bootCount=(parseInt(sessionStorage.getItem("ut_boot_count")||"0",10)||0)+1;
+    sessionStorage.setItem("ut_boot_count",String(bootCount));
+  }catch(e){}
+  window.__UT_BOOT={t0:Date.now(),done:false,isLine:isLine,isAndroid:isAndroid,bootCount:bootCount,timer:null};
+  console.log("[boot] parse start · line:"+isLine+" · android:"+isAndroid+" · bootCount:"+bootCount);
+
+  /* Approved recovery message. Primary instruction: close this page, then press
+     Book Now again from LINE. The button only opens the LINE chat — it does NOT
+     reopen booking by itself. No reload action by design. */
+  window.showBootRecovery=function(){
+    var B=window.__UT_BOOT;
+    if(B&&B.done) return;
+    console.warn("[boot] watchdog fired +"+(B?(Date.now()-B.t0):"?")+"ms");
+    var lt=document.getElementById("ltext");
+    if(lt){
+      lt.style.cssText="color:#0b2742;max-width:320px;text-align:center;line-height:1.7";
+      lt.innerHTML=
+        '<span style="color:#d94b4b;font-weight:800;font-size:.95rem">ระบบโหลดไม่สำเร็จ</span><br>'+
+        '<span style="font-size:.9rem;font-weight:700">กรุณาปิดหน้านี้ แล้วกด Book Now ใหม่อีกครั้งจาก LINE</span><br><br>'+
+        '<a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener" '+
+          'style="display:inline-block;padding:12px 24px;border-radius:8px;background:linear-gradient(135deg,#06c755,#00a041);color:#fff;font-weight:900;font-size:.95rem;text-decoration:none">'+
+          '💬 เปิดแชท LINE Ultra Tennis</a><br>'+
+        '<span style="font-size:.75rem;color:#64758a">จากนั้นกดปุ่ม Book Now ในแชทอีกครั้ง</span>';
+    }
+    var sp=document.querySelector(".loverlay .spinner");
+    if(sp) sp.style.display="none";
+  };
+
+  // Android inside LINE gets a shorter leash (8 s); everywhere else keeps 12 s.
+  window.__UT_BOOT.timer=setTimeout(window.showBootRecovery,(isLine&&isAndroid)?8000:12000);
+})();
+</script>
 
 <div class="shell" id="shell" style="display:none">
 
@@ -552,6 +599,9 @@ isSupported().then(ok=>{ if(ok) getAnalytics(fbApp); }).catch(()=>{});
 // ── CONSTANTS ───────────────────────────────────────────────────
 const LIFF_ID     = "2010034901-ClPr9N5v";
 const _isLineApp  = /Line\//i.test(navigator.userAgent); // true inside LINE's in-app browser
+// HOTFIX: fallback in case the early inline boot script did not run — every
+// window.__UT_BOOT access in this module assumes the object exists.
+window.__UT_BOOT = window.__UT_BOOT || { t0: Date.now(), done: false, isLine: _isLineApp, isAndroid: /Android/i.test(navigator.userAgent), bootCount: -1, timer: null };
 const RESOURCE_ID = "room1";
 const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
 const PAY_MINS    = 15;
@@ -932,50 +982,88 @@ function getMonthKey(date) {
 }
 
 // ── LIFF RECOVERY UI ────────────────────────────────────────────
+// HOTFIX: delegates to the inline window.showBootRecovery so the approved
+// wording lives in one place. The fallback below only runs if the early
+// inline boot script was removed or failed (defensive).
 function showLiffRecoveryUI() {
+  if (window.showBootRecovery && window.__UT_BOOT) {
+    window.__UT_BOOT.done = false; // an explicit call must always render
+    window.showBootRecovery();
+    return;
+  }
   const lt=$("ltext");
   if(lt){
     lt.style.color="var(--ut-navy, #0b2742)";
     lt.style.maxWidth="320px";
     lt.style.textAlign="center";
     lt.style.lineHeight="1.7";
-    lt.innerHTML=
-      '<span style="color:var(--danger,#d94b4b);font-weight:800;font-size:.95rem">ระบบเชื่อมต่อ LINE นานผิดปกติ</span><br>' +
-      '<span style="font-size:.85rem">กรุณากลับไปที่หน้า LINE แล้วกด Book Now ใหม่อีกครั้ง</span><br><br>' +
-      '<a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener" ' +
-        'style="display:inline-block;padding:12px 24px;border-radius:8px;background:linear-gradient(135deg,#06c755,#00a041);color:#fff;font-weight:900;font-size:.95rem;text-decoration:none;box-shadow:0 8px 20px rgba(6,199,85,.30)">' +
-        '💬 กรุณากด Book Now ใหม่อีกครั้ง</a><br><br>' +
-      '<span style="font-size:.75rem;color:var(--ut-muted,#64758a)">หลังกลับไปหน้าแชท Ultra Tennis ให้กดปุ่ม Book Now อีกครั้งค่ะ</span>';
+    lt.textContent="ระบบโหลดไม่สำเร็จ กรุณาปิดหน้านี้ แล้วกด Book Now ใหม่อีกครั้งจาก LINE";
   }
   const sp=document.querySelector(".loverlay .spinner");
   if(sp) sp.style.display="none";
 }
 
 // ── LIFF INIT ───────────────────────────────────────────────────
+// HOTFIX: the SDK <script> is deferred. With defer it normally executes before
+// this module (document order), so the poll resolves immediately; it only spins
+// when the SDK failed to load or an engine broke that ordering. Never call any
+// liff.* method unless this resolved true.
+function waitForLiffSdk(timeoutMs=6000){
+  return new Promise(resolve=>{
+    if(typeof liff!=="undefined") return resolve(true);
+    const t0=Date.now();
+    const iv=setInterval(()=>{
+      if(typeof liff!=="undefined"){clearInterval(iv);resolve(true);}
+      else if(Date.now()-t0>timeoutMs){clearInterval(iv);resolve(false);}
+    },100);
+  });
+}
+
 async function initLiff() {
   const tStart = performance.now();
   $("ltext").textContent=t("connectingLine");
+
+  // HOTFIX: confirm the SDK arrived before any liff.* call. If it never arrives:
+  // inside LINE show recovery; in an external browser continue as Guest with no
+  // liff.* calls at all.
+  const sdkOk = await waitForLiffSdk(6000);
+  console.log(`[boot] sdkReady:${sdkOk} +${Date.now()-window.__UT_BOOT.t0}ms`);
+  if(!sdkOk && _isLineApp){ showLiffRecoveryUI(); return; }
+  if(!sdkOk) console.log("[boot] SDK unavailable in external browser — continuing as Guest.");
+
   let liffInitOk = false;
-  try {
-    await Promise.race([
-      liff.init({ liffId:LIFF_ID }),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF init timeout after 10s")),10000))
-    ]);
-    liffInitOk = true;
-    if(!liff.isLoggedIn()){ liff.login({ redirectUri: window.location.href }); return; }
-    state.lineProfile = await Promise.race([
-      liff.getProfile(),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF getProfile timeout after 5s")),5000))
-    ]);
-  } catch(e) {
-    console.warn("LIFF init/profile failed:", e);
-    if (_isLineApp) {
-      // Inside LINE's browser — show recovery UI; do not silently fall to Guest.
-      showLiffRecoveryUI();
-      return;
+  if (sdkOk) {
+    try {
+      console.log(`[boot] init start +${Date.now()-window.__UT_BOOT.t0}ms`);
+      await Promise.race([
+        liff.init({ liffId:LIFF_ID }),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF init timeout after 10s")),10000))
+      ]);
+      liffInitOk = true;
+      console.log(`[boot] init ok +${Date.now()-window.__UT_BOOT.t0}ms`);
+      if(!liff.isLoggedIn()){
+        // HOTFIX: clean redirect target — strip stale ?code=/liff.state/#hash so an
+        // expired-session re-login doesn't carry old auth params (Android loop risk).
+        const cleanUrl = window.location.origin + window.location.pathname;
+        console.log(`[boot] loginRedirect → ${cleanUrl} · bootCount:${window.__UT_BOOT.bootCount}`);
+        liff.login({ redirectUri: cleanUrl });
+        return;
+      }
+      state.lineProfile = await Promise.race([
+        liff.getProfile(),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF getProfile timeout after 5s")),5000))
+      ]);
+      console.log(`[boot] profile ok +${Date.now()-window.__UT_BOOT.t0}ms`);
+    } catch(e) {
+      console.warn("LIFF init/profile failed:", e);
+      if (_isLineApp) {
+        // Inside LINE's browser — show recovery UI; do not silently fall to Guest.
+        showLiffRecoveryUI();
+        return;
+      }
+      // External browser — continue as Guest for Single Use browsing.
+      console.log("[liff] External browser, continuing as Guest.");
     }
-    // External browser — continue as Guest for Single Use browsing.
-    console.log("[liff] External browser, continuing as Guest.");
   }
 
   $("pname").textContent = state.lineProfile.displayName;
@@ -985,6 +1073,11 @@ async function initLiff() {
 
   // Set default pricing text first, then immediately hide loading screen
   updateHomeSingleUsePricing();
+  // HOTFIX: boot succeeded — disarm the early watchdog and reset the loop counter.
+  window.__UT_BOOT.done = true;
+  clearTimeout(window.__UT_BOOT.timer);
+  try { sessionStorage.setItem("ut_boot_count","0"); } catch(_) {}
+  console.log(`[boot] spinner hidden +${Date.now()-window.__UT_BOOT.t0}ms`);
   $("loverlay").style.display="none";
   $("shell").style.display="block";
   setupNav(); // bind nav immediately so buttons work during pending-booking restore
@@ -2269,13 +2362,10 @@ function displayStatus(status){
 // leave the user staring at a forever-spinning overlay. Always surface a message.
 setupLanguageToggle();
 
-// Watchdog: if the loading overlay is still visible after 12 s (LIFF / network hung),
-// show a Thai reload prompt so the customer is never stuck forever.
-setTimeout(()=>{
-  if($("loverlay").style.display==="none") return; // boot succeeded in time — nothing to do
-  showLiffRecoveryUI();
-  console.warn("[watchdog] Boot took >12 s – showing reload prompt");
-},12000);
+// Watchdog: armed inline at parse time (early-boot script after #loverlay) —
+// 8 s on Android+LINE, 12 s elsewhere. It fires even when the LIFF SDK or the
+// Firebase imports hang and this module never executes, which the old module
+// setTimeout here could not do.
 
 initLiff().catch(err=>{
   console.error("App boot failed:", err);
