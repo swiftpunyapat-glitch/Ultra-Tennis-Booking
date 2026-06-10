@@ -428,15 +428,33 @@
           <img src="/payment-qr.png" alt="QR"
             onerror="this.parentElement.innerHTML='<p style=\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\'>⚠️ '+(window.utT?window.utT('qrNotFound'):'QR not found. Please contact staff.')+'</p>'"/>
         </div>
+        <!-- PATCH(qr-save): static-image save helper. Downloads the QR currently
+             shown (normal/special/late-night); in the LINE in-app browser, where
+             the download attribute is unreliable, it opens the image in a new
+             view so the customer can long-press save. No amount/payment logic. -->
+        <div style="margin:0 0 10px">
+          <button class="btn-rpay" id="qrSaveBtn" type="button" style="width:100%;padding:9px 12px">💾 บันทึก QR สำหรับโอนเงิน</button>
+          <p style="font-size:.7rem;color:var(--muted);margin-top:6px">หากบันทึกไม่ได้ กรุณากดค้างที่รูป QR เพื่อบันทึก หรือแคปหน้าจอไว้</p>
+        </div>
         <p class="qrnote" data-i18n="scanBank">Scan with any banking app</p>
         <div class="tnote">💳 <span id="transferTextA">Transfer</span> <strong>฿<span id="payAmtText">350</span></strong> <span id="transferTextB">and upload slip below</span></div>
-        <div class="sarea" id="slipArea" onclick="document.getElementById('slipIn').click()">
+        <!-- PATCH(slip-upload): inline onclick replaced by an addEventListener
+             binding in the module, and the file input is visually hidden instead
+             of display:none — some Android LINE WebViews refuse to open the file
+             picker for programmatic clicks on display:none inputs. -->
+        <div class="sarea" id="slipArea" role="button" tabindex="0">
           <p id="slipAreaTxt">📎 <strong>Tap to upload payment slip</strong></p>
           <p style="font-size:.7rem;margin-top:2px" data-i18n="fileHint">JPG, PNG · Max 5MB</p>
           <img id="slipPrev" class="spreview" style="display:none" alt="Slip preview"/>
         </div>
-        <input type="file" id="slipIn" accept="image/*" style="display:none"/>
+        <input type="file" id="slipIn" accept="image/*" tabindex="-1"
+               style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0"/>
         <button class="btn-slip" id="submitSlipBtn" disabled data-i18n="submitSlip">Submit Payment Slip</button>
+        <!-- PATCH(cancel-booking): customer self-cancel for unpaid pending bookings
+             only. Hidden unless paymentMode==="booking" (never for pass purchases);
+             shown/reset by showPaymentPanel. -->
+        <button id="cancelBkBtn" type="button"
+                style="display:none;width:100%;min-height:42px;margin-top:10px;border-radius:8px;background:#fff;border:1.5px solid var(--danger);color:var(--danger);font-weight:800;font-size:.85rem">ยกเลิกการจอง</button>
       </div>
     </div>
   </div>
@@ -2042,7 +2060,41 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
         onerror="this.parentElement.innerHTML='<p style=\\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\\'>⚠️ '+(window.utT?window.utT(\\'qrNotFound\\'):\\'QR not found. Please contact staff.\\')+'</p>'"/>`;
     }
   }
+  // PATCH(cancel-booking): visible only for booking payments — never for pass
+  // purchases. Reset to clickable state on every panel open.
+  const cancelBtn=$("cancelBkBtn");
+  if(cancelBtn){
+    const showCancel = state.paymentMode==="booking" && !!state.currentBookingDocId;
+    cancelBtn.style.display = showCancel ? "block" : "none";
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = "ยกเลิกการจอง";
+  }
 }
+
+// PATCH(slip-upload): explicit listener replaces the old inline onclick on the
+// upload area — more reliable across LINE in-app WebViews (Android/iOS) and
+// normal mobile browsers. Keyboard accessible via the role=button/tabindex.
+$("slipArea").addEventListener("click",()=>{ $("slipIn").click(); });
+$("slipArea").addEventListener("keydown",e=>{
+  if(e.key==="Enter"||e.key===" "){ e.preventDefault(); $("slipIn").click(); }
+});
+
+// PATCH(qr-save): save/open the QR image currently displayed. Static image only —
+// no amount or verification logic. In the LINE in-app browser the download
+// attribute is unreliable, so open the image in a new view for long-press save.
+$("qrSaveBtn").addEventListener("click",()=>{
+  const img=document.querySelector("#payQrWrap img");
+  if(!img||!img.src){ showToast(t("qrNotFound"),true); return; } // e.g. Late Night with no QR configured
+  const src=img.src;
+  if(_isLineApp){
+    const w=window.open(src,"_blank");
+    if(!w) showToast("กดค้างที่รูป QR เพื่อบันทึกรูป");
+    return;
+  }
+  const a=document.createElement("a");
+  a.href=src; a.download="ultra-tennis-payment-qr.png";
+  document.body.appendChild(a); a.click(); a.remove();
+});
 
 // Slip file change
 $("slipIn").addEventListener("change",()=>{
@@ -2143,6 +2195,72 @@ $("submitSlipBtn").addEventListener("click", async()=>{
     console.error("Slip upload failed:",e);
     showToast(e.message||t("uploadFailed"),true);
     btn.disabled=false; btn.textContent=t("submitSlip");
+  }
+});
+
+// ── PATCH(cancel-booking): customer self-cancel on the payment page ──────
+// Booking payments only (never pass purchases). Cancels ONLY bookings that are
+// still pending_payment + unpaid + unexpired, verified inside the transaction.
+// The slot is released ONLY when it still points to this exact booking
+// (slotData.bookingId === bookingId) — never a slot owned by someone else.
+$("cancelBkBtn").addEventListener("click", async()=>{
+  if(state.paymentMode!=="booking" || !state.currentBookingDocId) return;
+  if(!confirm("ต้องการยกเลิกการจองนี้ใช่ไหม? หากยกเลิกแล้วต้องจองเวลาใหม่อีกครั้ง")) return;
+
+  const btn=$("cancelBkBtn");
+  btn.disabled=true; btn.textContent="กำลังยกเลิก...";
+  const bookingId=state.currentBookingDocId;
+
+  try{
+    await runTransaction(db, async tx=>{
+      // Reads first (Firestore requires all reads before writes).
+      const bookingRef=doc(db,"bookings",bookingId);
+      const snap=await tx.get(bookingRef);
+      if(!snap.exists()) throw new Error("NOT_CANCELLABLE");
+      const b=snap.data();
+
+      // Must still be the booking this payment session belongs to.
+      if(state.currentBookingCode && b.bookingCode!==state.currentBookingCode) throw new Error("NOT_CANCELLABLE");
+      if(b.lineUserId && b.lineUserId!=="guest" && state.lineProfile?.userId &&
+         state.lineProfile.userId!=="guest" && b.lineUserId!==state.lineProfile.userId) throw new Error("NOT_CANCELLABLE");
+
+      // Only unpaid, still-pending, unexpired bookings are customer-cancellable.
+      if(b.bookingStatus!=="pending_payment") throw new Error("NOT_CANCELLABLE");
+      if(["paid","package","pending_review","rejected","cancelled"].includes(b.paymentStatus)) throw new Error("NOT_CANCELLABLE");
+      const exp=b.paymentExpiresAt?.toDate?.();
+      if(exp && exp<new Date()) throw new Error("NOT_CANCELLABLE"); // expired — direct to My Bookings
+
+      const slotId=`${RESOURCE_ID}_${b.date}_${String(b.startTime||"").replace(":","")}`;
+      const slotRef=doc(db,"booking_slots",slotId);
+      const slotSnap=await tx.get(slotRef);
+
+      // Writes.
+      tx.update(bookingRef,{
+        bookingStatus:"cancelled",
+        paymentStatus:"cancelled",
+        cancelReason:"Customer cancelled before payment",
+        cancelledAt:serverTimestamp(),
+        cancelledBy:"customer",
+        updatedAt:serverTimestamp(),
+      });
+      // Strict ownership: release ONLY if the slot row still points to this booking.
+      if(slotSnap.exists() && slotSnap.data().bookingId===bookingId){
+        tx.update(slotRef,{ bookingStatus:"cancelled", paymentStatus:"cancelled", expiresAt:null });
+      }
+    });
+
+    try{ localStorage.removeItem("ut_pending_booking"); }catch(_){}
+    state.currentBookingCode=null;
+    state.currentBookingDocId=null;
+    state.currentBookingData=null;
+    state.paymentMode=null;
+    showToast("ยกเลิกการจองแล้ว กรุณาจองเวลาใหม่อีกครั้ง");
+    showView("viewHome");
+  }catch(e){
+    console.error("Customer cancel failed:",e);
+    showToast("รายการนี้ไม่สามารถยกเลิกได้ กรุณาตรวจสอบรายการจองของคุณ",true);
+  }finally{
+    btn.disabled=false; btn.textContent="ยกเลิกการจอง";
   }
 });
 
