@@ -2598,9 +2598,11 @@ async function copyDailySlotAlert(){
 // Admin creates a confirmed booking for a walk-in customer. Same booking_slots
 // + bookings shape as customer bookings, so the existing list, reschedule,
 // cancel, and Mark Paid all work on manual bookings too.
-// NOTE: We intentionally do NOT fire LINE notifications here — lineUserId is
-// "manual" (placeholder). Subsequent admin actions guard customer notifications
-// with canNotifyLine(), so manual rows never call the LINE notify helper.
+// NOTE: We intentionally do NOT fire CUSTOMER LINE notifications here —
+// lineUserId is "manual" (placeholder). Subsequent admin actions guard customer
+// notifications with canNotifyLine(), so manual rows never message a customer.
+// Admins DO get a fire-and-forget "manual_booking_admin" broadcast after the
+// transaction commits; its failure never blocks or reverts the booking.
 
 const MANUAL_PRICE = {
   "Manual Single Use":350, "Paid Outside":350, "Pay at Counter":350,
@@ -2789,6 +2791,26 @@ $("manConfirm").addEventListener("click",async()=>{
         ...paidMeta,
       });
     });
+
+    // Fire-and-forget: tell all admins a manual booking was created.
+    // notifyAdmins never throws; failure is logged in notification_logs only
+    // and must never block or revert the booking that just committed.
+    if(window.notifyAdmins){
+      window.notifyAdmins({
+        type:"manual_booking_admin",
+        bookingCode:code,
+        eventSuffix:`created_${Date.now()}`,
+        customerName:name,
+        customerPhone:phone,
+        date:date,
+        startTime:time,
+        endTime:endTime,
+        bookingType:bookingType,
+        paymentStatus:paymentStatus,
+        note:note||"",
+        actionBy:adminName,
+      });
+    }
 
     showToast(`✓ Manual booking ${code} saved`);
     closeManualModal();

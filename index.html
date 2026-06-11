@@ -4,10 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Ultra Tennis Booking</title>
-  <!-- HOTFIX: `defer` stops this SDK from render-blocking <body>. Deferred classic
-       scripts still execute before the main module (document order), so `liff` is
-       defined on the happy path; waitForLiffSdk() in the module guards the rest. -->
-  <script charset="utf-8" defer src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <style>
     :root{
       --ut-navy:#0b2742;
@@ -248,50 +245,6 @@
   <p id="ltext" data-i18n="loading">Loading...</p>
 </div>
 
-<script>
-/* ── EARLY BOOT WATCHDOG (hotfix) ─────────────────────────────────
-   Runs at parse time, before the (deferred) LIFF SDK, Firebase, and the
-   main module. Dependency-free: no liff, no i18n, no module functions —
-   so a recovery message can appear even if every external script hangs.
-   Disarmed by the module once boot succeeds. */
-(function(){
-  var ua=navigator.userAgent;
-  var isLine=/Line\//i.test(ua), isAndroid=/Android/i.test(ua);
-  var bootCount=-1;
-  try{
-    bootCount=(parseInt(sessionStorage.getItem("ut_boot_count")||"0",10)||0)+1;
-    sessionStorage.setItem("ut_boot_count",String(bootCount));
-  }catch(e){}
-  window.__UT_BOOT={t0:Date.now(),done:false,isLine:isLine,isAndroid:isAndroid,bootCount:bootCount,timer:null};
-  console.log("[boot] parse start · line:"+isLine+" · android:"+isAndroid+" · bootCount:"+bootCount);
-
-  /* Approved recovery message. Primary instruction: close this page, then press
-     Book Now again from LINE. The button only opens the LINE chat — it does NOT
-     reopen booking by itself. No reload action by design. */
-  window.showBootRecovery=function(){
-    var B=window.__UT_BOOT;
-    if(B&&B.done) return;
-    console.warn("[boot] watchdog fired +"+(B?(Date.now()-B.t0):"?")+"ms");
-    var lt=document.getElementById("ltext");
-    if(lt){
-      lt.style.cssText="color:#0b2742;max-width:320px;text-align:center;line-height:1.7";
-      lt.innerHTML=
-        '<span style="color:#d94b4b;font-weight:800;font-size:.95rem">ระบบโหลดไม่สำเร็จ</span><br>'+
-        '<span style="font-size:.9rem;font-weight:700">กรุณาปิดหน้านี้ แล้วกด Book Now ใหม่อีกครั้งจาก LINE</span><br><br>'+
-        '<a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener" '+
-          'style="display:inline-block;padding:12px 24px;border-radius:8px;background:linear-gradient(135deg,#06c755,#00a041);color:#fff;font-weight:900;font-size:.95rem;text-decoration:none">'+
-          '💬 เปิดแชท LINE Ultra Tennis</a><br>'+
-        '<span style="font-size:.75rem;color:#64758a">จากนั้นกดปุ่ม Book Now ในแชทอีกครั้ง</span>';
-    }
-    var sp=document.querySelector(".loverlay .spinner");
-    if(sp) sp.style.display="none";
-  };
-
-  // Android inside LINE gets a shorter leash (8 s); everywhere else keeps 12 s.
-  window.__UT_BOOT.timer=setTimeout(window.showBootRecovery,(isLine&&isAndroid)?8000:12000);
-})();
-</script>
-
 <div class="shell" id="shell" style="display:none">
 
   <!-- Profile header -->
@@ -428,33 +381,15 @@
           <img src="/payment-qr.png" alt="QR"
             onerror="this.parentElement.innerHTML='<p style=\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\'>⚠️ '+(window.utT?window.utT('qrNotFound'):'QR not found. Please contact staff.')+'</p>'"/>
         </div>
-        <!-- PATCH(qr-save): static-image save helper. Downloads the QR currently
-             shown (normal/special/late-night); in the LINE in-app browser, where
-             the download attribute is unreliable, it opens the image in a new
-             view so the customer can long-press save. No amount/payment logic. -->
-        <div style="margin:0 0 10px">
-          <button class="btn-rpay" id="qrSaveBtn" type="button" style="width:100%;padding:9px 12px">💾 บันทึก QR สำหรับโอนเงิน</button>
-          <p style="font-size:.7rem;color:var(--muted);margin-top:6px">หากบันทึกไม่ได้ กรุณากดค้างที่รูป QR เพื่อบันทึก หรือแคปหน้าจอไว้</p>
-        </div>
         <p class="qrnote" data-i18n="scanBank">Scan with any banking app</p>
         <div class="tnote">💳 <span id="transferTextA">Transfer</span> <strong>฿<span id="payAmtText">350</span></strong> <span id="transferTextB">and upload slip below</span></div>
-        <!-- PATCH(slip-upload): inline onclick replaced by an addEventListener
-             binding in the module, and the file input is visually hidden instead
-             of display:none — some Android LINE WebViews refuse to open the file
-             picker for programmatic clicks on display:none inputs. -->
-        <div class="sarea" id="slipArea" role="button" tabindex="0">
+        <div class="sarea" id="slipArea" onclick="document.getElementById('slipIn').click()">
           <p id="slipAreaTxt">📎 <strong>Tap to upload payment slip</strong></p>
           <p style="font-size:.7rem;margin-top:2px" data-i18n="fileHint">JPG, PNG · Max 5MB</p>
           <img id="slipPrev" class="spreview" style="display:none" alt="Slip preview"/>
         </div>
-        <input type="file" id="slipIn" accept="image/*" tabindex="-1"
-               style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0"/>
+        <input type="file" id="slipIn" accept="image/*" style="display:none"/>
         <button class="btn-slip" id="submitSlipBtn" disabled data-i18n="submitSlip">Submit Payment Slip</button>
-        <!-- PATCH(cancel-booking): customer self-cancel for unpaid pending bookings
-             only. Hidden unless paymentMode==="booking" (never for pass purchases);
-             shown/reset by showPaymentPanel. -->
-        <button id="cancelBkBtn" type="button"
-                style="display:none;width:100%;min-height:42px;margin-top:10px;border-radius:8px;background:#fff;border:1.5px solid var(--danger);color:var(--danger);font-weight:800;font-size:.85rem">ยกเลิกการจอง</button>
       </div>
     </div>
   </div>
@@ -617,9 +552,6 @@ isSupported().then(ok=>{ if(ok) getAnalytics(fbApp); }).catch(()=>{});
 // ── CONSTANTS ───────────────────────────────────────────────────
 const LIFF_ID     = "2010034901-ClPr9N5v";
 const _isLineApp  = /Line\//i.test(navigator.userAgent); // true inside LINE's in-app browser
-// HOTFIX: fallback in case the early inline boot script did not run — every
-// window.__UT_BOOT access in this module assumes the object exists.
-window.__UT_BOOT = window.__UT_BOOT || { t0: Date.now(), done: false, isLine: _isLineApp, isAndroid: /Android/i.test(navigator.userAgent), bootCount: -1, timer: null };
 const RESOURCE_ID = "room1";
 const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
 const PAY_MINS    = 15;
@@ -763,6 +695,7 @@ const I18N = {
     noBookings:"ยังไม่มีรายการจอง",
     bookNow:"จองเลย",
     failedLoad:"โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่",
+    retry:"ลองใหม่",
     registerProfile:"ลงทะเบียนสมาชิก",
     registerSub:"ยืนยันชื่อ/เบอร์โทรเพื่อเติมแพ็กเกจ",
     promotions:"โปรโมชั่น",
@@ -887,6 +820,7 @@ const I18N = {
     noBookings:"No bookings yet",
     bookNow:"Book now",
     failedLoad:"Failed to load. Please try again.",
+    retry:"Retry",
     registerProfile:"Register Profile",
     registerSub:"Verify name/phone for passes",
     promotions:"Promotions",
@@ -1000,88 +934,53 @@ function getMonthKey(date) {
 }
 
 // ── LIFF RECOVERY UI ────────────────────────────────────────────
-// HOTFIX: delegates to the inline window.showBootRecovery so the approved
-// wording lives in one place. The fallback below only runs if the early
-// inline boot script was removed or failed (defensive).
 function showLiffRecoveryUI() {
-  if (window.showBootRecovery && window.__UT_BOOT) {
-    window.__UT_BOOT.done = false; // an explicit call must always render
-    window.showBootRecovery();
-    return;
-  }
   const lt=$("ltext");
   if(lt){
     lt.style.color="var(--ut-navy, #0b2742)";
     lt.style.maxWidth="320px";
     lt.style.textAlign="center";
     lt.style.lineHeight="1.7";
-    lt.textContent="ระบบโหลดไม่สำเร็จ กรุณาปิดหน้านี้ แล้วกด Book Now ใหม่อีกครั้งจาก LINE";
+    lt.innerHTML=
+      '<span style="color:var(--danger,#d94b4b);font-weight:800;font-size:.95rem">ระบบเชื่อมต่อ LINE นานผิดปกติ</span><br>' +
+      '<span style="font-size:.85rem">กรุณากดโหลดใหม่ หรือกลับไปที่หน้า LINE แล้วกด Book Now ใหม่อีกครั้ง</span><br><br>' +
+      '<button type="button" onclick="location.reload()" ' +
+        'style="display:inline-block;padding:12px 24px;border-radius:8px;border:none;cursor:pointer;background:linear-gradient(135deg,#0b2742,#163d63);color:#fff;font-weight:900;font-size:.95rem;box-shadow:0 8px 20px rgba(11,39,66,.30)">' +
+        '🔄 โหลดใหม่ (Reload)</button><br><br>' +
+      '<a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener" ' +
+        'style="display:inline-block;padding:12px 24px;border-radius:8px;background:linear-gradient(135deg,#06c755,#00a041);color:#fff;font-weight:900;font-size:.95rem;text-decoration:none;box-shadow:0 8px 20px rgba(6,199,85,.30)">' +
+        '💬 กรุณากด Book Now ใหม่อีกครั้ง</a><br><br>' +
+      '<span style="font-size:.75rem;color:var(--ut-muted,#64758a)">หลังกลับไปหน้าแชท Ultra Tennis ให้กดปุ่ม Book Now อีกครั้งค่ะ</span>';
   }
   const sp=document.querySelector(".loverlay .spinner");
   if(sp) sp.style.display="none";
 }
 
 // ── LIFF INIT ───────────────────────────────────────────────────
-// HOTFIX: the SDK <script> is deferred. With defer it normally executes before
-// this module (document order), so the poll resolves immediately; it only spins
-// when the SDK failed to load or an engine broke that ordering. Never call any
-// liff.* method unless this resolved true.
-function waitForLiffSdk(timeoutMs=6000){
-  return new Promise(resolve=>{
-    if(typeof liff!=="undefined") return resolve(true);
-    const t0=Date.now();
-    const iv=setInterval(()=>{
-      if(typeof liff!=="undefined"){clearInterval(iv);resolve(true);}
-      else if(Date.now()-t0>timeoutMs){clearInterval(iv);resolve(false);}
-    },100);
-  });
-}
-
 async function initLiff() {
   const tStart = performance.now();
   $("ltext").textContent=t("connectingLine");
-
-  // HOTFIX: confirm the SDK arrived before any liff.* call. If it never arrives:
-  // inside LINE show recovery; in an external browser continue as Guest with no
-  // liff.* calls at all.
-  const sdkOk = await waitForLiffSdk(6000);
-  console.log(`[boot] sdkReady:${sdkOk} +${Date.now()-window.__UT_BOOT.t0}ms`);
-  if(!sdkOk && _isLineApp){ showLiffRecoveryUI(); return; }
-  if(!sdkOk) console.log("[boot] SDK unavailable in external browser — continuing as Guest.");
-
   let liffInitOk = false;
-  if (sdkOk) {
-    try {
-      console.log(`[boot] init start +${Date.now()-window.__UT_BOOT.t0}ms`);
-      await Promise.race([
-        liff.init({ liffId:LIFF_ID }),
-        new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF init timeout after 10s")),10000))
-      ]);
-      liffInitOk = true;
-      console.log(`[boot] init ok +${Date.now()-window.__UT_BOOT.t0}ms`);
-      if(!liff.isLoggedIn()){
-        // HOTFIX: clean redirect target — strip stale ?code=/liff.state/#hash so an
-        // expired-session re-login doesn't carry old auth params (Android loop risk).
-        const cleanUrl = window.location.origin + window.location.pathname;
-        console.log(`[boot] loginRedirect → ${cleanUrl} · bootCount:${window.__UT_BOOT.bootCount}`);
-        liff.login({ redirectUri: cleanUrl });
-        return;
-      }
-      state.lineProfile = await Promise.race([
-        liff.getProfile(),
-        new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF getProfile timeout after 5s")),5000))
-      ]);
-      console.log(`[boot] profile ok +${Date.now()-window.__UT_BOOT.t0}ms`);
-    } catch(e) {
-      console.warn("LIFF init/profile failed:", e);
-      if (_isLineApp) {
-        // Inside LINE's browser — show recovery UI; do not silently fall to Guest.
-        showLiffRecoveryUI();
-        return;
-      }
-      // External browser — continue as Guest for Single Use browsing.
-      console.log("[liff] External browser, continuing as Guest.");
+  try {
+    await Promise.race([
+      liff.init({ liffId:LIFF_ID }),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF init timeout after 10s")),10000))
+    ]);
+    liffInitOk = true;
+    if(!liff.isLoggedIn()){ liff.login({ redirectUri: window.location.href }); return; }
+    state.lineProfile = await Promise.race([
+      liff.getProfile(),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF getProfile timeout after 5s")),5000))
+    ]);
+  } catch(e) {
+    console.warn("LIFF init/profile failed:", e);
+    if (_isLineApp) {
+      // Inside LINE's browser — show recovery UI; do not silently fall to Guest.
+      showLiffRecoveryUI();
+      return;
     }
+    // External browser — continue as Guest for Single Use browsing.
+    console.log("[liff] External browser, continuing as Guest.");
   }
 
   $("pname").textContent = state.lineProfile.displayName;
@@ -1091,11 +990,6 @@ async function initLiff() {
 
   // Set default pricing text first, then immediately hide loading screen
   updateHomeSingleUsePricing();
-  // HOTFIX: boot succeeded — disarm the early watchdog and reset the loop counter.
-  window.__UT_BOOT.done = true;
-  clearTimeout(window.__UT_BOOT.timer);
-  try { sessionStorage.setItem("ut_boot_count","0"); } catch(_) {}
-  console.log(`[boot] spinner hidden +${Date.now()-window.__UT_BOOT.t0}ms`);
   $("loverlay").style.display="none";
   $("shell").style.display="block";
   setupNav(); // bind nav immediately so buttons work during pending-booking restore
@@ -2060,41 +1954,7 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
         onerror="this.parentElement.innerHTML='<p style=\\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\\'>⚠️ '+(window.utT?window.utT(\\'qrNotFound\\'):\\'QR not found. Please contact staff.\\')+'</p>'"/>`;
     }
   }
-  // PATCH(cancel-booking): visible only for booking payments — never for pass
-  // purchases. Reset to clickable state on every panel open.
-  const cancelBtn=$("cancelBkBtn");
-  if(cancelBtn){
-    const showCancel = state.paymentMode==="booking" && !!state.currentBookingDocId;
-    cancelBtn.style.display = showCancel ? "block" : "none";
-    cancelBtn.disabled = false;
-    cancelBtn.textContent = "ยกเลิกการจอง";
-  }
 }
-
-// PATCH(slip-upload): explicit listener replaces the old inline onclick on the
-// upload area — more reliable across LINE in-app WebViews (Android/iOS) and
-// normal mobile browsers. Keyboard accessible via the role=button/tabindex.
-$("slipArea").addEventListener("click",()=>{ $("slipIn").click(); });
-$("slipArea").addEventListener("keydown",e=>{
-  if(e.key==="Enter"||e.key===" "){ e.preventDefault(); $("slipIn").click(); }
-});
-
-// PATCH(qr-save): save/open the QR image currently displayed. Static image only —
-// no amount or verification logic. In the LINE in-app browser the download
-// attribute is unreliable, so open the image in a new view for long-press save.
-$("qrSaveBtn").addEventListener("click",()=>{
-  const img=document.querySelector("#payQrWrap img");
-  if(!img||!img.src){ showToast(t("qrNotFound"),true); return; } // e.g. Late Night with no QR configured
-  const src=img.src;
-  if(_isLineApp){
-    const w=window.open(src,"_blank");
-    if(!w) showToast("กดค้างที่รูป QR เพื่อบันทึกรูป");
-    return;
-  }
-  const a=document.createElement("a");
-  a.href=src; a.download="ultra-tennis-payment-qr.png";
-  document.body.appendChild(a); a.click(); a.remove();
-});
 
 // Slip file change
 $("slipIn").addEventListener("change",()=>{
@@ -2198,73 +2058,27 @@ $("submitSlipBtn").addEventListener("click", async()=>{
   }
 });
 
-// ── PATCH(cancel-booking): customer self-cancel on the payment page ──────
-// Booking payments only (never pass purchases). Cancels ONLY bookings that are
-// still pending_payment + unpaid + unexpired, verified inside the transaction.
-// The slot is released ONLY when it still points to this exact booking
-// (slotData.bookingId === bookingId) — never a slot owned by someone else.
-$("cancelBkBtn").addEventListener("click", async()=>{
-  if(state.paymentMode!=="booking" || !state.currentBookingDocId) return;
-  if(!confirm("ต้องการยกเลิกการจองนี้ใช่ไหม? หากยกเลิกแล้วต้องจองเวลาใหม่อีกครั้ง")) return;
-
-  const btn=$("cancelBkBtn");
-  btn.disabled=true; btn.textContent="กำลังยกเลิก...";
-  const bookingId=state.currentBookingDocId;
-
-  try{
-    await runTransaction(db, async tx=>{
-      // Reads first (Firestore requires all reads before writes).
-      const bookingRef=doc(db,"bookings",bookingId);
-      const snap=await tx.get(bookingRef);
-      if(!snap.exists()) throw new Error("NOT_CANCELLABLE");
-      const b=snap.data();
-
-      // Must still be the booking this payment session belongs to.
-      if(state.currentBookingCode && b.bookingCode!==state.currentBookingCode) throw new Error("NOT_CANCELLABLE");
-      if(b.lineUserId && b.lineUserId!=="guest" && state.lineProfile?.userId &&
-         state.lineProfile.userId!=="guest" && b.lineUserId!==state.lineProfile.userId) throw new Error("NOT_CANCELLABLE");
-
-      // Only unpaid, still-pending, unexpired bookings are customer-cancellable.
-      if(b.bookingStatus!=="pending_payment") throw new Error("NOT_CANCELLABLE");
-      if(["paid","package","pending_review","rejected","cancelled"].includes(b.paymentStatus)) throw new Error("NOT_CANCELLABLE");
-      const exp=b.paymentExpiresAt?.toDate?.();
-      if(exp && exp<new Date()) throw new Error("NOT_CANCELLABLE"); // expired — direct to My Bookings
-
-      const slotId=`${RESOURCE_ID}_${b.date}_${String(b.startTime||"").replace(":","")}`;
-      const slotRef=doc(db,"booking_slots",slotId);
-      const slotSnap=await tx.get(slotRef);
-
-      // Writes.
-      tx.update(bookingRef,{
-        bookingStatus:"cancelled",
-        paymentStatus:"cancelled",
-        cancelReason:"Customer cancelled before payment",
-        cancelledAt:serverTimestamp(),
-        cancelledBy:"customer",
-        updatedAt:serverTimestamp(),
-      });
-      // Strict ownership: release ONLY if the slot row still points to this booking.
-      if(slotSnap.exists() && slotSnap.data().bookingId===bookingId){
-        tx.update(slotRef,{ bookingStatus:"cancelled", paymentStatus:"cancelled", expiresAt:null });
-      }
-    });
-
-    try{ localStorage.removeItem("ut_pending_booking"); }catch(_){}
-    state.currentBookingCode=null;
-    state.currentBookingDocId=null;
-    state.currentBookingData=null;
-    state.paymentMode=null;
-    showToast("ยกเลิกการจองแล้ว กรุณาจองเวลาใหม่อีกครั้ง");
-    showView("viewHome");
-  }catch(e){
-    console.error("Customer cancel failed:",e);
-    showToast("รายการนี้ไม่สามารถยกเลิกได้ กรุณาตรวจสอบรายการจองของคุณ",true);
-  }finally{
-    btn.disabled=false; btn.textContent="ยกเลิกการจอง";
-  }
-});
-
 // ── MY BOOKINGS ─────────────────────────────────────────────────
+// The ordered bookings query needs the composite index
+// (lineUserId ASC, createdAt DESC) on `bookings`. If that index is missing
+// Firestore rejects the query with failed-precondition and history never
+// loads — so fall back to the equality-only query (works on the automatic
+// single-field index) and sort/limit client-side instead of failing.
+async function fetchMyBookings(uid){
+  try {
+    const snap = await getDocs(query(collection(db,"bookings"),
+      where("lineUserId","==",uid), orderBy("createdAt","desc"), limit(20)));
+    return snap.docs.map(d=>({id:d.id,...d.data()}));
+  } catch(e){
+    console.warn("[myBookings] indexed query failed, using fallback:", e?.code||e?.message||e);
+    const snap = await getDocs(query(collection(db,"bookings"),
+      where("lineUserId","==",uid)));
+    return snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0))
+      .slice(0,20);
+  }
+}
+
 async function openMyBookings() {
   if (state.lineProfile.userId === "guest") {
     showView("viewMyBookings");
@@ -2277,13 +2091,12 @@ async function openMyBookings() {
   try {
     const uid=state.lineProfile.userId;
 
-    const [bookSnap, pkgSnap, purchSnap] = await Promise.all([
-      getDocs(query(collection(db,"bookings"), where("lineUserId","==",uid), orderBy("createdAt","desc"), limit(20))),
+    const [bookings, pkgSnap, purchSnap] = await Promise.all([
+      fetchMyBookings(uid),
       getDocs(query(collection(db,"customer_packages"), where("lineUserId","==",uid), where("status","==","active"))),
       getDocs(query(collection(db,"pass_purchases"), where("lineUserId","==",uid))),
     ]);
 
-    const bookings = bookSnap.docs.map(d=>({id:d.id,...d.data()}));
     const packages = pkgSnap.docs.map(d=>({id:d.id,...d.data()}));
     const purchases= purchSnap.docs.map(d=>({id:d.id,...d.data()}))
       .filter(p=>p.status==="pending_payment"||p.status==="pending_review")
@@ -2292,8 +2105,13 @@ async function openMyBookings() {
     state.myBookingsData={bookings,packages,purchases};
     renderMyBookings(bookings, packages, purchases);
   } catch(e){
-    console.error(e);
-    $("myContent").innerHTML=`<div class="empty"><p>${t("failedLoad")}</p></div>`;
+    console.error("My Bookings load failed:", e);
+    $("myContent").innerHTML=`<div class="empty">
+      <div class="empty-icon">⚠️</div>
+      <p>${t("failedLoad")}</p>
+      <div class="empty-btns">
+        <button class="btn-empty" onclick="openMyBookings()">🔄 ${t("retry")}</button>
+      </div></div>`;
   }
 }
 
@@ -2427,6 +2245,7 @@ window.resumePassPayment = async(docId)=>{
 };
 
 window.openBookingView=openBookingView;
+window.openMyBookings=openMyBookings; // used by the retry button in the error state
 // NOTE: customer self-purchase pass flow is not enabled. Passes are issued only via
 // admin.html → "Add Pass". Do not re-add a window.openBuyPassView reference until
 // the buy-pass view actually exists in this file.
@@ -2480,10 +2299,13 @@ function displayStatus(status){
 // leave the user staring at a forever-spinning overlay. Always surface a message.
 setupLanguageToggle();
 
-// Watchdog: armed inline at parse time (early-boot script after #loverlay) —
-// 8 s on Android+LINE, 12 s elsewhere. It fires even when the LIFF SDK or the
-// Firebase imports hang and this module never executes, which the old module
-// setTimeout here could not do.
+// Watchdog: if the loading overlay is still visible after 12 s (LIFF / network hung),
+// show a Thai reload prompt so the customer is never stuck forever.
+setTimeout(()=>{
+  if($("loverlay").style.display==="none") return; // boot succeeded in time — nothing to do
+  showLiffRecoveryUI();
+  console.warn("[watchdog] Boot took >12 s – showing reload prompt");
+},12000);
 
 initLiff().catch(err=>{
   console.error("App boot failed:", err);
