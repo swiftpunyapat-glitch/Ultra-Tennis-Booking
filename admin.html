@@ -1488,17 +1488,15 @@ $("refreshBtn").addEventListener("click",loadBookings);
 // {ok:false, transport:true} so no caller's flow can be interrupted by
 // Calendar sync. LINE notifications are independent of this call.
 async function callGcal(payload){
-  // TEMP DEBUG (notify investigation): trace every gcal call + failure body.
-  console.log("[gcal-debug] →",payload?.action,payload?.booking?.bookingCode||payload?.eventId||"");
   try{
     const res=await fetch('/api/gcal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     let data=null; try{data=await res.json();}catch(_){/* non-JSON response */}
     if(!res.ok||data?.ok===false){
-      console.warn("[gcal-debug] ✗",payload?.action,"HTTP",res.status,data);
+      console.warn("[gcal] ✗",payload?.action,"HTTP",res.status,data);
     }
     return data||{ok:false,error:`HTTP ${res.status}`,transport:true};
   }catch(e){
-    console.warn("[gcal-debug] ✗ network:",payload?.action,e);
+    console.warn("[gcal] ✗ network:",payload?.action,e);
     return {ok:false,error:"gcal_unreachable: "+(e?.message||e),transport:true};
   }
 }

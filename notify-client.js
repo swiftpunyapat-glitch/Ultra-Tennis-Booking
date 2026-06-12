@@ -62,8 +62,6 @@
 
   async function call(path, payload) {
     const url = apiBase() + path;
-    // TEMP DEBUG (notify investigation): trace every notify attempt.
-    console.log(`[notify-client] → ${path}`, payload && payload.audience, payload && payload.type);
     try {
       const res = await fetch(url, {
         method: "POST",
