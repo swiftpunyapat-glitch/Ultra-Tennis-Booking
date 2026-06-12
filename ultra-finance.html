@@ -139,12 +139,48 @@
     .toast.err{background:var(--dan);}
     .divider{height:1px;background:var(--bd);margin:14px 0;}
 
+    /* DOCUMENTS */
+    .doc-link{display:inline-flex;align-items:center;gap:5px;color:var(--g);font-size:.72rem;font-weight:800;}
+    .doc-link:hover{color:#fff3a0;}
+    .doc-modal{position:fixed;inset:0;background:#000b;z-index:1000;display:none;align-items:flex-start;justify-content:center;padding:28px 16px;overflow:auto;}
+    .doc-modal.show{display:flex;}
+    .doc-dialog{width:min(760px,100%);}
+    .doc-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px;}
+    .doc-sheet{background:#fff;color:#17202a;border-radius:10px;padding:36px 42px;box-shadow:0 20px 60px #0008;font-family:Arial,sans-serif;}
+    .doc-head{display:flex;justify-content:space-between;gap:24px;border-bottom:2px solid #17202a;padding-bottom:18px;margin-bottom:20px;}
+    .doc-company h2{font-size:1.2rem;margin-bottom:4px;}
+    .doc-company p,.doc-meta p{font-size:.78rem;line-height:1.55;color:#34495e;}
+    .doc-title{text-align:right;}
+    .doc-title h1{font-size:1.45rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:7px;}
+    .doc-party{border:1px solid #ccd4dc;border-radius:7px;padding:12px 14px;margin-bottom:18px;font-size:.84rem;line-height:1.6;}
+    .doc-items{width:100%;border-collapse:collapse;margin-bottom:18px;font-size:.82rem;}
+    .doc-items th,.doc-items td{padding:9px 10px;border:1px solid #ccd4dc;text-align:left;}
+    .doc-items th{background:#eef2f5;font-size:.72rem;text-transform:uppercase;}
+    .doc-items .right{text-align:right;}
+    .doc-total{margin-left:auto;width:min(320px,100%);font-size:.86rem;}
+    .doc-total-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #dde3e8;}
+    .doc-total-row.grand{font-size:1rem;font-weight:900;border-top:2px solid #17202a;border-bottom:0;margin-top:4px;padding-top:10px;}
+    .doc-footer{margin-top:36px;padding-top:14px;border-top:1px solid #ccd4dc;text-align:center;font-size:.72rem;line-height:1.7;color:#566573;}
+    .doc-void{border:3px solid #b91c1c;color:#b91c1c;font-size:1.5rem;font-weight:900;letter-spacing:3px;text-align:center;padding:7px;margin:0 0 18px;transform:rotate(-2deg);}
+
+    @media print{
+      body{background:#fff;}
+      body > *:not(#documentModal){display:none !important;}
+      #documentModal{display:block !important;position:static;background:#fff;padding:0;overflow:visible;}
+      .doc-modal-actions{display:none !important;}
+      .doc-dialog{width:100%;}
+      .doc-sheet{box-shadow:none;border-radius:0;padding:16mm;color:#000;}
+    }
+
     @media(max-width:640px){
       .main{padding:11px 12px;}
       .cards{grid-template-columns:1fr 1fr;}
       .fgrid{grid-template-columns:1fr 1fr;}
       .ftable{font-size:.72rem;}
       .ftable th,.ftable td{padding:5px 6px;}
+      .doc-sheet{padding:24px 20px;}
+      .doc-head{flex-direction:column;}
+      .doc-title{text-align:left;}
     }
   </style>
 </head>
@@ -250,6 +286,7 @@
     <button class="tab on" data-tab="bookings">📋 Booking Revenue</button>
     <button class="tab"    data-tab="income">➕ Manual Income</button>
     <button class="tab"    data-tab="expenses">💸 Expenses</button>
+    <button class="tab"    data-tab="documents">📄 Documents</button>
   </div>
 
   <!-- ─── BOOKINGS TAB ─── -->
@@ -415,6 +452,31 @@
     </div>
   </div>
 
+  <!-- DOCUMENTS TAB -->
+  <div id="tabDocuments" style="display:none">
+    <div class="main">
+      <div class="sec">
+        <div class="sec-hdr">
+          <h2>📄 Accounting Documents — <span id="docMonthLabel">—</span></h2>
+          <span id="docTotalLabel" style="font-size:.75rem;color:var(--m)"></span>
+        </div>
+        <div class="sec-body">
+          <div id="docTableWrap"><div class="empty">No documents issued this month.</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  </div>
+</div>
+
+<div class="doc-modal" id="documentModal" aria-hidden="true">
+  <div class="doc-dialog">
+    <div class="doc-modal-actions">
+      <button class="btn-g" id="printDocumentBtn">Print</button>
+      <button class="btn-d" id="closeDocumentBtn">Close</button>
+    </div>
+    <div class="doc-sheet" id="documentPrintArea"></div>
   </div>
 </div>
 
@@ -431,6 +493,7 @@ let currentAdminRole = null;
 let allBookings      = [];
 let allExpenses      = [];
 let allManualIncome  = [];
+let allDocuments     = [];
 let expCatFilter     = "all";
 let expEditId        = null;
 let incEditId        = null;
@@ -569,6 +632,7 @@ document.querySelectorAll(".tab").forEach(btn => {
     $("tabBookings").style.display = btn.dataset.tab === "bookings" ? "block" : "none";
     $("tabIncome").style.display   = btn.dataset.tab === "income"   ? "block" : "none";
     $("tabExpenses").style.display = btn.dataset.tab === "expenses" ? "block" : "none";
+    $("tabDocuments").style.display= btn.dataset.tab === "documents"? "block" : "none";
   });
 });
 
@@ -590,12 +654,17 @@ async function loadMonthData() {
   if (!mv) return;
   $("mState").textContent = "Loading…";
   try {
-    const res = await fetch(`/api/finance-data?month=${encodeURIComponent(mv)}`);
-    const data = await res.json();
+    const [financeRes, documentRes] = await Promise.all([
+      fetch(`/api/finance-data?month=${encodeURIComponent(mv)}`),
+      fetch(`/api/finance-data?month=${encodeURIComponent(mv)}&action=documents%3Alist`),
+    ]);
+    const [data, documentData] = await Promise.all([financeRes.json(), documentRes.json()]);
     if (!data.ok) throw new Error(data.error || "Failed to load");
+    if (!documentData.ok) throw new Error(documentData.error || "Failed to load documents");
     allBookings     = data.bookings;
     allExpenses     = data.expenses;
     allManualIncome = data.income;
+    allDocuments    = documentData.documents || [];
     $("lastUpd").textContent = `Updated ${new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}`;
     $("mState").textContent = "";
     renderAll();
@@ -613,6 +682,7 @@ function renderAll() {
   renderIncomeTable();
   renderExpenseTable();
   renderCategoryTotals();
+  renderDocumentsTable();
   updateMonthLabels();
 }
 
@@ -622,6 +692,7 @@ function updateMonthLabels() {
   $("bookMonthLabel").textContent = lbl;
   $("incMonthLabel").textContent  = lbl;
   $("expMonthLabel").textContent  = lbl;
+  $("docMonthLabel").textContent  = lbl;
 }
 
 // ── SUMMARY CARDS ─────────────────────────────────────────────────
@@ -682,6 +753,37 @@ function renderSummaryCards() {
 }
 
 // ── BOOKING TABLE ─────────────────────────────────────────────────
+function findActiveDocument(docType, linkedType, linkedId) {
+  return allDocuments.find(d =>
+    d.docType === docType &&
+    d.linkedType === linkedType &&
+    d.linkedId === linkedId &&
+    d.status === "issued"
+  ) || null;
+}
+
+function documentActionHTML(docType, linkedType, linkedId, issueLabel) {
+  const existing = findActiveDocument(docType, linkedType, linkedId);
+  if (existing) {
+    return `<span class="doc-link">${esc(existing.docNo)}
+      <button class="btn-e" data-doc-view="${esc(existing.id)}">View</button>
+    </span>`;
+  }
+  return `<button class="btn-g" style="padding:5px 9px" data-doc-issue="${esc(docType)}" data-linked-type="${esc(linkedType)}" data-linked-id="${esc(linkedId)}">${esc(issueLabel)}</button>`;
+}
+
+function bindDocumentButtons(root) {
+  root.querySelectorAll("[data-doc-view]").forEach(btn =>
+    btn.addEventListener("click", () => viewDocument(btn.dataset.docView)));
+  root.querySelectorAll("[data-doc-issue]").forEach(btn =>
+    btn.addEventListener("click", () => issueDocument(
+      btn.dataset.docIssue,
+      btn.dataset.linkedType,
+      btn.dataset.linkedId,
+      btn
+    )));
+}
+
 function renderBookingTable() {
   const wrap = $("bookingTableWrap");
   if (!allBookings.length) {
@@ -724,6 +826,9 @@ function renderBookingTable() {
     } else {
       amtCell = `<span style="color:var(--m)">${baht(b.price||0)}</span>`;
     }
+    const documentCell = isPaid
+      ? documentActionHTML("receipt", "booking", b.id, "Issue Receipt")
+      : "—";
     return `<tr>
       <td>${esc(b.date||"—")}</td>
       <td style="white-space:nowrap">${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</td>
@@ -732,6 +837,7 @@ function renderBookingTable() {
       <td class="tnum">${amtCell}</td>
       <td>${psBadge}</td>
       <td style="color:var(--m);font-size:.72rem">${esc(source)}</td>
+      <td class="tact">${documentCell}</td>
     </tr>`;
   }).join("");
 
@@ -751,14 +857,14 @@ function renderBookingTable() {
       <td colspan="3"><strong>Package Usage Value</strong> <span style="font-size:.67rem;font-weight:500;color:var(--m)">(not cash revenue)</span></td>
       <td class="tnum"><strong>${pkgHrs % 1===0?pkgHrs:pkgHrs.toFixed(1)}</strong></td>
       <td class="tnum"><strong>${baht(pkgVal)}</strong></td>
-      <td colspan="2"></td>
+      <td colspan="3"></td>
     </tr>` : '';
 
   wrap.innerHTML = `<div class="tscroll"><table class="ftable">
     <thead><tr>
       <th>Date</th><th>Time</th><th>Customer</th>
       <th class="tnum">Hours</th><th class="tnum">Amount</th>
-      <th>Payment</th><th>Source</th>
+      <th>Payment</th><th>Source</th><th>Document</th>
     </tr></thead>
     <tbody>${rows}</tbody>
     <tfoot>
@@ -766,11 +872,12 @@ function renderBookingTable() {
         <td colspan="3"><strong>Cash Revenue Total</strong></td>
         <td class="tnum"><strong>${paidTotalHrs % 1===0?paidTotalHrs:paidTotalHrs.toFixed(1)}</strong></td>
         <td class="tnum"><strong>${baht(paidRev)}</strong></td>
-        <td colspan="2"></td>
+        <td colspan="3"></td>
       </tr>
       ${pkgFooter}
     </tfoot>
   </table></div>`;
+  bindDocumentButtons(wrap);
 }
 
 function abbrevSource(s) {
@@ -795,16 +902,20 @@ function renderIncomeTable() {
     return;
   }
 
-  const rows = allManualIncome.map(i => `<tr>
-    <td>${esc(i.date||"—")}</td>
-    <td>${esc(i.category||"—")}</td>
-    <td class="tnum" style="color:var(--ac)">${baht(i.amount||0)}</td>
-    <td style="color:var(--m);font-size:.75rem">${esc(i.description||"—")}</td>
-    <td class="tact">
-      <button class="btn-e" data-inc-edit="${esc(i.id)}">Edit</button>
-      <button class="btn-r" data-inc-del="${esc(i.id)}" style="margin-left:5px">Del</button>
-    </td>
-  </tr>`).join("");
+  const rows = allManualIncome.map(i => {
+    const documentCell = documentActionHTML("receipt", "manual_income", i.id, "Issue Receipt");
+    return `<tr>
+      <td>${esc(i.date||"—")}</td>
+      <td>${esc(i.category||"—")}</td>
+      <td class="tnum" style="color:var(--ac)">${baht(i.amount||0)}</td>
+      <td style="color:var(--m);font-size:.75rem">${esc(i.description||"—")}</td>
+      <td class="tact">
+        ${documentCell}
+        <button class="btn-e" data-inc-edit="${esc(i.id)}">Edit</button>
+        <button class="btn-r" data-inc-del="${esc(i.id)}" style="margin-left:5px">Del</button>
+      </td>
+    </tr>`;
+  }).join("");
 
   wrap.innerHTML = `<div class="tscroll"><table class="ftable">
     <thead><tr><th>Date</th><th>Category</th><th class="tnum">Amount</th><th>Description</th><th></th></tr></thead>
@@ -820,6 +931,7 @@ function renderIncomeTable() {
     btn.addEventListener("click", () => startEditIncome(btn.dataset.incEdit)));
   wrap.querySelectorAll("[data-inc-del]").forEach(btn =>
     btn.addEventListener("click", () => deleteIncome(btn.dataset.incDel)));
+  bindDocumentButtons(wrap);
 }
 
 // ── EXPENSE TABLE ─────────────────────────────────────────────────
@@ -837,18 +949,22 @@ function renderExpenseTable() {
   }
 
   const filtTotal = filtered.reduce((s,e)=>s+(Number(e.amount)||0),0);
-  const rows = filtered.map(e => `<tr>
-    <td>${esc(e.date||"—")}</td>
-    <td>${esc(e.category||"—")}</td>
-    <td class="tnum" style="color:var(--warn)">${baht(e.amount||0)}</td>
-    <td style="font-size:.75rem">${esc(e.paymentMethod||"—")}</td>
-    <td style="font-size:.75rem">${esc(e.vendor||"—")}</td>
-    <td style="color:var(--m);font-size:.73rem">${esc(e.note||"—")}</td>
-    <td class="tact">
-      <button class="btn-e" data-exp-edit="${esc(e.id)}">Edit</button>
-      <button class="btn-r" data-exp-del="${esc(e.id)}" style="margin-left:5px">Del</button>
-    </td>
-  </tr>`).join("");
+  const rows = filtered.map(e => {
+    const documentCell = documentActionHTML("payment_voucher", "expense", e.id, "Create PV");
+    return `<tr>
+      <td>${esc(e.date||"—")}</td>
+      <td>${esc(e.category||"—")}</td>
+      <td class="tnum" style="color:var(--warn)">${baht(e.amount||0)}</td>
+      <td style="font-size:.75rem">${esc(e.paymentMethod||"—")}</td>
+      <td style="font-size:.75rem">${esc(e.vendor||"—")}</td>
+      <td style="color:var(--m);font-size:.73rem">${esc(e.note||"—")}</td>
+      <td class="tact">
+        ${documentCell}
+        <button class="btn-e" data-exp-edit="${esc(e.id)}">Edit</button>
+        <button class="btn-r" data-exp-del="${esc(e.id)}" style="margin-left:5px">Del</button>
+      </td>
+    </tr>`;
+  }).join("");
 
   wrap.innerHTML = `<div class="tscroll"><table class="ftable">
     <thead><tr><th>Date</th><th>Category</th><th class="tnum">Amount</th><th>Method</th><th>Vendor</th><th>Note</th><th></th></tr></thead>
@@ -864,7 +980,182 @@ function renderExpenseTable() {
     btn.addEventListener("click", () => startEditExpense(btn.dataset.expEdit)));
   wrap.querySelectorAll("[data-exp-del]").forEach(btn =>
     btn.addEventListener("click", () => deleteExpense(btn.dataset.expDel)));
+  bindDocumentButtons(wrap);
 }
+
+// ── ACCOUNTING DOCUMENTS ──────────────────────────────────────────
+function documentTypeLabel(type) {
+  return type === "payment_voucher" ? "Payment Voucher" : "Receipt";
+}
+
+function linkedRecordLabel(d) {
+  const labels = { booking:"Booking", manual_income:"Manual Income", expense:"Expense" };
+  return `${labels[d.linkedType] || d.linkedType || "Record"} · ${d.linkedId || "—"}`;
+}
+
+function renderDocumentsTable() {
+  const wrap = $("docTableWrap");
+  $("docTotalLabel").textContent = `${allDocuments.length} document${allDocuments.length === 1 ? "" : "s"}`;
+  if (!allDocuments.length) {
+    wrap.innerHTML = `<div class="empty">No documents issued this month.</div>`;
+    return;
+  }
+
+  const rows = allDocuments.map(d => {
+    const statusClass = d.status === "void" ? "sp-cancelled" : "sp-paid";
+    return `<tr>
+      <td>${esc(d.docDate || "—")}</td>
+      <td style="font-weight:800;color:var(--g)">${esc(d.docNo || "—")}</td>
+      <td>${esc(documentTypeLabel(d.docType))}</td>
+      <td>${esc(d.counterpartyName || "—")}</td>
+      <td class="tnum">${baht(d.total || 0)}</td>
+      <td><span class="sp ${statusClass}">${esc(d.status || "—")}</span></td>
+      <td style="font-size:.7rem;color:var(--m)">${esc(linkedRecordLabel(d))}</td>
+      <td class="tact">
+        <button class="btn-e" data-doc-view="${esc(d.id)}">View / Print</button>
+        ${d.status === "issued" ? `<button class="btn-r" data-doc-void="${esc(d.id)}" style="margin-left:5px">Void</button>` : ""}
+      </td>
+    </tr>`;
+  }).join("");
+
+  wrap.innerHTML = `<div class="tscroll"><table class="ftable">
+    <thead><tr>
+      <th>Date</th><th>Document No.</th><th>Type</th><th>Customer / Vendor</th>
+      <th class="tnum">Amount</th><th>Status</th><th>Linked Record</th><th>Actions</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+  bindDocumentButtons(wrap);
+  wrap.querySelectorAll("[data-doc-void]").forEach(btn =>
+    btn.addEventListener("click", () => voidDocument(btn.dataset.docVoid)));
+}
+
+async function issueDocument(docType, linkedType, linkedId, btn) {
+  if (!canAccessFinance()) { showToast("Finance access denied.", true); return; }
+  const original = btn?.textContent || "";
+  if (btn) { btn.disabled = true; btn.textContent = "Issuing…"; }
+  try {
+    const res = await fetch("/api/finance-data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action:"documents:issue", docType, linkedType, linkedId }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      if (res.status === 409 && data.documentId) {
+        await loadMonthData();
+        viewDocument(data.documentId);
+        showToast(data.docNo ? `${data.docNo} already exists.` : "Document already exists.", true);
+        return;
+      }
+      throw new Error(data.error || "Document issue failed");
+    }
+    await loadMonthData();
+    showToast(`Issued ${data.document.docNo}`);
+    viewDocument(data.document.id);
+  } catch (e) {
+    console.error(e);
+    showToast(e.message || "Failed to issue document.", true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
+}
+
+async function voidDocument(docId) {
+  if (!canAccessFinance()) { showToast("Finance access denied.", true); return; }
+  const document = allDocuments.find(d => d.id === docId);
+  if (!document || document.status !== "issued") return;
+  const reason = prompt(`Void ${document.docNo}?\n\nEnter a reason. The document number will not be reused:`);
+  if (reason === null) return;
+  if (!reason.trim()) { showToast("Void reason is required.", true); return; }
+
+  try {
+    const res = await fetch("/api/finance-data", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action:"documents:void", docId, voidReason:reason.trim() }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Void failed");
+    closeDocument();
+    await loadMonthData();
+    showToast(`${document.docNo} voided.`);
+  } catch (e) {
+    console.error(e);
+    showToast(e.message || "Failed to void document.", true);
+  }
+}
+
+function viewDocument(docId) {
+  const d = allDocuments.find(item => item.id === docId);
+  if (!d) { showToast("Document not found in this month.", true); return; }
+  const profile = d.companyProfileSnapshot || {};
+  const items = Array.isArray(d.items) ? d.items : [];
+  const title = documentTypeLabel(d.docType);
+  const partyLabel = d.counterpartyType === "vendor" ? "Paid To / Vendor" : "Received From / Customer";
+  const itemRows = items.map((item, index) => `<tr>
+    <td>${index + 1}</td>
+    <td>${esc(item.description || "—")}</td>
+    <td class="right">${Number(item.quantity) || 1}</td>
+    <td class="right">${baht(item.unitPrice || 0)}</td>
+    <td class="right">${baht(item.amount || 0)}</td>
+  </tr>`).join("");
+  const footer = d.docType === "receipt"
+    ? `<p>This document is generated from Swift Sports internal finance system.</p><p><strong>This document is not a tax invoice.</strong></p>`
+    : `<p>This document is generated from Swift Sports internal finance system.</p>`;
+
+  $("documentPrintArea").innerHTML = `
+    <div class="doc-head">
+      <div class="doc-company">
+        <h2>${esc(profile.legalNameTh || "บริษัท สวิฟท์ สปอร์ตส์ กรุ๊ป จำกัด")}</h2>
+        <p>${esc(profile.legalNameEn || "Swift Sports Group Co., Ltd.")}</p>
+        <p>Brand: ${esc(profile.brandName || "Ultra Tennis")}</p>
+        <p>Branch: ${esc(profile.branch || "สำนักงานใหญ่")}</p>
+        ${profile.address ? `<p>${esc(profile.address)}</p>` : ""}
+        <p>Tax ID: ${esc(profile.taxId || "")}</p>
+        ${profile.phone ? `<p>Phone: ${esc(profile.phone)}</p>` : ""}
+        ${profile.email ? `<p>Email: ${esc(profile.email)}</p>` : ""}
+      </div>
+      <div class="doc-title">
+        <h1>${esc(title)}</h1>
+        <div class="doc-meta">
+          <p><strong>No.</strong> ${esc(d.docNo || "—")}</p>
+          <p><strong>Date</strong> ${esc(d.docDate || "—")}</p>
+          <p><strong>Status</strong> ${esc(d.status || "—")}</p>
+        </div>
+      </div>
+    </div>
+    ${d.status === "void" ? `<div class="doc-void">VOID</div>` : ""}
+    <div class="doc-party">
+      <strong>${partyLabel}:</strong> ${esc(d.counterpartyName || "—")}<br>
+      <strong>Linked Record:</strong> ${esc(linkedRecordLabel(d))}
+      ${d.paymentMethod ? `<br><strong>Payment Method:</strong> ${esc(d.paymentMethod)}` : ""}
+      ${d.status === "void" ? `<br><strong>Void Reason:</strong> ${esc(d.voidReason || "—")}` : ""}
+    </div>
+    <table class="doc-items">
+      <thead><tr><th>#</th><th>Description</th><th class="right">Qty</th><th class="right">Unit Price</th><th class="right">Amount</th></tr></thead>
+      <tbody>${itemRows || `<tr><td>1</td><td>—</td><td class="right">1</td><td class="right">${baht(d.total || 0)}</td><td class="right">${baht(d.total || 0)}</td></tr>`}</tbody>
+    </table>
+    <div class="doc-total">
+      <div class="doc-total-row"><span>Subtotal</span><strong>${baht(d.subtotal || 0)}</strong></div>
+      <div class="doc-total-row"><span>Discount</span><strong>${baht(d.discount || 0)}</strong></div>
+      <div class="doc-total-row grand"><span>Total</span><strong>${baht(d.total || 0)}</strong></div>
+    </div>
+    <div class="doc-footer">${footer}</div>`;
+  $("documentModal").classList.add("show");
+  $("documentModal").setAttribute("aria-hidden", "false");
+}
+
+function closeDocument() {
+  $("documentModal").classList.remove("show");
+  $("documentModal").setAttribute("aria-hidden", "true");
+}
+
+$("closeDocumentBtn").addEventListener("click", closeDocument);
+$("printDocumentBtn").addEventListener("click", () => window.print());
+$("documentModal").addEventListener("click", e => {
+  if (e.target === $("documentModal")) closeDocument();
+});
 
 // ── CATEGORY TOTALS ───────────────────────────────────────────────
 function renderCategoryTotals() {
