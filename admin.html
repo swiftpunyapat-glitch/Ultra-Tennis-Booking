@@ -1484,9 +1484,23 @@ $("refreshBtn").addEventListener("click",loadBookings);
 
 // callGcal: backend-only — credentials never touch the frontend.
 // The admin session cookie is sent automatically by the browser.
+// NEVER throws: every failure (network, non-JSON, HTTP error) resolves to
+// {ok:false, transport:true} so no caller's flow can be interrupted by
+// Calendar sync. LINE notifications are independent of this call.
 async function callGcal(payload){
-  const res=await fetch('/api/gcal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  return res.json();
+  // TEMP DEBUG (notify investigation): trace every gcal call + failure body.
+  console.log("[gcal-debug] →",payload?.action,payload?.booking?.bookingCode||payload?.eventId||"");
+  try{
+    const res=await fetch('/api/gcal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    let data=null; try{data=await res.json();}catch(_){/* non-JSON response */}
+    if(!res.ok||data?.ok===false){
+      console.warn("[gcal-debug] ✗",payload?.action,"HTTP",res.status,data);
+    }
+    return data||{ok:false,error:`HTTP ${res.status}`,transport:true};
+  }catch(e){
+    console.warn("[gcal-debug] ✗ network:",payload?.action,e);
+    return {ok:false,error:"gcal_unreachable: "+(e?.message||e),transport:true};
+  }
 }
 
 // gcalChip: renders the calendar sync status row on a booking card.
@@ -3689,6 +3703,7 @@ let gcalHealthy=null; // null=unknown, true=reachable+auth ok, false=broken
 async function checkGcalHealth(){
   try{
     const r=await callGcal({action:"ping"});
+    if(r?.transport){gcalHealthy=false;return;} // callGcal no longer throws — transport failure arrives as a flag
     const err=String(r?.error||"").toLowerCase();
     gcalHealthy=!err.includes("auth failed")&&!err.includes("not configured")&&!err.includes("access denied");
   }catch{

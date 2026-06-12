@@ -3,8 +3,11 @@
 // ════════════════════════════════════════════════════════════════════
 // Two globals are exposed for use from index.html and admin.html:
 //
-//   sendLineNotification(payload)   → POST /api/line-push
-//   notifyAdmins(payload)           → POST /api/notify-admins
+//   sendLineNotification(payload)   → POST /api/line-notify (audience:"user")
+//   notifyAdmins(payload)           → POST /api/line-notify (audience:"admins")
+//
+// NOTE: the old /api/line-push and /api/notify-admins routes were DELETED
+// in the route consolidation — both globals must hit /api/line-notify.
 //
 // Both are FIRE-AND-FORGET. They:
 //   • never throw
@@ -59,6 +62,8 @@
 
   async function call(path, payload) {
     const url = apiBase() + path;
+    // TEMP DEBUG (notify investigation): trace every notify attempt.
+    console.log(`[notify-client] → ${path}`, payload && payload.audience, payload && payload.type);
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -84,11 +89,13 @@
   }
 
   // ─── public API ───────────────────────────────────────────────────
+  // Both old routes were merged into /api/line-notify (Vercel function
+  // limit); the audience field selects single-user push vs admin broadcast.
   window.sendLineNotification = function (payload) {
-    return call("/api/line-push", payload);
+    return call("/api/line-notify", Object.assign({}, payload, { audience: "user" }));
   };
 
   window.notifyAdmins = function (payload) {
-    return call("/api/notify-admins", payload);
+    return call("/api/line-notify", Object.assign({}, payload, { audience: "admins" }));
   };
 })();

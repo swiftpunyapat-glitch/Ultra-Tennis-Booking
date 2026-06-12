@@ -226,6 +226,15 @@ export default async function handler(req, res) {
   const body = parseBody(req);
   const { action, booking, eventId } = body ?? {};
 
+  // ── action: "ping" ───────────────────────────────────────────────
+  // Lightweight health probe fired by admin.html checkGcalHealth() once
+  // after every admin login. Previously unsupported, so every admin page
+  // load produced a 400 "Unsupported action" in the Vercel logs (harmless
+  // but noisy). Same health-check semantics, now a clean 200.
+  if (action === 'ping') {
+    return res.status(200).json({ ok: true, pong: true });
+  }
+
   // ── action: "create" ─────────────────────────────────────────────
   if (action === 'create') {
     const validationError = validateBooking(booking);
