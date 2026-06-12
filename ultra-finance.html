@@ -163,13 +163,48 @@
     .doc-footer{margin-top:36px;padding-top:14px;border-top:1px solid #ccd4dc;text-align:center;font-size:.72rem;line-height:1.7;color:#566573;}
     .doc-void{border:3px solid #b91c1c;color:#b91c1c;font-size:1.5rem;font-weight:900;letter-spacing:3px;text-align:center;padding:7px;margin:0 0 18px;transform:rotate(-2deg);}
 
+    /* MONTHLY REPORT */
+    .report-actions{display:flex;justify-content:flex-end;margin-bottom:10px;}
+    .report-sheet{display:grid;gap:12px;}
+    .report-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;}
+    .report-head h2{font-size:1.08rem;color:var(--g);margin-bottom:3px;}
+    .report-head p{font-size:.72rem;color:var(--m);}
+    .report-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
+    .report-block{background:var(--s);border:1px solid var(--bd);border-radius:10px;padding:14px;}
+    .report-block h3{font-size:.78rem;color:var(--g);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;}
+    .report-line{display:flex;justify-content:space-between;gap:14px;padding:6px 0;border-bottom:1px solid var(--bd);font-size:.8rem;}
+    .report-line:last-child{border-bottom:0;}
+    .report-line strong{white-space:nowrap;}
+    .report-line.total{font-size:.9rem;font-weight:900;color:#fff3a0;border-top:1px solid var(--g);margin-top:3px;padding-top:9px;}
+    .report-net{font-size:1.4rem;font-weight:900;text-align:right;margin-top:8px;}
+    .report-note{padding:8px 10px;border:1px solid #854d0e;background:#42200666;color:#fde68a;border-radius:7px;font-size:.76rem;line-height:1.45;}
+    .report-note + .report-note{margin-top:7px;}
+    .report-register{grid-column:1/-1;}
+    #monthlyReportPrint{display:none;}
+
     @media print{
       body{background:#fff;}
-      body > *:not(#documentModal){display:none !important;}
-      #documentModal{display:block !important;position:static;background:#fff;padding:0;overflow:visible;}
-      .doc-modal-actions{display:none !important;}
-      .doc-dialog{width:100%;}
-      .doc-sheet{box-shadow:none;border-radius:0;padding:16mm;color:#000;}
+      body:not(.printing-report) > *:not(#documentModal){display:none !important;}
+      body:not(.printing-report) #documentModal{display:block !important;position:static;background:#fff;padding:0;overflow:visible;}
+      body:not(.printing-report) .doc-modal-actions{display:none !important;}
+      body:not(.printing-report) .doc-dialog{width:100%;}
+      body:not(.printing-report) .doc-sheet{box-shadow:none;border-radius:0;padding:16mm;color:#000;}
+      body.printing-report > *:not(#monthlyReportPrint){display:none !important;}
+      body.printing-report #monthlyReportPrint{display:block !important;color:#000;font-family:Arial,sans-serif;padding:10mm;}
+      body.printing-report .report-sheet{display:block;}
+      body.printing-report .report-head{border-bottom:2px solid #17202a;padding-bottom:12px;margin-bottom:12px;}
+      body.printing-report .report-head h2,
+      body.printing-report .report-block h3{color:#17202a;}
+      body.printing-report .report-head p{color:#566573;}
+      body.printing-report .report-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+      body.printing-report .report-block{background:#fff;border-color:#b8c0c8;break-inside:avoid;}
+      body.printing-report .report-line{border-color:#d5d9dd;}
+      body.printing-report .report-line.total{color:#17202a;border-color:#17202a;}
+      body.printing-report .report-note{background:#fff8e1;color:#5f4300;border-color:#c9a227;}
+      body.printing-report .ftable{color:#17202a;}
+      body.printing-report .ftable th{background:#eef2f5;color:#17202a;}
+      body.printing-report .ftable td,
+      body.printing-report .ftable th{border-color:#ccd4dc;}
     }
 
     @media(max-width:640px){
@@ -181,6 +216,9 @@
       .doc-sheet{padding:24px 20px;}
       .doc-head{flex-direction:column;}
       .doc-title{text-align:left;}
+      .report-grid{grid-template-columns:1fr;}
+      .report-register{grid-column:auto;}
+      .report-head{flex-direction:column;}
     }
   </style>
 </head>
@@ -287,6 +325,7 @@
     <button class="tab"    data-tab="income">➕ Manual Income</button>
     <button class="tab"    data-tab="expenses">💸 Expenses</button>
     <button class="tab"    data-tab="documents">📄 Documents</button>
+    <button class="tab"    data-tab="report">📊 Monthly Report</button>
   </div>
 
   <!-- ─── BOOKINGS TAB ─── -->
@@ -467,6 +506,16 @@
     </div>
   </div>
 
+  <!-- MONTHLY REPORT TAB -->
+  <div id="tabReport" style="display:none">
+    <div class="main">
+      <div class="report-actions">
+        <button class="btn-g" id="printMonthlyReportBtn">Print Monthly Report</button>
+      </div>
+      <div id="monthlyReportContent"></div>
+    </div>
+  </div>
+
   </div>
 </div>
 
@@ -479,6 +528,8 @@
     <div class="doc-sheet" id="documentPrintArea"></div>
   </div>
 </div>
+
+<div id="monthlyReportPrint"></div>
 
 <div class="toast" id="toast"></div>
 
@@ -633,6 +684,7 @@ document.querySelectorAll(".tab").forEach(btn => {
     $("tabIncome").style.display   = btn.dataset.tab === "income"   ? "block" : "none";
     $("tabExpenses").style.display = btn.dataset.tab === "expenses" ? "block" : "none";
     $("tabDocuments").style.display= btn.dataset.tab === "documents"? "block" : "none";
+    $("tabReport").style.display   = btn.dataset.tab === "report"   ? "block" : "none";
   });
 });
 
@@ -683,6 +735,7 @@ function renderAll() {
   renderExpenseTable();
   renderCategoryTotals();
   renderDocumentsTable();
+  renderMonthlyReport();
   updateMonthLabels();
 }
 
@@ -1029,6 +1082,143 @@ function renderDocumentsTable() {
   wrap.querySelectorAll("[data-doc-void]").forEach(btn =>
     btn.addEventListener("click", () => voidDocument(btn.dataset.docVoid)));
 }
+
+// ── MONTHLY REPORT ────────────────────────────────────────────────
+function renderMonthlyReport() {
+  const paidBookings = allBookings.filter(b => b.paymentStatus === "paid");
+  const unpaidBookings = allBookings.filter(b =>
+    (b.paymentStatus === "unpaid" || b.paymentStatus === "pending_review") &&
+    b.bookingStatus !== "cancelled"
+  );
+  const packageBookings = allBookings.filter(b =>
+    b.paymentStatus === "package" &&
+    (b.packageType === "ultra_10" || b.packageType === "ultra_20" ||
+     b.bookingType === "Ultra Pass 1" || b.bookingType === "Ultra Pass 2")
+  );
+
+  const bookingRevenue = paidBookings.reduce((sum, b) => sum + (Number(b.price) || 0), 0);
+  const manualIncome = allManualIncome.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const totalRevenue = bookingRevenue + manualIncome;
+  const totalExpenses = allExpenses.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const netPL = totalRevenue - totalExpenses;
+  const paidHours = paidBookings.reduce((sum, b) => sum + calcHours(b.startTime, b.endTime), 0);
+  const unpaidAmount = unpaidBookings.reduce((sum, b) => sum + (Number(b.price) || 0), 0);
+  const packageValue = packageBookings.reduce((sum, b) => {
+    if (b.packageUsageValueTotal) return sum + Number(b.packageUsageValueTotal);
+    const hours = calcHours(b.startTime, b.endTime);
+    if (b.packageType === "ultra_10" || b.bookingType === "Ultra Pass 1") return sum + hours * 310;
+    if (b.packageType === "ultra_20" || b.bookingType === "Ultra Pass 2") return sum + hours * 295;
+    return sum;
+  }, 0);
+
+  const categoryTotals = {};
+  allExpenses.forEach(item => {
+    const category = item.category || "Uncategorized";
+    categoryTotals[category] = (categoryTotals[category] || 0) + (Number(item.amount) || 0);
+  });
+  const categoryRows = Object.entries(categoryTotals)
+    .sort((a, b) => b[1] - a[1])
+    .map(([category, amount]) =>
+      `<div class="report-line"><span>${esc(category)}</span><strong>${baht(amount)}</strong></div>`)
+    .join("") || `<div class="report-line"><span>No expenses recorded</span><strong>${baht(0)}</strong></div>`;
+
+  const issuedReceipts = allDocuments.filter(d => d.docType === "receipt" && d.status === "issued");
+  const issuedVouchers = allDocuments.filter(d => d.docType === "payment_voucher" && d.status === "issued");
+  const voidedDocuments = allDocuments.filter(d => d.status === "void");
+  const receiptAmount = issuedReceipts.reduce((sum, d) => sum + (Number(d.total) || 0), 0);
+  const voucherAmount = issuedVouchers.reduce((sum, d) => sum + (Number(d.total) || 0), 0);
+  const documentRows = allDocuments.map(d => `<tr>
+    <td>${esc(d.docDate || "—")}</td>
+    <td style="font-weight:800">${esc(d.docNo || "—")}</td>
+    <td>${esc(documentTypeLabel(d.docType))}</td>
+    <td>${esc(d.counterpartyName || "—")}</td>
+    <td class="tnum">${baht(d.total || 0)}</td>
+    <td>${esc(d.status || "—")}</td>
+  </tr>`).join("") || `<tr><td colspan="6" style="text-align:center;color:var(--m)">No documents issued this month.</td></tr>`;
+
+  const profile = allDocuments.find(d => d.companyProfileSnapshot)?.companyProfileSnapshot || {};
+  const taxIdBlank = !String(profile.taxId || "").trim();
+  const notes = [
+    voidedDocuments.length
+      ? `${voidedDocuments.length} voided document${voidedDocuments.length === 1 ? "" : "s"} require review.`
+      : null,
+    unpaidBookings.length
+      ? `${unpaidBookings.length} unpaid booking${unpaidBookings.length === 1 ? "" : "s"} remain, totaling ${baht(unpaidAmount)}.`
+      : null,
+    `Package usage value (${baht(packageValue)}) is operational value and is not cash revenue.`,
+    taxIdBlank ? "Company Tax ID is blank." : null,
+    "Non-VAT mode is active. This report does not calculate or display VAT.",
+  ].filter(Boolean);
+
+  const netText = `${netPL >= 0 ? "+" : "−"}${baht(Math.abs(netPL))}`;
+  const reportMonth = monthLabel($("monthPicker").value);
+  $("monthlyReportContent").innerHTML = `
+    <div class="report-sheet">
+      <div class="report-head">
+        <div>
+          <h2>Ultra Tennis Monthly Finance Report</h2>
+          <p>Swift Sports Group Co., Ltd. · ${esc(reportMonth)} · Internal non-VAT report</p>
+        </div>
+        <p>Prepared from current finance records and document register.</p>
+      </div>
+      <div class="report-grid">
+        <section class="report-block">
+          <h3>Revenue Summary</h3>
+          <div class="report-line"><span>Booking Revenue</span><strong>${baht(bookingRevenue)}</strong></div>
+          <div class="report-line"><span>Manual Income</span><strong>${baht(manualIncome)}</strong></div>
+          <div class="report-line total"><span>Total Revenue</span><strong>${baht(totalRevenue)}</strong></div>
+        </section>
+        <section class="report-block">
+          <h3>Expense Summary</h3>
+          ${categoryRows}
+          <div class="report-line total"><span>Total Expenses</span><strong>${baht(totalExpenses)}</strong></div>
+        </section>
+        <section class="report-block">
+          <h3>Net P/L</h3>
+          <div class="report-line"><span>Total Revenue</span><strong>${baht(totalRevenue)}</strong></div>
+          <div class="report-line"><span>Total Expenses</span><strong>${baht(totalExpenses)}</strong></div>
+          <div class="report-net" style="color:${netPL >= 0 ? "var(--grn)" : "var(--dan)"}">${netText}</div>
+        </section>
+        <section class="report-block">
+          <h3>Booking Operations</h3>
+          <div class="report-line"><span>Paid Booking Count</span><strong>${paidBookings.length}</strong></div>
+          <div class="report-line"><span>Paid Booking Hours</span><strong>${paidHours % 1 === 0 ? paidHours : paidHours.toFixed(1)} hrs</strong></div>
+          <div class="report-line"><span>Unpaid Amount</span><strong>${baht(unpaidAmount)}</strong></div>
+          <div class="report-line"><span>Package Usage Value</span><strong>${baht(packageValue)}</strong></div>
+          <p style="font-size:.68rem;color:var(--m);margin-top:7px">Package usage is not cash revenue.</p>
+        </section>
+        <section class="report-block">
+          <h3>Document Register Summary</h3>
+          <div class="report-line"><span>Issued Receipts</span><strong>${issuedReceipts.length} · ${baht(receiptAmount)}</strong></div>
+          <div class="report-line"><span>Issued Payment Vouchers</span><strong>${issuedVouchers.length} · ${baht(voucherAmount)}</strong></div>
+          <div class="report-line"><span>Voided Documents</span><strong>${voidedDocuments.length}</strong></div>
+        </section>
+        <section class="report-block">
+          <h3>Accountant Notes</h3>
+          ${notes.map(note => `<div class="report-note">${esc(note)}</div>`).join("")}
+        </section>
+        <section class="report-block report-register">
+          <h3>Document Register</h3>
+          <div class="tscroll"><table class="ftable">
+            <thead><tr><th>Date</th><th>Doc No</th><th>Type</th><th>Name</th><th class="tnum">Amount</th><th>Status</th></tr></thead>
+            <tbody>${documentRows}</tbody>
+          </table></div>
+        </section>
+      </div>
+    </div>`;
+}
+
+function printMonthlyReport() {
+  $("monthlyReportPrint").innerHTML = $("monthlyReportContent").innerHTML;
+  document.body.classList.add("printing-report");
+  window.print();
+}
+
+$("printMonthlyReportBtn").addEventListener("click", printMonthlyReport);
+window.addEventListener("afterprint", () => {
+  document.body.classList.remove("printing-report");
+  $("monthlyReportPrint").innerHTML = "";
+});
 
 async function issueDocument(docType, linkedType, linkedId, btn) {
   if (!canAccessFinance()) { showToast("Finance access denied.", true); return; }
