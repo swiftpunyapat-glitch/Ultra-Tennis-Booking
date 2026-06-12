@@ -19,6 +19,58 @@ export function getAdminDb() {
   return getFirestore();
 }
 
+// ── Branch helpers ───────────────────────────────────────────────────
+// Additive and fail-open by design: a missing branch doc or a failed
+// read must NEVER block an operation (backward compatibility with the
+// pre-branch system). Kept here, not in a new _lib file — every .js
+// under api/ counts toward the Vercel function limit on this project.
+
+export const BRANCH_STATUSES = ['active', 'soft_locked', 'hard_locked', 'customer_protection'];
+
+// Read a branch config doc. Never throws; missing doc → null (= implicitly active).
+export async function getBranch(db, branchId) {
+  try {
+    const snap = await db.collection('branches').doc(branchId).get();
+    return snap.exists ? snap.data() : null;
+  } catch (e) {
+    console.error('[branch] getBranch failed:', e.message);
+    return null;
+  }
+}
+
+// Capability flags derived from a branch status.
+export function statusFlags(status) {
+  switch (status) {
+    case 'soft_locked':
+      return { allowNewBookings: false, allowStaffAccess: true,  allowCustomerView: true, showProtectionBanner: false };
+    case 'hard_locked':
+      return { allowNewBookings: false, allowStaffAccess: false, allowCustomerView: true, showProtectionBanner: false };
+    case 'customer_protection':
+      return { allowNewBookings: false, allowStaffAccess: false, allowCustomerView: true, showProtectionBanner: true };
+    case 'active':
+    default:
+      return { allowNewBookings: true,  allowStaffAccess: true,  allowCustomerView: true, showProtectionBanner: false };
+  }
+}
+
+// capability: 'new_bookings' | 'staff_access' | 'customer_view'
+// Explicit flags on the doc win over status-derived defaults.
+// branch null (missing doc / read failure) → always ok.
+export function assertBranchAllows(branch, capability) {
+  if (!branch) return { ok: true };
+  const flags = statusFlags(branch.status);
+  const map = {
+    new_bookings:  branch.allowNewBookings  ?? flags.allowNewBookings,
+    staff_access:  branch.allowStaffAccess  ?? flags.allowStaffAccess,
+    customer_view: branch.allowCustomerView ?? flags.allowCustomerView,
+  };
+  const allowed = map[capability];
+  if (allowed === undefined) return { ok: true };
+  return allowed
+    ? { ok: true }
+    : { ok: false, error: `branch_${branch.status || 'locked'}` };
+}
+
 // Audit log writer. Fire-and-forget safe: NEVER throws — a failed audit
 // write must not break the operation it documents.
 export async function writeAuditLog(db, { actor, actorRole, branchId, action, targetId, before, after, source, note }) {
