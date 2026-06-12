@@ -3,7 +3,7 @@
 // POST/PATCH /api/finance-data — write handling for expense and income
 // ════════════════════════════════════════════════════════════════════
 
-import { verifySessionCookie } from './_lib/admin-auth.js';
+import { verifySession, requireRole } from './_lib/admin-auth.js';
 import { getAdminDb, serializeFsDoc } from './_lib/firebase-admin.js';
 import { FieldValue } from 'firebase-admin/firestore';
 
@@ -32,9 +32,12 @@ function isPositiveNumber(v) {
 export default async function handler(req, res) {
   // GET behavior remains unchanged
   if (req.method === 'GET') {
-    const adminName = verifySessionCookie(req);
-    if (!adminName) {
+    const session = verifySession(req);
+    if (!session) {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
+    if (!requireRole(session, 'owner', 'ultra_admin')) {
+      return res.status(403).json({ ok: false, error: 'Finance access denied' });
     }
 
     const { month } = req.query;
@@ -109,8 +112,12 @@ export default async function handler(req, res) {
 
   // POST and PATCH for expense/income write consolidation
   if (req.method === 'POST' || req.method === 'PATCH') {
-    const adminName = verifySessionCookie(req);
-    if (!adminName) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    const session = verifySession(req);
+    if (!session) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    if (!requireRole(session, 'owner', 'ultra_admin')) {
+      return res.status(403).json({ ok: false, error: 'Finance access denied' });
+    }
+    const adminName = session.name;
 
     let db;
     try { db = getAdminDb(); }

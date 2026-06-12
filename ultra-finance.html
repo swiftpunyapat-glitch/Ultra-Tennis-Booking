@@ -180,6 +180,18 @@
     </div>
   </header>
 
+  <div class="main" id="financeAccessDenied" style="display:none">
+    <div class="sec">
+      <div class="sec-body">
+        <div class="empty" style="padding:34px 20px">
+          <strong style="display:block;color:var(--dan);font-size:1rem;margin-bottom:7px">Finance access denied</strong>
+          This page is available only to owners and Ultra admins.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="financeContent">
   <!-- MONTH SELECTOR -->
   <div class="monthbar">
     <label>Month</label>
@@ -403,6 +415,7 @@
     </div>
   </div>
 
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -414,6 +427,7 @@ const ADMIN_NAMES = ["Art","Aoy","BaiMon","Ano","Stam"];
 
 // ── STATE ─────────────────────────────────────────────────────────
 let currentAdminName = null;
+let currentAdminRole = null;
 let allBookings      = [];
 let allExpenses      = [];
 let allManualIncome  = [];
@@ -487,15 +501,29 @@ async function checkSession() {
     const res = await fetch("/api/admin-session");
     if (!res.ok) return false;
     const data = await res.json();
-    if (data.ok && data.name) { currentAdminName = data.name; showApp(data.name); return true; }
+    if (data.ok && data.name) {
+      currentAdminName = data.name;
+      currentAdminRole = data.role || null;
+      showApp(data.name, currentAdminRole);
+      return true;
+    }
   } catch {}
   return false;
 }
 
-function showApp(name) {
+function canAccessFinance() {
+  return currentAdminRole === "owner" || currentAdminRole === "ultra_admin";
+}
+
+function showApp(name, role) {
   $("loginScreen").style.display = "none";
   $("mainApp").style.display = "block";
   $("adminBadge").textContent = name;
+  currentAdminRole = role || null;
+  const allowed = canAccessFinance();
+  $("financeAccessDenied").style.display = allowed ? "none" : "block";
+  $("financeContent").style.display = allowed ? "block" : "none";
+  if (!allowed) return;
   $("monthPicker").value = currentMonthValue();
   loadMonthData();
 }
@@ -513,7 +541,10 @@ $("loginBtn").addEventListener("click", async () => {
     const res = await fetch("/api/admin-session", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"login", name:n, pin:p})});
     const data = await res.json();
     if (data.ok) {
-      currentAdminName = data.name; err.style.display = "none"; showApp(data.name);
+      currentAdminName = data.name;
+      currentAdminRole = data.role || null;
+      err.style.display = "none";
+      showApp(data.name, currentAdminRole);
     } else {
       err.textContent = "Incorrect name or PIN."; err.style.display = "block";
       $("pinIn").value = ""; $("pinIn").focus();
@@ -525,6 +556,7 @@ $("loginBtn").addEventListener("click", async () => {
 $("logoutBtn").addEventListener("click", async () => {
   try { await fetch("/api/admin-session", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"logout"})}); } catch {}
   currentAdminName = null;
+  currentAdminRole = null;
   $("mainApp").style.display = "none"; $("loginScreen").style.display = "flex";
   $("adminSel").value = ""; $("pinIn").value = "";
 });
@@ -553,6 +585,7 @@ $("monthPicker").addEventListener("change", loadMonthData);
 
 // ── LOAD DATA FOR SELECTED MONTH ──────────────────────────────────
 async function loadMonthData() {
+  if (!canAccessFinance()) return;
   const mv = $("monthPicker").value;
   if (!mv) return;
   $("mState").textContent = "Loading…";
@@ -888,6 +921,7 @@ function resetExpenseForm() {
 }
 
 function startEditExpense(id) {
+  if (!canAccessFinance()) return;
   const exp = allExpenses.find(e => e.id === id);
   if (!exp) return;
   expEditId = id;
@@ -907,6 +941,7 @@ function startEditExpense(id) {
 $("expCancelBtn").addEventListener("click", resetExpenseForm);
 
 $("expSubmitBtn").addEventListener("click", async () => {
+  if (!canAccessFinance()) { showToast("Finance access denied.", true); return; }
   const date   = $("expDate").value;
   const cat    = $("expCategory").value;
   const amount = Number($("expAmount").value);
@@ -941,6 +976,7 @@ $("expSubmitBtn").addEventListener("click", async () => {
 });
 
 async function deleteExpense(id) {
+  if (!canAccessFinance()) { showToast("Finance access denied.", true); return; }
   if (!id) return;
   const exp = allExpenses.find(e => e.id === id);
   const label = exp ? `${exp.category} ${baht(exp.amount)} on ${exp.date}` : "this expense";
@@ -974,6 +1010,7 @@ function resetIncomeForm() {
 }
 
 function startEditIncome(id) {
+  if (!canAccessFinance()) return;
   const inc = allManualIncome.find(i => i.id === id);
   if (!inc) return;
   incEditId = id;
@@ -991,6 +1028,7 @@ function startEditIncome(id) {
 $("incCancelBtn").addEventListener("click", resetIncomeForm);
 
 $("incSubmitBtn").addEventListener("click", async () => {
+  if (!canAccessFinance()) { showToast("Finance access denied.", true); return; }
   const date   = $("incDate").value;
   const cat    = $("incCategory").value;
   const amount = Number($("incAmount").value);
@@ -1023,6 +1061,7 @@ $("incSubmitBtn").addEventListener("click", async () => {
 });
 
 async function deleteIncome(id) {
+  if (!canAccessFinance()) { showToast("Finance access denied.", true); return; }
   if (!id) return;
   const inc = allManualIncome.find(i => i.id === id);
   const label = inc ? `${inc.category} ${baht(inc.amount)} on ${inc.date}` : "this entry";
