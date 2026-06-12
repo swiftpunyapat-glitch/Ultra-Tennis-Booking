@@ -553,6 +553,9 @@ isSupported().then(ok=>{ if(ok) getAnalytics(fbApp); }).catch(()=>{});
 const LIFF_ID     = "2010034901-ClPr9N5v";
 const _isLineApp  = /Line\//i.test(navigator.userAgent); // true inside LINE's in-app browser
 const RESOURCE_ID = "room1";
+// Must match DEFAULT_BRANCH_ID in api/_lib/admin-auth.js and admin.html.
+// Stamped on new bookings/slots; legacy docs without it resolve to this branch.
+const DEFAULT_BRANCH_ID = "ladprao1";
 const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
 const PAY_MINS    = 15;
 const OFFPEAK     = { startHour:9, endHour:15 }; // 09:00–15:00
@@ -1675,6 +1678,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
     const bookingPayload = {
       bookingCode:             code,
       resourceId:              RESOURCE_ID,
+      branchId:                DEFAULT_BRANCH_ID,
       bookingType:             isSingle ? singleType : payType==="ultra" ? (selectedPkg?.packageName || "Package Booking") : "Off-Peak Pass",
       lineUserId:              state.lineProfile.userId,
       lineDisplayName:         state.lineProfile.displayName,
@@ -1826,6 +1830,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
         bookingCode:code,
         bookingId:bookingRef.id,
         resourceId:RESOURCE_ID,
+        branchId:DEFAULT_BRANCH_ID,
         date:dateISO,
         hour:state.time,
         bookingStatus:bookingPayload.bookingStatus,
@@ -2059,18 +2064,25 @@ $("submitSlipBtn").addEventListener("click", async()=>{
 });
 
 // ── MY BOOKINGS ─────────────────────────────────────────────────
-// The ordered bookings query needs the composite index
-// (lineUserId ASC, createdAt DESC) on `bookings`. If that index is missing
-// Firestore rejects the query with failed-precondition and history never
-// loads — so fall back to the equality-only query (works on the automatic
-// single-field index) and sort/limit client-side instead of failing.
+// Per-section resilient loading: bookings / active passes / pending pass
+// purchases each fetch independently, so one failed query renders an inline
+// section error + Retry instead of killing the whole page. A section value
+// of null (instead of an array) means "this section failed to load".
+//
+// Firestore index requirements:
+//   bookings          equality + orderBy(createdAt desc) → needs the composite
+//                     index (lineUserId ASC, createdAt DESC). Falls back to the
+//                     equality-only query + client-side sort when missing.
+//   customer_packages two equality filters → automatic single-field indexes
+//                     suffice; fallback drops the status filter just in case.
+//   pass_purchases    single equality filter → no composite index needed.
 async function fetchMyBookings(uid){
   try {
     const snap = await getDocs(query(collection(db,"bookings"),
       where("lineUserId","==",uid), orderBy("createdAt","desc"), limit(20)));
     return snap.docs.map(d=>({id:d.id,...d.data()}));
   } catch(e){
-    console.warn("[myBookings] indexed query failed, using fallback:", e?.code||e?.message||e);
+    console.warn("[myBookings] bookings indexed query failed, using fallback:", e?.code||e?.message||e);
     const snap = await getDocs(query(collection(db,"bookings"),
       where("lineUserId","==",uid)));
     return snap.docs.map(d=>({id:d.id,...d.data()}))
@@ -2079,47 +2091,111 @@ async function fetchMyBookings(uid){
   }
 }
 
-async function openMyBookings() {
-  if (state.lineProfile.userId === "guest") {
-    showView("viewMyBookings");
-    $("myContent").innerHTML=`<div class="empty"><p style="font-size:.85rem;line-height:1.7;color:var(--muted)">กรุณาเปิดผ่าน LINE เพื่อดูรายการจองและแพ็กเกจของคุณ<br>หากยังใช้งานไม่ได้สามารถทักแอดมินได้เลยค่ะ</p></div>`;
-    return;
-  }
-  showView("viewMyBookings");
-  $("myContent").innerHTML=`<div style="text-align:center;padding:32px"><div class="spinner" style="margin:0 auto 10px"></div><p style="color:var(--muted);font-size:.82rem">${t("loading")}</p></div>`;
-
+async function fetchMyPackages(uid){
   try {
-    const uid=state.lineProfile.userId;
-
-    const [bookings, pkgSnap, purchSnap] = await Promise.all([
-      fetchMyBookings(uid),
-      getDocs(query(collection(db,"customer_packages"), where("lineUserId","==",uid), where("status","==","active"))),
-      getDocs(query(collection(db,"pass_purchases"), where("lineUserId","==",uid))),
-    ]);
-
-    const packages = pkgSnap.docs.map(d=>({id:d.id,...d.data()}));
-    const purchases= purchSnap.docs.map(d=>({id:d.id,...d.data()}))
-      .filter(p=>p.status==="pending_payment"||p.status==="pending_review")
-      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
-
-    state.myBookingsData={bookings,packages,purchases};
-    renderMyBookings(bookings, packages, purchases);
+    const snap = await getDocs(query(collection(db,"customer_packages"),
+      where("lineUserId","==",uid), where("status","==","active")));
+    return snap.docs.map(d=>({id:d.id,...d.data()}));
   } catch(e){
-    console.error("My Bookings load failed:", e);
-    $("myContent").innerHTML=`<div class="empty">
-      <div class="empty-icon">⚠️</div>
-      <p>${t("failedLoad")}</p>
-      <div class="empty-btns">
-        <button class="btn-empty" onclick="openMyBookings()">🔄 ${t("retry")}</button>
-      </div></div>`;
+    console.warn("[myBookings] packages 2-filter query failed, using fallback:", e?.code||e?.message||e);
+    const snap = await getDocs(query(collection(db,"customer_packages"),
+      where("lineUserId","==",uid)));
+    return snap.docs.map(d=>({id:d.id,...d.data()})).filter(p=>p.status==="active");
   }
 }
 
+async function fetchMyPurchases(uid){
+  const snap = await getDocs(query(collection(db,"pass_purchases"),
+    where("lineUserId","==",uid)));
+  return snap.docs.map(d=>({id:d.id,...d.data()}))
+    .filter(p=>p.status==="pending_payment"||p.status==="pending_review")
+    .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+}
+
+// Runs one section fetch; resolves to the data array, or null on failure —
+// never rejects, so the Promise.all in openMyBookings can't take down the page.
+async function loadMySection(label, fetchFn, uid){
+  const t0 = performance.now();
+  try {
+    const data = await fetchFn(uid);
+    console.log(`[myBookings] ${label}: ${data.length} item(s) in ${(performance.now()-t0).toFixed(0)}ms`);
+    return data;
+  } catch(e){
+    console.error(`[myBookings] ${label} FAILED after ${(performance.now()-t0).toFixed(0)}ms — code: ${e?.code||"(none)"} —`, e?.message||e);
+    return null;
+  }
+}
+
+function myBookingsFullError(){
+  $("myContent").innerHTML=`<div class="empty">
+    <div class="empty-icon">⚠️</div>
+    <p>${t("failedLoad")}</p>
+    <div class="empty-btns">
+      <button class="btn-empty" onclick="openMyBookings()">🔄 ${t("retry")}</button>
+    </div></div>`;
+}
+
+async function openMyBookings() {
+  console.log("[myBookings] open — lineProfile:",
+    { userId: state.lineProfile?.userId || "(none)", displayName: state.lineProfile?.displayName || "(none)" });
+
+  showView("viewMyBookings");
+
+  const uid = state.lineProfile?.userId;
+  if (uid === "guest") {
+    console.log("[myBookings] guest profile — showing open-via-LINE message.");
+    $("myContent").innerHTML=`<div class="empty"><p style="font-size:.85rem;line-height:1.7;color:var(--muted)">กรุณาเปิดผ่าน LINE เพื่อดูรายการจองและแพ็กเกจของคุณ<br>หากยังใช้งานไม่ได้สามารถทักแอดมินได้เลยค่ะ</p></div>`;
+    return;
+  }
+  if (!uid) {
+    // LIFF profile not resolved — querying where("lineUserId","==",undefined)
+    // would throw synchronously. Show a clear retry state instead of hanging.
+    console.warn("[myBookings] uid not ready (LIFF profile unresolved) — showing retry state.");
+    myBookingsFullError();
+    return;
+  }
+
+  $("myContent").innerHTML=`<div style="text-align:center;padding:32px"><div class="spinner" style="margin:0 auto 10px"></div><p style="color:var(--muted);font-size:.82rem">${t("loading")}</p></div>`;
+
+  // Safe with Promise.all: loadMySection never rejects (null = section failed).
+  const [bookings, packages, purchases] = await Promise.all([
+    loadMySection("bookings",  fetchMyBookings,  uid),
+    loadMySection("packages",  fetchMyPackages,  uid),
+    loadMySection("purchases", fetchMyPurchases, uid),
+  ]);
+
+  state.myBookingsData={bookings,packages,purchases};
+  try {
+    renderMyBookings(bookings, packages, purchases);
+  } catch(e){
+    // A render bug must surface as a retry state, never a blank page or
+    // stuck spinner.
+    console.error("[myBookings] render FAILED:", e);
+    myBookingsFullError();
+  }
+}
+window.openMyBookings=openMyBookings; // global for the Retry buttons (inline onclick); assigned right after definition
+
+// Inline error card for one failed section — page shell and the other
+// sections still render; Retry reloads all sections.
+function myBookingsSectionError(){
+  return `<div class="passitem" style="text-align:center">
+    <p style="color:var(--muted);font-size:.8rem;margin:0 0 9px">⚠️ ${t("failedLoad")}</p>
+    <button class="btn-empty" onclick="openMyBookings()">🔄 ${t("retry")}</button>
+  </div>`;
+}
+
 function renderMyBookings(bookings, packages, purchases) {
-  const active=bookings.filter(b=>b.bookingStatus!=="cancelled");
+  // null = that section's query failed (see loadMySection); [] = loaded, empty.
+  const bookingsFailed  = bookings  === null;
+  const packagesFailed  = packages  === null;
+  const purchasesFailed = purchases === null;
+  const active=(bookings||[]).filter(b=>b.bookingStatus!=="cancelled");
   const now=new Date();
 
-  if(!active.length && !packages.length && !purchases.length) {
+  // Full empty state only when every section loaded successfully and is empty.
+  if(!bookingsFailed && !packagesFailed && !purchasesFailed
+     && !active.length && !packages.length && !purchases.length) {
     $("myContent").innerHTML=`<div class="empty">
       <div class="empty-icon">📭</div>
       <p>${t("noBookings")}</p>
@@ -2132,7 +2208,9 @@ function renderMyBookings(bookings, packages, purchases) {
   let html="";
 
   // Pending pass purchases
-  if(purchases.length){
+  if(purchasesFailed){
+    html+=`<div class="sec-title">${t("passPurchases")}</div>`+myBookingsSectionError();
+  } else if(purchases.length){
     html+=`<div class="sec-title">${t("passPurchases")}</div>`;
     purchases.forEach(p=>{
       html+=`<div class="passitem">
@@ -2148,7 +2226,9 @@ function renderMyBookings(bookings, packages, purchases) {
   }
 
   // Active bookings
-  if(active.length){
+  if(bookingsFailed){
+    html+=`<div class="sec-title">${t("bookings")}</div>`+myBookingsSectionError();
+  } else if(active.length){
     html+=`<div class="sec-title">${t("bookings")}</div>`;
     active.forEach(b=>{
       const isPendPay=b.bookingStatus==="pending_payment";
@@ -2173,7 +2253,9 @@ function renderMyBookings(bookings, packages, purchases) {
   }
 
   // Active passes
-  if(packages.length){
+  if(packagesFailed){
+    html+=`<div class="sec-title">${t("activePasses")}</div>`+myBookingsSectionError();
+  } else if(packages.length){
     html+=`<div class="sec-title">${t("activePasses")}</div>`;
     packages.forEach(p=>{
       const validUntil=p.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—";
@@ -2245,7 +2327,6 @@ window.resumePassPayment = async(docId)=>{
 };
 
 window.openBookingView=openBookingView;
-window.openMyBookings=openMyBookings; // used by the retry button in the error state
 // NOTE: customer self-purchase pass flow is not enabled. Passes are issued only via
 // admin.html → "Add Pass". Do not re-add a window.openBuyPassView reference until
 // the buy-pass view actually exists in this file.

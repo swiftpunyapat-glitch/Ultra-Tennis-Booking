@@ -484,7 +484,7 @@ ADMIN_NAMES.forEach(n => {
 // ── AUTH ──────────────────────────────────────────────────────────
 async function checkSession() {
   try {
-    const res = await fetch("/api/admin-check");
+    const res = await fetch("/api/admin-session");
     if (!res.ok) return false;
     const data = await res.json();
     if (data.ok && data.name) { currentAdminName = data.name; showApp(data.name); return true; }
@@ -510,7 +510,7 @@ $("loginBtn").addEventListener("click", async () => {
   if (!n) { err.textContent = "Please select your name."; err.style.display = "block"; return; }
   const btn = $("loginBtn"); btn.disabled = true; btn.textContent = "Logging in…";
   try {
-    const res = await fetch("/api/admin-login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:n, pin:p})});
+    const res = await fetch("/api/admin-session", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"login", name:n, pin:p})});
     const data = await res.json();
     if (data.ok) {
       currentAdminName = data.name; err.style.display = "none"; showApp(data.name);
@@ -523,7 +523,7 @@ $("loginBtn").addEventListener("click", async () => {
 });
 
 $("logoutBtn").addEventListener("click", async () => {
-  try { await fetch("/api/admin-logout", {method:"POST"}); } catch {}
+  try { await fetch("/api/admin-session", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"logout"})}); } catch {}
   currentAdminName = null;
   $("mainApp").style.display = "none"; $("loginScreen").style.display = "flex";
   $("adminSel").value = ""; $("pinIn").value = "";

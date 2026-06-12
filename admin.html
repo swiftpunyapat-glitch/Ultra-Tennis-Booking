@@ -860,6 +860,9 @@ import {
 const ADMIN_NAMES = ["Art", "Aoy", "BaiMon", "Ano", "Stam"];
 let currentAdminName = null;  // set by checkSession / login; never stored in sessionStorage
 const RESOURCE_ID="room1";
+// Must match DEFAULT_BRANCH_ID in api/_lib/admin-auth.js and index.html.
+// Stamped on new bookings/slots; legacy docs without it resolve to this branch.
+const DEFAULT_BRANCH_ID="ladprao1";
 const OPEN_HOUR=6,CLOSE_HOUR=24;
 const LN_HOURS=[0,1,2,3,4,5]; // Late Night 00:00–06:00 — opened manually only, never by Open This Day/Week
 const LATE_NIGHT_PRICE=450;   // ฿/hr for Late Night Session
@@ -940,7 +943,7 @@ ADMIN_NAMES.forEach(n=>{const o=document.createElement("option");o.value=o.textC
 // ── AUTH ─────────────────────────────────────────────────────────
 async function checkSession(){
   try{
-    const res=await fetch('/api/admin-check');
+    const res=await fetch('/api/admin-session');
     if(!res.ok)return false;
     const data=await res.json();
     if(data.ok&&data.name){currentAdminName=data.name;showApp(data.name);return true;}
@@ -955,7 +958,7 @@ $("loginBtn").addEventListener("click",async()=>{
   if(!n){err.textContent="Please enter your name.";err.style.display="block";return;}
   const btn=$("loginBtn");btn.disabled=true;btn.textContent="Logging in...";
   try{
-    const res=await fetch('/api/admin-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,pin:p})});
+    const res=await fetch('/api/admin-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'login',name:n,pin:p})});
     const data=await res.json();
     if(data.ok){currentAdminName=data.name;err.style.display="none";showApp(data.name);loadBookings();}
     else{err.textContent="Incorrect name or PIN.";err.style.display="block";$("pinIn").value="";$("pinIn").focus();}
@@ -963,7 +966,7 @@ $("loginBtn").addEventListener("click",async()=>{
   finally{btn.disabled=false;btn.textContent="Login";}
 });
 $("logoutBtn").addEventListener("click",async()=>{
-  try{await fetch('/api/admin-logout',{method:'POST'});}catch{}
+  try{await fetch('/api/admin-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'logout'})});}catch{}
   currentAdminName=null;
   $("mainApp").style.display="none";$("loginScreen").style.display="flex";
   $("adminSel").value="";$("pinIn").value="";
@@ -1450,10 +1453,10 @@ async function permanentDeleteBooking(b){
   const btn=document.querySelector(`[data-delete="${b.id}"]`) || document.querySelector(`[data-pt-delete="${b.id}"]`);
   if(btn){btn.disabled=true;btn.textContent="Deleting…";}
   try{
-    const res=await fetch("/api/admin-delete-booking",{
+    const res=await fetch("/api/admin-edit-booking-accounting",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({bookingId:b.id}),
+      body:JSON.stringify({operation:"delete_booking",bookingId:b.id}),
     });
     const data=await res.json();
     if(data.ok){
@@ -1860,8 +1863,8 @@ async function setSlots(dates,close=false,hours=null){
     hoursToSet.forEach(h=>{
       const ref=doc(db,"available_slots",slId(date,h));
       batch.set(ref,close
-        ?{resourceId:RESOURCE_ID,date,startTime:fH(h),endTime:fEnd(h),status:"closed",closedAt:now,closedBy:admin,openedAt:null,openedBy:null}
-        :{resourceId:RESOURCE_ID,date,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null}
+        ?{resourceId:RESOURCE_ID,branchId:DEFAULT_BRANCH_ID,date,startTime:fH(h),endTime:fEnd(h),status:"closed",closedAt:now,closedBy:admin,openedAt:null,openedBy:null}
+        :{resourceId:RESOURCE_ID,branchId:DEFAULT_BRANCH_ID,date,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null}
       );
     });
   });
@@ -2015,7 +2018,7 @@ async function toggleSlot(btn,dateISO){
   try{
     if(act==="create"||act==="reopen"){
       const id=existId||slId(dateISO,h);
-      await setDoc(doc(db,"available_slots",id),{resourceId:RESOURCE_ID,date:dateISO,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null});
+      await setDoc(doc(db,"available_slots",id),{resourceId:RESOURCE_ID,branchId:DEFAULT_BRANCH_ID,date:dateISO,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null});
     }else{await updateDoc(doc(db,"available_slots",existId),{status:"closed",closedAt:now,closedBy:admin});}
     loadSlotGrid(dateISO);
     if(dvLastLoad===dateISO) loadDailyView();
@@ -2756,6 +2759,7 @@ $("manConfirm").addEventListener("click",async()=>{
       t.set(bookingRef,{
         bookingCode:             code,
         resourceId:              RESOURCE_ID,
+        branchId:                DEFAULT_BRANCH_ID,
         bookingType:             bookingType,
         lineUserId:              "manual",
         lineDisplayName:         "Manual Booking",
@@ -2780,6 +2784,7 @@ $("manConfirm").addEventListener("click",async()=>{
         bookingCode:    code,
         bookingId:      bookingRef.id,
         resourceId:     RESOURCE_ID,
+        branchId:       DEFAULT_BRANCH_ID,
         date:           date,
         hour:           time,
         bookingStatus:  "confirmed",
@@ -3912,7 +3917,7 @@ $("promoSaveBtn").addEventListener("click", async () => {
   btn.textContent = "Saving...";
 
   try {
-    const res = await fetch("/api/admin-pricing-action", {
+    const res = await fetch("/api/admin-user-action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3954,7 +3959,7 @@ $("promoDeactivateBtn").addEventListener("click", async () => {
   btn.textContent = "Deactivating...";
 
   try {
-    const res = await fetch("/api/admin-pricing-action", {
+    const res = await fetch("/api/admin-user-action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "deactivate_special_promotion" })
