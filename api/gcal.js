@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════
 // POST /api/gcal  — create a Google Calendar event for a paid booking
 // ════════════════════════════════════════════════════════════════════
-// Auth:   requires valid admin session cookie (set by /api/admin-login).
+// Auth:   requires valid admin session cookie (set by /api/admin-session).
 // Body:   { action: "create", booking: { bookingCode, date, startTime, endTime, ... } }
 // Return: { ok: true,  eventId, htmlLink }
 //         { ok: false, error: "<safe message>" }

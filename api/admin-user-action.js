@@ -1,11 +1,18 @@
 // ════════════════════════════════════════════════════════════════════
-// POST /api/admin-user-action — Admin user management and package actions
+// POST /api/admin-user-action — Admin user management, package and
+// pricing actions
 // ════════════════════════════════════════════════════════════════════
 // Auth: requires valid admin session cookie.
+// Actions:
+//   add_pass_to_registered_user            (any logged-in admin)
+//   save_special_promotion                 (owner-only — merged in from
+//   deactivate_special_promotion            the former /api/admin-pricing-action
+//                                           route to keep the Vercel function
+//                                           count down; same request/response)
 // ════════════════════════════════════════════════════════════════════
 
-import { verifySessionCookie } from './_lib/admin-auth.js';
-import { getAdminDb } from './_lib/firebase-admin.js';
+import { verifySession, requireRole } from './_lib/admin-auth.js';
+import { getAdminDb, writeAuditLog } from './_lib/firebase-admin.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 
 const ACTIVE_PACKAGES = {
@@ -60,12 +67,21 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
   }
 
-  const adminName = verifySessionCookie(req);
-  if (!adminName) {
+  const session = verifySession(req);
+  if (!session) {
     return res.status(401).json({ ok: false, error: 'Unauthorized admin session' });
   }
+  const adminName = session.name;
 
   const { action, targetUserId, packageType, validFrom, note } = req.body || {};
+
+  // ── Pricing actions (owner-only) ─────────────────────────────────
+  if (action === 'save_special_promotion' || action === 'deactivate_special_promotion') {
+    if (!requireRole(session, 'owner')) {
+      return res.status(403).json({ ok: false, error: 'Access denied: owner only.' });
+    }
+    return handlePricingAction({ req, res, adminName, session, action });
+  }
 
   if (action !== 'add_pass_to_registered_user') {
     return res.status(400).json({ ok: false, error: `Unsupported action: ${action}` });
@@ -160,6 +176,104 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, packageId: pkgRef.id });
   } catch (err) {
     console.error('[admin-user-action] Error adding pass to registered user:', err);
+    return res.status(500).json({ ok: false, error: err.message || 'Internal Server Error' });
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handlePricingAction — manage special promotions (owner-only)
+// (moved verbatim from the former /api/admin-pricing-action route)
+// ════════════════════════════════════════════════════════════════════
+async function handlePricingAction({ req, res, adminName, session, action }) {
+  const { promoActive, promoName, promoPrice, promoLabel, startsAt, endsAt } = req.body || {};
+
+  try {
+    const db = getAdminDb();
+    const docRef = db.collection('system_settings').doc('pricing');
+
+    if (action === 'deactivate_special_promotion') {
+      await docRef.set({
+        specialPromoActive: false,
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: adminName
+      }, { merge: true });
+
+      console.log(`[admin-user-action] Deactivated special promotion by ${adminName}`);
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role,
+        action: 'deactivate_special_promotion', targetId: 'system_settings/pricing',
+        after: { specialPromoActive: false },
+      });
+      return res.status(200).json({ ok: true });
+    }
+
+    // action === 'save_special_promotion'
+    const price = Number(promoPrice);
+    if (!Number.isInteger(price) || price <= 0) {
+      return res.status(400).json({ ok: false, error: 'Price must be a valid positive integer' });
+    }
+
+    let startTS = null;
+    let startDate = null;
+    if (startsAt) {
+      // StartsAt datetime-local is interpreted as Bangkok local time
+      // If startsAt is "YYYY-MM-DDTHH:mm", Vercel parses it as "YYYY-MM-DDTHH:mm:00+07:00"
+      let startsStr = startsAt;
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(startsStr)) {
+        startsStr = `${startsStr}:00+07:00`;
+      }
+      const d = new Date(startsStr);
+      if (isNaN(d.getTime())) {
+        return res.status(400).json({ ok: false, error: `Invalid startsAt date format: ${startsAt}` });
+      }
+      startDate = d;
+      startTS = Timestamp.fromDate(d);
+    }
+
+    let endTS = null;
+    let endDate = null;
+    if (endsAt) {
+      // EndsAt datetime-local is interpreted as Bangkok local time
+      let endsStr = endsAt;
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(endsStr)) {
+        endsStr = `${endsStr}:00+07:00`;
+      }
+      const d = new Date(endsStr);
+      if (isNaN(d.getTime())) {
+        return res.status(400).json({ ok: false, error: `Invalid endsAt date format: ${endsAt}` });
+      }
+      endDate = d;
+      endTS = Timestamp.fromDate(d);
+    }
+
+    if (startDate && endDate && endDate.getTime() <= startDate.getTime()) {
+      return res.status(400).json({ ok: false, error: 'Ends At date must be after Starts At date' });
+    }
+
+    await docRef.set({
+      normalSingleUsePrice: 350,
+      specialPromoActive: Boolean(promoActive),
+      specialPromoName: String(promoName || "").trim(),
+      specialPromoPrice: price,
+      specialPromoLabel: String(promoLabel || "").trim(),
+      specialPromoStartsAt: startTS,
+      specialPromoEndsAt: endTS,
+      normalQrUrl: "/payment-qr.png",
+      specialQrUrl: "/payment-qr-special.png",
+      lateNightQrUrl: "/late-night-qr.png",
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: adminName
+    }, { merge: true });
+
+    console.log(`[admin-user-action] Saved special promotion: ${promoName} (Price: ${price}) by ${adminName}`);
+    await writeAuditLog(db, {
+      actor: adminName, actorRole: session.role,
+      action: 'save_special_promotion', targetId: 'system_settings/pricing',
+      after: { specialPromoActive: Boolean(promoActive), specialPromoName: String(promoName || '').trim(), specialPromoPrice: price },
+    });
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error('[admin-user-action] pricing error:', err);
     return res.status(500).json({ ok: false, error: err.message || 'Internal Server Error' });
   }
 }

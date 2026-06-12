@@ -1,7 +1,9 @@
 // ════════════════════════════════════════════════════════════════════
 // POST /api/admin-edit-booking-accounting
 // ════════════════════════════════════════════════════════════════════
-// Consolidated route for two admin operations on a booking:
+// Consolidated route for admin operations on a booking
+// (operation "delete_booking" was merged in from the former
+//  /api/admin-delete-booking route to keep the Vercel function count down):
 //
 //   operation: "accounting_edit"  (Art-only)
 //     Correct wrong booking/payment/accounting status.
@@ -13,9 +15,14 @@
 //     Body fields: bookingId, refundAmount, refundMode, refundReason,
 //                  refundNote, incidentType, incidentNote?, releaseSlot?
 //
+//   operation: "delete_booking"   (owner-only)
+//     Permanently delete a booking record + its booking_slot + its
+//     Google Calendar event. Body fields: bookingId
+//
 // Auth rules:
 //   • Both operations require a valid adminSession cookie.
-//   • "accounting_edit" additionally requires adminName === "Art".
+//   • "accounting_edit" additionally requires role "owner"
+//     (legacy sessions map Art → owner, so behavior is unchanged).
 //   • "refund" is allowed for any valid admin.
 //
 // ─── accounting_edit ───────────────────────────────────────────────
@@ -50,12 +57,11 @@
 // Does NOT touch: paymentStatus, price, slipUrl, package fields, Google Calendar.
 // ════════════════════════════════════════════════════════════════════
 
-import { verifySessionCookie } from './_lib/admin-auth.js';
-import { getAdminDb }          from './_lib/firebase-admin.js';
+import { verifySession, requireRole, resolveBranchId } from './_lib/admin-auth.js';
+import { getAdminDb, writeAuditLog } from './_lib/firebase-admin.js';
 import { FieldValue }          from 'firebase-admin/firestore';
 
 // ── Shared constants ──────────────────────────────────────────────
-const OWNER       = 'Art';
 const RESOURCE_ID = 'room1';
 
 // ── accounting_edit constants ─────────────────────────────────────
@@ -80,6 +86,63 @@ const NOTES_REQUIRED_FOR   = new Set(['machine_issue', 'safety_incident']);
 function parseBody(req) {
   if (req.body && typeof req.body === 'object') return req.body;
   try { return JSON.parse(req.body); } catch { return null; }
+}
+
+// ── Google Calendar OAuth — exchange refresh token for access token ──
+// Mirrors the same logic as api/gcal.js (that function is not exported).
+// Returns null on failure — caller treats null as "skip Calendar delete".
+async function getCalendarAccessToken() {
+  const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN } = process.env;
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) return null;
+  const params = new URLSearchParams({
+    grant_type:    'refresh_token',
+    client_id:     GOOGLE_CLIENT_ID,
+    client_secret: GOOGLE_CLIENT_SECRET,
+    refresh_token: GOOGLE_REFRESH_TOKEN,
+  });
+  try {
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body:    params.toString(),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.access_token || null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Delete a Google Calendar event by ID ────────────────────────────
+// Returns true on success (204) or already-gone (404).
+// Returns false on token failure or any other API error.
+// Caller treats false as a hard stop — see handleDeleteBooking Step 1.
+// sendUpdates=all — notifies BaiMon of cancellation.
+async function deleteCalendarEvent(eventId) {
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+  if (!calendarId || !eventId) return true; // nothing to delete
+
+  const accessToken = await getCalendarAccessToken();
+  if (!accessToken) {
+    console.error('[delete-booking] calendar: could not obtain access token');
+    return false;
+  }
+
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=all`;
+  try {
+    const res = await fetch(url, {
+      method:  'DELETE',
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+    });
+    if (res.status === 204 || res.status === 404) return true;
+    const preview = await res.text().catch(() => '');
+    console.error(`[delete-booking] calendar delete failed — status:${res.status}`, preview.slice(0, 200));
+    return false;
+  } catch (e) {
+    console.error('[delete-booking] calendar delete threw:', e.message);
+    return false;
+  }
 }
 
 // Compute booking duration in hours from stored field or from HH:MM times.
@@ -138,8 +201,9 @@ export default async function handler(req, res) {
   }
 
   // ── Auth: any valid session required for both operations ──────────
-  const adminName = verifySessionCookie(req);
-  if (!adminName) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+  const session = verifySession(req);
+  if (!session) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+  const adminName = session.name;
 
   const body = parseBody(req);
   if (!body) return res.status(400).json({ ok: false, error: 'Invalid request body' });
@@ -147,15 +211,16 @@ export default async function handler(req, res) {
   // ── Route by operation ────────────────────────────────────────────
   const operation = body.operation || 'accounting_edit';
 
-  if (operation !== 'accounting_edit' && operation !== 'refund' && operation !== 'mark_paid') {
-    return res.status(400).json({ ok: false, error: 'Invalid operation. Must be "accounting_edit", "refund", or "mark_paid".' });
+  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'delete_booking'];
+  if (!VALID_OPERATIONS.includes(operation)) {
+    return res.status(400).json({ ok: false, error: `Invalid operation. Must be one of: ${VALID_OPERATIONS.join(', ')}.` });
   }
 
   // ── Per-operation auth + input validation (before any DB call) ────
 
   if (operation === 'accounting_edit') {
-    // Art-only
-    if (adminName !== OWNER) {
+    // Owner-only (legacy sessions: Art → owner)
+    if (!requireRole(session, 'owner')) {
       return res.status(403).json({ ok: false, error: 'Owner access only.' });
     }
     const { accountingType, reason } = body;
@@ -179,6 +244,13 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: `Invalid incidentType. Must be one of: ${VALID_INCIDENT_TYPES.join(', ')}` });
     if (NOTES_REQUIRED_FOR.has(refundReason) && !String(refundNote).trim())
       return res.status(400).json({ ok: false, error: `refundNote is required for refundReason "${refundReason}"` });
+  }
+
+  if (operation === 'delete_booking') {
+    // Owner-only: enforce server-side regardless of frontend hiding.
+    if (!requireRole(session, 'owner')) {
+      return res.status(403).json({ ok: false, error: 'Only the owner can permanently delete bookings.' });
+    }
   }
 
   if (operation === 'mark_paid') {
@@ -219,18 +291,21 @@ export default async function handler(req, res) {
 
   // ── Dispatch ──────────────────────────────────────────────────────
   if (operation === 'accounting_edit') {
-    return handleAccountingEdit({ req, res, adminName, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+    return handleAccountingEdit({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
   }
   if (operation === 'refund') {
-    return handleRefund({ req, res, adminName, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+    return handleRefund({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
   }
-  return handleMarkPaid({ req, res, adminName, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+  if (operation === 'delete_booking') {
+    return handleDeleteBooking({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim() });
+  }
+  return handleMarkPaid({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
 }
 
 // ════════════════════════════════════════════════════════════════════
 // handleAccountingEdit — Art-only accounting correction
 // ════════════════════════════════════════════════════════════════════
-async function handleAccountingEdit({ res, adminName, db, booking, bookingRef, bookingId, body }) {
+async function handleAccountingEdit({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
   const {
     accountingType,
     bookingStatus:           requestedBookingStatus,
@@ -437,13 +512,21 @@ async function handleAccountingEdit({ res, adminName, db, booking, bookingRef, b
   }
 
   console.log(`[acct-edit] OK — booking:${bookingId} type:${accountingType} admin:${adminName}`);
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role,
+    branchId: resolveBranchId(booking),
+    action: 'accounting_edit', targetId: bookingId,
+    before: snapshotAccountingFields(booking),
+    after: { accountingType, paymentStatus: accountingFields.paymentStatus ?? null, bookingStatus: accountingFields.bookingStatus ?? null, price: accountingFields.price ?? null },
+    note: String(reason).trim().slice(0, 400),
+  });
   return res.status(200).json({ ok: true });
 }
 
 // ════════════════════════════════════════════════════════════════════
 // handleRefund — any valid admin
 // ════════════════════════════════════════════════════════════════════
-async function handleRefund({ res, adminName, db, booking, bookingRef, bookingId, body }) {
+async function handleRefund({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
   const {
     refundAmount:  rawAmount,
     refundMode,
@@ -570,13 +653,20 @@ async function handleRefund({ res, adminName, db, booking, bookingRef, bookingId
   }
 
   console.log(`[refund] OK — booking:${bookingId} amount:${refundAmount} status:${refundStatus} admin:${adminName}`);
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role,
+    branchId: resolveBranchId(booking),
+    action: 'refund', targetId: bookingId,
+    before: snapshotRefundFields(booking),
+    after: { refundStatus, refundAmount, refundReason, releaseSlot: releaseSlot === true },
+  });
   return res.status(200).json({ ok: true, refundStatus, refundExpenseId: newExpId });
 }
 
 // ════════════════════════════════════════════════════════════════════
 // handleMarkPaid — any valid admin, marks unpaid booking as paid
 // ════════════════════════════════════════════════════════════════════
-async function handleMarkPaid({ res, adminName, db, booking, bookingRef, bookingId, body }) {
+async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
   const { amount, paymentMethod, paymentNote = '' } = body;
 
   if (booking.bookingStatus === 'cancelled') {
@@ -628,5 +718,94 @@ async function handleMarkPaid({ res, adminName, db, booking, bookingRef, booking
   }
 
   console.log(`[mark-paid] id:${bookingId} amount:${amount} method:${paymentMethod} admin:${adminName}`);
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role,
+    branchId: resolveBranchId(booking),
+    action: 'mark_paid', targetId: bookingId,
+    before: { paymentStatus: booking.paymentStatus, bookingStatus: booking.bookingStatus },
+    after: { paymentStatus: 'paid', bookingStatus: 'confirmed', price: Number(amount), paymentMethod },
+  });
+  return res.status(200).json({ ok: true });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handleDeleteBooking — owner-only permanent delete
+// (moved verbatim from the former /api/admin-delete-booking route)
+// ════════════════════════════════════════════════════════════════════
+// What is deleted:
+//   1. Google Calendar event (if googleCalendarEventId is set on the booking)
+//   2. booking_slots/{resourceId}_{date}_{startTime} — only if it belongs to this booking
+//   3. bookings/{bookingId}
+// What is NOT deleted: customer profile, customer_packages,
+// notification_logs, unrelated bookings/slots, available_slots.
+// Use case: test data cleanup / mistaken booking records.
+async function handleDeleteBooking({ res, adminName, session, db, booking, bookingRef, bookingId }) {
+  const { resourceId, date, startTime, bookingCode, googleCalendarEventId } = booking;
+  console.log(`[delete-booking] START — admin:${adminName} id:${bookingId} code:${bookingCode}`);
+
+  // ── Step 1: delete Google Calendar event (BLOCKING) ─────────────
+  // If the booking has a Calendar event, it MUST be deleted before any
+  // Firestore writes. A failure here stops the entire operation so we
+  // never create an orphan Calendar event with no admin UI record to
+  // retry or clean up from.
+  // 404 from Google = event already gone → treat as success and continue.
+  if (googleCalendarEventId) {
+    const calOk = await deleteCalendarEvent(googleCalendarEventId);
+    if (!calOk) {
+      console.error(`[delete-booking] calendar delete failed for ${googleCalendarEventId} — booking NOT deleted`);
+      return res.status(200).json({
+        ok: false,
+        error: 'Calendar delete failed. Booking was not deleted. Please retry.',
+      });
+    }
+    console.log(`[delete-booking] calendar event removed: ${googleCalendarEventId}`);
+  }
+
+  // ── Step 2: delete booking_slot doc if it belongs to this booking ──
+  // Slot ID pattern: {resourceId}_{date}_{startTime without colon}
+  // Safety: only delete if the slot's bookingId/bookingCode matches.
+  // Protects against accidentally releasing a slot reassigned to another booking.
+  if (resourceId && date && startTime) {
+    const slotId = `${resourceId}_${date}_${startTime.replace(':', '')}`;
+    const slotRef = db.collection('booking_slots').doc(slotId);
+    try {
+      const slotSnap = await slotRef.get();
+      if (!slotSnap.exists) {
+        console.log(`[delete-booking] booking_slot ${slotId} — not found, skipped`);
+      } else {
+        const slotData = slotSnap.data();
+        const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === bookingCode;
+        if (ownsSlot) {
+          await slotRef.delete();
+          console.log(`[delete-booking] booking_slot deleted: ${slotId}`);
+        } else {
+          // Slot belongs to a different booking — do NOT touch it.
+          console.log(`[delete-booking] booking_slot ${slotId} belongs to ${slotData.bookingCode} — skipped`);
+        }
+      }
+    } catch (e) {
+      // Non-fatal — log and continue to delete the booking document.
+      console.error('[delete-booking] booking_slot delete error:', e.message);
+    }
+  } else {
+    console.log(`[delete-booking] missing resourceId/date/startTime — slot cleanup skipped`);
+  }
+
+  // ── Step 3: delete the booking document ───────────────────────────
+  try {
+    await bookingRef.delete();
+    console.log(`[delete-booking] DONE — booking deleted: ${bookingId} code:${bookingCode}`);
+  } catch (e) {
+    console.error('[delete-booking] failed to delete booking doc:', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to delete booking record' });
+  }
+
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role,
+    branchId: resolveBranchId(booking),
+    action: 'delete_booking', targetId: bookingId,
+    before: { bookingCode, date, startTime, bookingStatus: booking.bookingStatus, paymentStatus: booking.paymentStatus },
+  });
+
   return res.status(200).json({ ok: true });
 }
