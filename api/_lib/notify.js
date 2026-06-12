@@ -2,8 +2,8 @@
 // Ultra Tennis Booking — server-side LINE notification helpers
 // ════════════════════════════════════════════════════════════════════
 // Used by:
-//   /api/line-push       — single-target send
-//   /api/notify-admins   — broadcast to all registered admins
+//   /api/line-notify  — single-target send (audience:"user") and
+//                       broadcast to all registered admins (audience:"admins")
 //
 // Conventions:
 //   • All Firestore writes use the Firebase Admin SDK, which bypasses
