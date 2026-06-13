@@ -156,6 +156,8 @@
     .qrwrap{width:min(240px,78vw);height:min(240px,78vw);margin:0 auto 10px;border:1.5px solid var(--line);border-radius:10px;overflow:hidden;background:#fff;display:flex;align-items:center;justify-content:center;}
     .qrwrap img{width:100%;height:100%;object-fit:contain;}
     .qrnote{font-size:.75rem;color:var(--muted);margin-bottom:10px;}
+    .btn-qr-download{display:none;width:100%;min-height:40px;margin:0 0 10px;border:1.5px solid var(--brand);border-radius:var(--r);background:#fff;color:var(--brand-dark);font-size:.82rem;font-weight:900;}
+    .btn-qr-download:hover{background:var(--soft);}
     .tnote{background:var(--soft);border:1px solid #c7e2f7;border-radius:6px;padding:8px 12px;font-size:.78rem;color:var(--ink);text-align:center;margin-bottom:14px;}
 
     /* Slip upload */
@@ -382,6 +384,7 @@
             onerror="this.parentElement.innerHTML='<p style=\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\'>⚠️ '+(window.utT?window.utT('qrNotFound'):'QR not found. Please contact staff.')+'</p>'"/>
         </div>
         <p class="qrnote" data-i18n="scanBank">Scan with any banking app</p>
+        <button class="btn-qr-download" id="downloadQrBtn" type="button" data-i18n="downloadQrPayment">Download QR Payment</button>
         <div class="tnote">💳 <span id="transferTextA">Transfer</span> <strong>฿<span id="payAmtText">350</span></strong> <span id="transferTextB">and upload slip below</span></div>
         <div class="sarea" id="slipArea" onclick="document.getElementById('slipIn').click()">
           <p id="slipAreaTxt">📎 <strong>Tap to upload payment slip</strong></p>
@@ -653,6 +656,8 @@ const I18N = {
     details:"รายละเอียด",
     qrNotFound:"ไม่พบ QR กรุณาติดต่อแอดมิน",
     scanBank:"สแกนด้วยแอปธนาคาร",
+    downloadQrPayment:"ดาวน์โหลด QR ชำระเงิน",
+    qrSaveHint:"หากรูปไม่ดาวน์โหลด กรุณาเปิดรูปแล้วกดค้างเพื่อบันทึก",
     transferA:"โอนเงินจำนวน",
     transferB:"บาท แล้วอัปโหลดสลิปด้านล่าง",
     tapUpload:"แตะเพื่ออัปโหลดสลิป",
@@ -778,6 +783,8 @@ const I18N = {
     details:"Details",
     qrNotFound:"QR not found. Please contact staff.",
     scanBank:"Scan with any banking app",
+    downloadQrPayment:"Download QR Payment",
+    qrSaveHint:"If the image does not download, open it and long-press to save.",
     transferA:"Transfer",
     transferB:"and upload slip below",
     tapUpload:"Tap to upload payment slip",
@@ -1912,6 +1919,9 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
   $("slipIn").value="";
   $("slipArea").classList.remove("has");
   $("submitSlipBtn").disabled=true;
+  const downloadQrBtn=$("downloadQrBtn");
+  downloadQrBtn.style.display="none";
+  downloadQrBtn.dataset.qrSrc="";
   // QR: switch to Late Night QR when applicable; fall back to placeholder message
   // when LATE_NIGHT_QR_URL is not yet configured.
   const qrWrap=$("payQrWrap");
@@ -1948,18 +1958,54 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
         const paymentQrType = (state.paymentMode === "booking" && bData) ? (bData.paymentQrType || "late_night") : "late_night";
         const price = (state.paymentMode === "booking" && bData) ? (bData.price || "") : amount;
         const qrSrc = `${finalLateNightQr}?v=${paymentQrType}-${price}`;
-        qrWrap.innerHTML = `<img src="${qrSrc}" alt="QR" style="width:100%;height:100%;object-fit:contain"
-          onerror="this.parentElement.innerHTML='<p style=\\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\\'>⚠️ '+(window.utT?window.utT(\\'qrNotFound\\'):\\'QR not found. Please contact staff.\\')+'</p>'"/>`;
+        renderPaymentQr(qrWrap, qrSrc, bData);
       }
     } else {
       const paymentQrType = (state.paymentMode === "booking" && bData) ? (bData.paymentQrType || "normal") : "normal";
       const price = (state.paymentMode === "booking" && bData) ? (bData.price || "") : amount;
       const qrSrc = `${qrUrl}?v=${paymentQrType}-${price}`;
-      qrWrap.innerHTML = `<img src="${qrSrc}" alt="QR" style="width:100%;height:100%;object-fit:contain"
-        onerror="this.parentElement.innerHTML='<p style=\\'color:var(--danger);font-size:.75rem;padding:10px;text-align:center\\'>⚠️ '+(window.utT?window.utT(\\'qrNotFound\\'):\\'QR not found. Please contact staff.\\')+'</p>'"/>`;
+      renderPaymentQr(qrWrap, qrSrc, bData);
     }
   }
 }
+
+function renderPaymentQr(qrWrap, qrSrc, booking) {
+  const img=document.createElement("img");
+  img.src=qrSrc;
+  img.alt="QR";
+  img.style.cssText="width:100%;height:100%;object-fit:contain";
+  img.addEventListener("load",()=>{
+    if(qrWrap.firstElementChild!==img) return;
+    const canDownload=state.paymentMode==="booking" &&
+      booking?.bookingStatus==="pending_payment" &&
+      booking?.paymentStatus==="unpaid";
+    const btn=$("downloadQrBtn");
+    btn.dataset.qrSrc=canDownload?qrSrc:"";
+    btn.style.display=canDownload?"block":"none";
+  });
+  img.addEventListener("error",()=>{
+    if(qrWrap.firstElementChild!==img) return;
+    const btn=$("downloadQrBtn");
+    btn.style.display="none";
+    btn.dataset.qrSrc="";
+    qrWrap.innerHTML=`<p style="color:var(--danger);font-size:.75rem;padding:10px;text-align:center">⚠️ ${t("qrNotFound")}</p>`;
+  });
+  qrWrap.replaceChildren(img);
+}
+
+$("downloadQrBtn").addEventListener("click",()=>{
+  const qrSrc=$("downloadQrBtn").dataset.qrSrc;
+  if(!qrSrc) return;
+  const link=document.createElement("a");
+  link.href=qrSrc;
+  link.download=`ultra-tennis-payment-qr-${state.currentBookingCode||"booking"}.png`;
+  link.target="_blank";
+  link.rel="noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  showToast(t("qrSaveHint"));
+});
 
 // Slip file change
 $("slipIn").addEventListener("change",()=>{
