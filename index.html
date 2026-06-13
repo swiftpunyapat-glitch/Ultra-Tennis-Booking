@@ -59,6 +59,10 @@
     .lang-toggle{display:flex;align-items:center;gap:3px;background:var(--soft);border:1px solid var(--line);border-radius:999px;padding:3px;}
     .lang-btn{min-width:34px;padding:4px 8px;border-radius:999px;background:transparent;color:var(--muted);font-size:.68rem;font-weight:900;}
     .lang-btn.on{background:linear-gradient(135deg,var(--ut-blue),var(--ut-cyan));color:#fff;box-shadow:0 4px 10px rgba(31,122,224,.18);}
+    .branch-banner{margin:12px 16px 0;padding:12px 14px;border:1px solid #f0b44d;border-radius:var(--r);background:#fff7df;color:#6f4700;box-shadow:0 8px 20px rgba(111,71,0,.08);}
+    .branch-banner strong{display:block;font-size:.88rem;margin-bottom:5px;}
+    .branch-banner p{font-size:.76rem;line-height:1.55;}
+    .branch-banner p+p{margin-top:4px;color:#765b2d;}
 
     /* View */
     .view{padding:16px;}
@@ -220,7 +224,7 @@
     .btn-home{margin-top:18px;padding:11px 22px;border-radius:var(--r);background:linear-gradient(135deg,var(--ut-blue),var(--ut-cyan));color:#fff;font-weight:900;font-size:.88rem;box-shadow:0 10px 22px rgba(31,122,224,.24);}
 
     /* Toast */
-    .toast{position:fixed;left:50%;bottom:18px;width:min(calc(100% - 32px),420px);padding:10px 14px;border-radius:var(--r);background:var(--ink);color:#fff;font-weight:750;text-align:center;transform:translate(-50%,120px);opacity:0;transition:opacity 180ms,transform 180ms;z-index:500;}
+    .toast{position:fixed;left:50%;bottom:18px;width:min(calc(100% - 32px),420px);padding:10px 14px;border-radius:var(--r);background:var(--ink);color:#fff;font-weight:750;text-align:center;white-space:pre-line;transform:translate(-50%,120px);opacity:0;transition:opacity 180ms,transform 180ms;z-index:500;}
     .toast.show{opacity:1;transform:translate(-50%,0);}
     .toast.err{background:var(--danger);}
 
@@ -259,6 +263,12 @@
       <button class="lang-btn" data-lang="en" type="button">EN</button>
     </div>
   </header>
+
+  <div class="branch-banner" id="customerProtectionBanner" role="status" style="display:none">
+    <strong>ประกาศจาก Ultra Tennis สาขาลาดพร้าว 1</strong>
+    <p>ขณะนี้สาขาอยู่ในโหมดดูแลลูกค้า การจองใหม่อาจถูกจำกัดชั่วคราว แต่ลูกค้าเดิมยังสามารถตรวจสอบ My Bookings และดำเนินการชำระเงินต่อได้ กรุณาติดต่อทีมงาน Ultra Tennis หากต้องการความช่วยเหลือ</p>
+    <p lang="en">Customer protection mode is active. New bookings may be temporarily limited, but existing customers can still check My Bookings and resume payment. Please contact Ultra Tennis if you need help.</p>
+  </div>
 
   <!-- VIEW: HOME -->
   <div id="viewHome">
@@ -556,6 +566,13 @@ const RESOURCE_ID = "room1";
 // Must match DEFAULT_BRANCH_ID in api/_lib/admin-auth.js and admin.html.
 // Stamped on new bookings/slots; legacy docs without it resolve to this branch.
 const DEFAULT_BRANCH_ID = "ladprao1";
+const BRANCH_LOCKED_STATUSES = new Set([
+  "soft_locked", "hard_locked", "customer_protection",
+  "locked", "suspended", "closed", "maintenance", "disabled"
+]);
+const BRANCH_LOCKED_MESSAGE =
+  "ขณะนี้ Ultra Tennis สาขาลาดพร้าว 1 ปิดรับการจองใหม่ชั่วคราว กรุณาติดต่อทีมงาน Ultra Tennis หรือลองใหม่อีกครั้งภายหลัง\n" +
+  "Ultra Tennis Ladprao 1 is temporarily not accepting new bookings. Please contact Ultra Tennis or try again later.";
 const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
 const PAY_MINS    = 15;
 const OFFPEAK     = { startHour:9, endHour:15 }; // 09:00–15:00
@@ -600,6 +617,7 @@ const state = {
   selectedPackageType: null,
   myBookingsData: null,
   successData: null,
+  customerBranch: null,
 };
 
 // ── DOM ─────────────────────────────────────────────────────────
@@ -914,6 +932,37 @@ function showToast(msg, isErr=false) {
   const t=$("toast"); t.textContent=msg;
   t.className=`toast show${isErr?" err":""}`;
   setTimeout(()=>t.classList.remove("show"),3200);
+}
+
+function branchBlocksNewBookings(branch) {
+  if (!branch) return false;
+  if (branch.soft_locked === true || branch.allowNewBookings === false) return true;
+  if (branch.locked === true || branch.suspended === true || branch.closed === true ||
+      branch.maintenance === true || branch.disabled === true || branch.isLocked === true) return true;
+  const status = String(branch.status || "").trim().toLowerCase();
+  return BRANCH_LOCKED_STATUSES.has(status);
+}
+
+function renderCustomerProtectionBanner(branch) {
+  const banner = $("customerProtectionBanner");
+  if (!banner) return;
+  const status = String(branch?.status || "").trim().toLowerCase();
+  banner.style.display = status === "customer_protection" ? "block" : "none";
+}
+
+async function readCustomerBranchFailOpen() {
+  try {
+    const snap = await getDoc(doc(db, "branches", DEFAULT_BRANCH_ID));
+    const branch = snap.exists() ? snap.data() : null;
+    state.customerBranch = branch;
+    renderCustomerProtectionBanner(branch);
+    return branch;
+  } catch (e) {
+    console.warn("[branch] Customer branch read failed; allowing normal access:", e);
+    state.customerBranch = null;
+    renderCustomerProtectionBanner(null);
+    return null;
+  }
 }
 
 function generateCode(prefix) {
@@ -1399,6 +1448,12 @@ function updateHomeSingleUsePricing() {
 }
 
 async function openBookingView() {
+  const branch = await readCustomerBranchFailOpen();
+  if (branchBlocksNewBookings(branch)) {
+    showToast(BRANCH_LOCKED_MESSAGE, true);
+    return;
+  }
+
   state.time=null;
   state.bookingPaymentType="single";
   state.dateOffset=0;
@@ -1662,6 +1717,9 @@ $("confirmBkBtn").addEventListener("click", async()=>{
 
   const btn=$("confirmBkBtn"); btn.disabled=true; btn.textContent=t("saving");
   try {
+    const branch = await readCustomerBranchFailOpen();
+    if (branchBlocksNewBookings(branch)) throw new Error(BRANCH_LOCKED_MESSAGE);
+
     const code      = generateCode("UT");
     const dateISO   = getSelectedDateISO();
     const endTime   = formatEndTime(state.time);
@@ -1737,6 +1795,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
     const bookingRef = doc(collection(db,"bookings"));
     const slotRef    = doc(db,"booking_slots",slotDocId);
     const availRef   = doc(db,"available_slots",slotDocId);
+    const branchRef  = doc(db,"branches",DEFAULT_BRANCH_ID);
 
     // Build the reads plan first — all reads must complete before any writes in a transaction.
     const pkgRef = payType==="ultra"
@@ -1747,13 +1806,17 @@ $("confirmBkBtn").addEventListener("click", async()=>{
     const holRef = payType==="offpeak" ? doc(db,"holidays",dateISO) : null;
 
     await runTransaction(db, async t=>{
-      const readPromises = [t.get(slotRef), t.get(availRef)];
+      const readPromises = [t.get(branchRef), t.get(slotRef), t.get(availRef)];
       if(pkgRef) readPromises.push(t.get(pkgRef));
       if(holRef) readPromises.push(t.get(holRef));
       const reads = await Promise.all(readPromises);
-      const slotSnap = reads[0], availSnap = reads[1];
-      const pkgSnap  = pkgRef ? reads[2] : null;
-      const holSnap  = holRef ? reads[pkgRef?3:2] : null;
+      const branchSnap = reads[0], slotSnap = reads[1], availSnap = reads[2];
+      let readIndex = 3;
+      const pkgSnap = pkgRef ? reads[readIndex++] : null;
+      const holSnap = holRef ? reads[readIndex] : null;
+
+      if(branchSnap.exists() && branchBlocksNewBookings(branchSnap.data()))
+        throw new Error(BRANCH_LOCKED_MESSAGE);
 
       // ── Slot availability ─────────────────────────────────────
       if(!availSnap.exists()||availSnap.data().status!=="open")
@@ -2379,6 +2442,7 @@ function displayStatus(status){
 // Wrap initLiff so an uncaught error (LIFF init, eligibility fetch, anything) can't
 // leave the user staring at a forever-spinning overlay. Always surface a message.
 setupLanguageToggle();
+readCustomerBranchFailOpen();
 
 // Watchdog: if the loading overlay is still visible after 12 s (LIFF / network hung),
 // show a Thai reload prompt so the customer is never stuck forever.
