@@ -46,8 +46,9 @@ const INCIDENT_STATUSES   = ['open', 'reviewing', 'resolved'];
 // Whitelist for client-reported audit entries (admin.html fires these
 // after its client-direct Firestore writes — wired up in Phase 2C).
 const CLIENT_AUDIT_ACTIONS = [
-  'mark_paid_client', 'cancel_booking_client', 'manual_booking_client',
-  'reschedule_client', 'pending_reschedule_client',
+  'mark_paid_client', 'cancel_booking_client', 'slip_reject_client',
+  'manual_booking_client', 'reschedule_client',
+  'pending_reschedule_client', 'reschedule_cancel_client',
   'slot_open_client', 'slot_close_client', 'holiday_set_client',
   'pass_adjust_client', 'pass_deactivate_client',
 ];
@@ -62,6 +63,20 @@ function parseBody(req) {
 
 function clampStr(v, max) {
   return String(v ?? '').slice(0, max);
+}
+
+function sanitizeAuditSnapshot(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const out = {};
+  for (const [key, raw] of Object.entries(value).slice(0, 12)) {
+    const safeKey = clampStr(key, 50);
+    if (raw === null || typeof raw === 'boolean' || typeof raw === 'number') {
+      out[safeKey] = raw;
+    } else if (typeof raw === 'string') {
+      out[safeKey] = clampStr(raw, 160);
+    }
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 // HQ roles see every branch; everyone else is partner-tier.
@@ -619,18 +634,26 @@ async function handleAuditLogWrite(res, session, body) {
   if (session.role === 'viewer') {
     return res.status(403).json({ ok: false, error: 'Viewers cannot write audit entries' });
   }
-  const { action: clientAction } = body;
+  const clientAction = body.auditAction;
   if (!CLIENT_AUDIT_ACTIONS.includes(clientAction)) {
     return res.status(400).json({ ok: false, error: `Invalid audit action. Allowed: ${CLIENT_AUDIT_ACTIONS.join(', ')}` });
+  }
+  const branchId = typeof body.branchId === 'string' && body.branchId
+    ? clampStr(body.branchId, 40)
+    : DEFAULT_BRANCH_ID;
+  if (!hasBranchAccess(session, branchId)) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
   }
   const db = getDbOr500(res); if (!db) return;
   await writeAuditLog(db, {
     actor:     session.name,
     actorRole: session.role,
-    branchId:  typeof body.branchId === 'string' && body.branchId ? clampStr(body.branchId, 40) : DEFAULT_BRANCH_ID,
+    branchId,
     action:    clientAction,
     targetId:  typeof body.targetId === 'string' ? clampStr(body.targetId, 100) : null,
-    note:      clampStr(body.summary ?? '', 400),
+    before:    sanitizeAuditSnapshot(body.before),
+    after:     sanitizeAuditSnapshot(body.after),
+    note:      clampStr(body.note ?? body.summary ?? '', 400),
     source:    'client_report',
   });
   // writeAuditLog never throws — always acknowledge so the caller's

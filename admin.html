@@ -182,6 +182,18 @@
     .mfield select,.mfield input[type=number],.mfield input[type=text]{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.88rem;}
     .mfield select:focus,.mfield input[type=number]:focus,.mfield input[type=text]:focus{outline:none;border-color:var(--g);}
 
+    /* ADMIN ACTIVITY FEED */
+    .activity-panel{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;}
+    .activity-hdr{padding:10px 14px;background:var(--s2);border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;gap:10px;}
+    .activity-hdr h2{font-size:.82rem;font-weight:900;color:var(--t);}
+    .activity-grid{display:grid;grid-template-columns:145px 120px 170px minmax(180px,1fr) 140px;align-items:center;}
+    .activity-head{padding:7px 10px;background:var(--s2);color:var(--m);font-size:.63rem;font-weight:800;text-transform:uppercase;border-bottom:1px solid var(--bd);}
+    .activity-cell{padding:8px 10px;border-bottom:1px solid var(--bd);font-size:.72rem;color:var(--mid);min-width:0;overflow-wrap:anywhere;}
+    .activity-cell strong{color:var(--t);}
+    .activity-cell.ok{color:var(--g);font-weight:800;}
+    .activity-empty,.activity-warning{padding:14px;color:var(--m);font-size:.75rem;text-align:center;}
+    .activity-warning{color:var(--warn);}
+
     /* MISC */
     .lstate{text-align:center;padding:44px;color:var(--m);font-size:.85rem;}
     .estate{text-align:center;padding:44px 18px;color:var(--m);font-size:.82rem;}
@@ -281,6 +293,9 @@
       .stats{flex-wrap:wrap;}
       .stat{min-width:33.33%;border-bottom:1px solid var(--bd);}
       .cl-row{grid-template-columns:1fr;}
+      .activity-grid{grid-template-columns:105px 90px minmax(130px,1fr);}
+      .activity-grid .activity-head:nth-child(4),.activity-grid .activity-head:nth-child(5),
+      .activity-grid .activity-cell:nth-child(5n+4),.activity-grid .activity-cell:nth-child(5n+5){display:none;}
     }
   </style>
 </head>
@@ -332,6 +347,16 @@
       <div class="stat"><div class="sn ct" id="stReview">—</div><div class="sl">Review</div></div>
       <div class="stat"><div class="sn cg" id="stPaid">—</div><div class="sl">Paid</div></div>
       <div class="stat"><div class="sn cr" id="stCancelled">—</div><div class="sl">Cancelled</div></div>
+    </div>
+
+    <div class="main" id="adminActivitySection" style="display:none;padding-top:12px;padding-bottom:6px">
+      <div class="activity-panel">
+        <div class="activity-hdr">
+          <h2>กิจกรรมล่าสุดของแอดมิน</h2>
+          <button class="rfbtn" id="activityRefreshBtn">↻ รีเฟรช</button>
+        </div>
+        <div id="adminActivityFeed"><div class="activity-empty">กำลังโหลด...</div></div>
+      </div>
     </div>
 
     <!-- VIEW MODE SWITCH -->
@@ -859,6 +884,7 @@ import {
 // Names only — no PINs. PINs live in ADMIN_USERS_JSON on the server.
 const ADMIN_NAMES = ["Art", "Aoy", "BaiMon", "Ano", "Stam"];
 let currentAdminName = null;  // set by checkSession / login; never stored in sessionStorage
+let currentAdminRole = null;
 const RESOURCE_ID="room1";
 // Must match DEFAULT_BRANCH_ID in api/_lib/admin-auth.js and index.html.
 // Stamped on new bookings/slots; legacy docs without it resolve to this branch.
@@ -946,7 +972,7 @@ async function checkSession(){
     const res=await fetch('/api/admin-session');
     if(!res.ok)return false;
     const data=await res.json();
-    if(data.ok&&data.name){currentAdminName=data.name;showApp(data.name);return true;}
+    if(data.ok&&data.name){currentAdminName=data.name;currentAdminRole=data.role||null;showApp(data.name);return true;}
   }catch{}
   return false;
 }
@@ -960,7 +986,7 @@ $("loginBtn").addEventListener("click",async()=>{
   try{
     const res=await fetch('/api/admin-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'login',name:n,pin:p})});
     const data=await res.json();
-    if(data.ok){currentAdminName=data.name;err.style.display="none";showApp(data.name);loadBookings();}
+    if(data.ok){currentAdminName=data.name;currentAdminRole=data.role||null;err.style.display="none";showApp(data.name);loadBookings();}
     else{err.textContent="Incorrect name or PIN.";err.style.display="block";$("pinIn").value="";$("pinIn").focus();}
   }catch{err.textContent="Login failed. Please try again.";err.style.display="block";}
   finally{btn.disabled=false;btn.textContent="Login";}
@@ -968,6 +994,7 @@ $("loginBtn").addEventListener("click",async()=>{
 $("logoutBtn").addEventListener("click",async()=>{
   try{await fetch('/api/admin-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'logout'})});}catch{}
   currentAdminName=null;
+  currentAdminRole=null;
   $("mainApp").style.display="none";$("loginScreen").style.display="flex";
   $("adminSel").value="";$("pinIn").value="";
 });
@@ -1001,6 +1028,132 @@ document.querySelectorAll(".tab").forEach(btn=>{
 let allBookings=[],activeFilter="all",playMonthFilter=currentMonthValue(),reschBooking=null,reschTime=null,activePasses=[],minPass=null;
 let bookingsViewMode = "monthly"; // "monthly" or "daily"
 let bookingsDateFilter = todayLocalISO();
+
+const ACTIVITY_ACTION_LABELS = {
+  mark_paid: "ยืนยันการชำระเงิน",
+  mark_paid_client: "ยืนยันการชำระเงิน",
+  cancel_booking_client: "ยกเลิกการจอง",
+  slip_reject_client: "ปฏิเสธสลิป / ยกเลิกการจอง",
+  manual_booking_client: "สร้างจอง Manual",
+  pending_reschedule_client: "ส่งเข้ารอเลื่อนเวลา",
+  reschedule_client: "ยืนยันเวลาใหม่",
+  reschedule_cancel_client: "ยกเลิกคำขอเลื่อน",
+  refund: "คืนเงิน",
+  add_pass: "เพิ่มแพ็กเกจ",
+  pass_adjust_client: "ปรับจำนวนนาทีแพ็กเกจ",
+  pass_deactivate_client: "ปิดใช้งานแพ็กเกจ",
+  accounting_edit: "แก้ไขบัญชี",
+  delete_booking: "ลบรายการถาวร",
+  branch_save: "แก้ไขข้อมูลสาขา",
+  branch_set_status: "เปลี่ยนสถานะสาขา",
+  incident_create: "สร้างรายงานเหตุการณ์",
+  incident_update_status: "อัปเดตเหตุการณ์",
+};
+
+const ACTIVITY_STATUS_LABELS = {
+  paid: "ชำระแล้ว",
+  confirmed: "ยืนยันแล้ว",
+  cancelled: "ยกเลิกแล้ว",
+  rejected: "ปฏิเสธแล้ว",
+  pending: "รอดำเนินการ",
+  rescheduled: "รอจัดเวลาใหม่",
+  refunded: "คืนเงินแล้ว",
+  partial_refunded: "คืนเงินบางส่วน",
+  active: "เปิดใช้งาน",
+  inactive: "ปิดใช้งาน",
+};
+
+function canViewActivityFeed(){
+  return currentAdminRole==="owner"||currentAdminRole==="ultra_admin";
+}
+
+function activityTimeLabel(value){
+  const d=new Date(value);
+  if(Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("th-TH",{
+    timeZone:"Asia/Bangkok",day:"2-digit",month:"2-digit",year:"2-digit",
+    hour:"2-digit",minute:"2-digit"
+  });
+}
+
+function activityTargetLabel(entry){
+  const booking=allBookings.find(b=>b.id===entry.targetId);
+  if(booking) return `<strong>${esc(booking.bookingCode||entry.targetId||"—")}</strong><br>${esc(booking.customerName||"—")}`;
+  if(entry.after?.customerName){
+    return `<strong>${esc(entry.after.packageName||entry.targetId||"—")}</strong><br>${esc(entry.after.customerName)}`;
+  }
+  return esc(entry.targetId||"—");
+}
+
+function activityResultLabel(entry){
+  const after=entry.after||{};
+  if(Number.isFinite(after.remainingMinutes)) return `สำเร็จ · เหลือ ${after.remainingMinutes} นาที`;
+  if(after.date) return `สำเร็จ · ${after.date}${after.startTime?` ${after.startTime}`:""}`;
+  const status=after.refundStatus||after.paymentStatus||after.bookingStatus||after.status;
+  return status ? (ACTIVITY_STATUS_LABELS[status]||status) : "สำเร็จ";
+}
+
+function renderActivityFeed(entries){
+  const feed=$("adminActivityFeed");
+  if(!entries.length){
+    feed.innerHTML=`<div class="activity-empty">ยังไม่มีกิจกรรมที่บันทึกไว้</div>`;
+    return;
+  }
+  feed.innerHTML=`<div class="activity-grid">
+    <div class="activity-head">เวลา</div>
+    <div class="activity-head">ผู้ทำรายการ</div>
+    <div class="activity-head">การดำเนินการ</div>
+    <div class="activity-head">Booking / ลูกค้า</div>
+    <div class="activity-head">ผลลัพธ์</div>
+    ${entries.map(entry=>`
+      <div class="activity-cell">${esc(activityTimeLabel(entry.createdAt))}</div>
+      <div class="activity-cell"><strong>${esc(entry.actor||"—")}</strong></div>
+      <div class="activity-cell">${esc(ACTIVITY_ACTION_LABELS[entry.action]||entry.action||"—")}</div>
+      <div class="activity-cell">${activityTargetLabel(entry)}</div>
+      <div class="activity-cell ok">${esc(activityResultLabel(entry))}</div>
+    `).join("")}
+  </div>`;
+}
+
+async function loadActivityFeed(){
+  const section=$("adminActivitySection");
+  if(!canViewActivityFeed()){
+    section.style.display="none";
+    return;
+  }
+  section.style.display="block";
+  $("adminActivityFeed").innerHTML=`<div class="activity-empty">กำลังโหลด...</div>`;
+  try{
+    const res=await fetch("/api/admin-ops",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"audit_log_list",limit:20}),
+    });
+    const data=await res.json();
+    if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
+    renderActivityFeed(Array.isArray(data.entries)?data.entries:[]);
+  }catch(e){
+    console.warn("[activity-feed]",e);
+    $("adminActivityFeed").innerHTML=`<div class="activity-warning">ไม่สามารถโหลดกิจกรรมล่าสุดได้ แต่ส่วนอื่นของหน้าแอดมินยังใช้งานได้ตามปกติ</div>`;
+  }
+}
+
+function reportAdminActivity({auditAction,targetId,branchId=DEFAULT_BRANCH_ID,before=null,after=null,note=""}){
+  fetch("/api/admin-ops",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({action:"audit_log_write",auditAction,targetId,branchId,before,after,note}),
+  }).then(async res=>{
+    if(!res.ok){
+      const data=await res.json().catch(()=>({}));
+      console.warn("[activity-report]",data.error||`HTTP ${res.status}`);
+      return;
+    }
+    if(canViewActivityFeed()) loadActivityFeed();
+  }).catch(e=>console.warn("[activity-report]",e));
+}
+
+$("activityRefreshBtn").addEventListener("click",loadActivityFeed);
 
 function getFilteredBookingsSubset() {
   if (bookingsViewMode === "daily") {
@@ -1042,7 +1195,12 @@ async function loadBookings(){
     allBookings=snap.docs.map(d=>({id:d.id,...d.data()}));
     updateStats();renderBookings();
     $("lastUpd").textContent=`Updated ${new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}`;
-  }catch(e){console.error(e);$("bookingsList").innerHTML=`<div class="estate">❌ Failed to load. Check Firestore rules.</div>`;}
+  }catch(e){
+    console.error(e);
+    $("bookingsList").innerHTML=`<div class="estate">❌ Failed to load. Check Firestore rules.</div>`;
+  }finally{
+    loadActivityFeed();
+  }
 }
 
 function updateStats(){
@@ -1370,6 +1528,17 @@ async function markPaid(b,opts={}){
     });
   }catch(e){console.error(e);showToast(e.message||"Failed to save payment.",true);if(btn){btn.disabled=false;btn.textContent=originalText||"✓ Mark as Paid";}return;}
 
+  reportAdminActivity({
+    auditAction:"mark_paid_client",
+    targetId:b.id,
+    branchId:b.branchId||DEFAULT_BRANCH_ID,
+    before:{paymentStatus:b.paymentStatus||null,bookingStatus:b.bookingStatus||null},
+    after:{paymentStatus:"paid",bookingStatus:"confirmed"},
+    note:withoutSlip
+      ?`ยืนยันรับชำระเงินโดยไม่มีสลิป ${b.bookingCode||""}`
+      :`อนุมัติสลิปและยืนยันการชำระเงิน ${b.bookingCode||""}`,
+  });
+
   // ── Phase B: fire-and-forget LINE notification (does not block) ──
   if (canNotifyLine(b.lineUserId) && window.sendLineNotification) {
     window.sendLineNotification({
@@ -1417,6 +1586,16 @@ async function cancelBooking(b){
           t.update(slotRef,{bookingStatus:"cancelled",paymentStatus:"rejected"});
         }
       }
+    });
+    reportAdminActivity({
+      auditAction:b.paymentStatus==="pending_review"?"slip_reject_client":"cancel_booking_client",
+      targetId:b.id,
+      branchId:b.branchId||DEFAULT_BRANCH_ID,
+      before:{paymentStatus:b.paymentStatus||null,bookingStatus:b.bookingStatus||null},
+      after:{paymentStatus:"rejected",bookingStatus:"cancelled"},
+      note:b.paymentStatus==="pending_review"
+        ?`ปฏิเสธสลิปและยกเลิกการจอง ${b.bookingCode||""}`
+        :`ยกเลิกการจอง ${b.bookingCode||""}`,
     });
     // Fire-and-forget: notify the customer their booking was cancelled. Must not block admin flow.
     if (canNotifyLine(b.lineUserId) && window.sendLineNotification) {
@@ -2161,6 +2340,7 @@ $("addPassBtn").addEventListener("click", async()=>{
 
     const pkg = PACKAGES[pkgType];
     showToast(`✓ ${pkg.packageName} added for ${selectedUser.name}`);
+    if(canViewActivityFeed()) loadActivityFeed();
 
     // Fire-and-forget LINE notification
     if (window.sendLineNotification && selectedUser.id) {
@@ -2228,7 +2408,17 @@ async function loadActivePasses(){
         if(!confirm("Deactivate this pass?")) return;
         btn.disabled=true;
         try{
-          await updateDoc(doc(db,"customer_packages",btn.dataset.deactivate),{status:"inactive",updatedAt:serverTimestamp()});
+          const passId=btn.dataset.deactivate;
+          const pass=activePasses.find(p=>p.id===passId);
+          await updateDoc(doc(db,"customer_packages",passId),{status:"inactive",updatedAt:serverTimestamp()});
+          reportAdminActivity({
+            auditAction:"pass_deactivate_client",
+            targetId:passId,
+            branchId:pass?.branchId||DEFAULT_BRANCH_ID,
+            before:{status:pass?.status||"active"},
+            after:{status:"inactive"},
+            note:`ปิดใช้งาน ${pass?.packageName||"แพ็กเกจ"} ของ ${pass?.customerName||"ลูกค้า"}`,
+          });
           showToast("Pass deactivated.");loadActivePasses();
         }catch(e){showToast("Failed.",true);btn.disabled=false;}
       });
@@ -2336,6 +2526,14 @@ $("minConfirm").addEventListener("click",async()=>{
       createdAt:serverTimestamp(),
     });
     await batch.commit();
+    reportAdminActivity({
+      auditAction:"pass_adjust_client",
+      targetId:minPass.id,
+      branchId:minPass.branchId||DEFAULT_BRANCH_ID,
+      before:{remainingMinutes:oldRemaining},
+      after:{remainingMinutes:newRemaining},
+      note:`ปรับ ${minPass.packageName||"แพ็กเกจ"} ของ ${minPass.customerName||"ลูกค้า"} ${oldRemaining} → ${newRemaining} นาที${reason?` · ${reason}`:""}`,
+    });
     showToast(`✓ ${minPass.packageName||"Pass"} → ${newRemaining} min`);
     closeMinModal();
     loadActivePasses();
@@ -2809,6 +3007,14 @@ $("manConfirm").addEventListener("click",async()=>{
       });
     });
 
+    reportAdminActivity({
+      auditAction:"manual_booking_client",
+      targetId:bookingRef.id,
+      branchId:DEFAULT_BRANCH_ID,
+      after:{bookingStatus:"confirmed",paymentStatus,date,startTime:time},
+      note:`สร้างจอง Manual ${code} ให้ ${name}`,
+    });
+
     // Fire-and-forget: tell all admins a manual booking was created.
     // notifyAdmins never throws; failure is logged in notification_logs only
     // and must never block or revert the booking that just committed.
@@ -2894,6 +3100,15 @@ async function moveToPendingReschedule(){
           });
         }
       }
+    });
+
+    reportAdminActivity({
+      auditAction:"pending_reschedule_client",
+      targetId:reschBooking.id,
+      branchId:reschBooking.branchId||DEFAULT_BRANCH_ID,
+      before:{bookingStatus:reschBooking.bookingStatus||null,date:reschBooking.date||null,startTime:reschBooking.startTime||null},
+      after:{bookingStatus:"rescheduled",pendingRescheduleStatus:"pending"},
+      note:`ส่ง ${reschBooking.bookingCode||""} เข้ารอเลื่อนเวลา`,
     });
 
     // ── Phase B: fire-and-forget admin notification ───────────────
@@ -3032,6 +3247,14 @@ $("mConfirm").addEventListener("click",async()=>{
         paymentStatus:reschBooking.paymentStatus,
         expiresAt:null
       });
+    });
+    reportAdminActivity({
+      auditAction:"reschedule_client",
+      targetId:reschBooking.id,
+      branchId:reschBooking.branchId||DEFAULT_BRANCH_ID,
+      before:{bookingStatus:reschBooking.bookingStatus||null,date:reschBooking.date||null,startTime:reschBooking.startTime||null},
+      after:{bookingStatus:nextBookingStatus,date:newDate,startTime:reschTime},
+      note:`ยืนยันเวลาใหม่ ${reschBooking.bookingCode||""} เป็น ${newDate} ${reschTime}`,
     });
     // Fire-and-forget: notify the customer their booking was rescheduled. Must not block admin flow.
     if (canNotifyLine(reschBooking.lineUserId) && window.sendLineNotification) {
@@ -3177,6 +3400,14 @@ async function cancelPendingReschedule(b) {
     });
 
     if (restoreSuccess) {
+      reportAdminActivity({
+        auditAction:"reschedule_cancel_client",
+        targetId:b.id,
+        branchId:b.branchId||DEFAULT_BRANCH_ID,
+        before:{bookingStatus:b.bookingStatus||null,pendingRescheduleStatus:b.pendingRescheduleStatus||"pending"},
+        after:{bookingStatus:"confirmed",pendingRescheduleStatus:"cancelled_restored",date:origDate,startTime:origStart},
+        note:`ยกเลิกคำขอเลื่อนและคืนเวลาเดิม ${b.bookingCode||""}`,
+      });
       if (b.paymentStatus === "paid" && !b.googleCalendarEventId) {
         try {
           const calBooking = { ...b, date: origDate, startTime: origStart, endTime: origEnd, bookingStatus: "confirmed" };

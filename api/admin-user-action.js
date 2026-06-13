@@ -11,7 +11,7 @@
 //                                           count down; same request/response)
 // ════════════════════════════════════════════════════════════════════
 
-import { verifySession, requireRole } from './_lib/admin-auth.js';
+import { verifySession, requireRole, DEFAULT_BRANCH_ID } from './_lib/admin-auth.js';
 import { getAdminDb, writeAuditLog } from './_lib/firebase-admin.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 
@@ -172,6 +172,20 @@ export default async function handler(req, res) {
     const pkgRef = await db.collection('customer_packages').add(packagePayload);
 
     console.log(`[admin-user-action] Created pass ${pkgRef.id} for user ${targetUserId} by admin ${adminName}`);
+    await writeAuditLog(db, {
+      actor: adminName,
+      actorRole: session.role,
+      branchId: DEFAULT_BRANCH_ID,
+      action: 'add_pass',
+      targetId: pkgRef.id,
+      after: {
+        status: 'active',
+        packageType: pkg.packageType,
+        packageName: pkg.packageName,
+        customerName: userData.name || '',
+      },
+      note: `เพิ่มแพ็กเกจ ${pkg.packageName} ให้ ${userData.name || targetUserId}`,
+    });
 
     return res.status(200).json({ ok: true, packageId: pkgRef.id });
   } catch (err) {
