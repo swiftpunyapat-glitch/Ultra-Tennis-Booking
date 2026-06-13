@@ -337,6 +337,7 @@
     <button class="tab" data-tab="pending" style="flex:0 0 auto">⏳ Pending</button>
     <button class="tab" data-tab="customers" style="flex:0 0 auto">👥 Customers</button>
     <button class="tab" data-tab="promo" style="flex:0 0 auto">🔥 Promotion</button>
+    <button class="tab" id="activityTabBtn" data-tab="activity" style="display:none;flex:0 0 auto">📜 ประวัติการทำงาน</button>
   </div>
 
   <!-- BOOKINGS TAB -->
@@ -347,16 +348,6 @@
       <div class="stat"><div class="sn ct" id="stReview">—</div><div class="sl">Review</div></div>
       <div class="stat"><div class="sn cg" id="stPaid">—</div><div class="sl">Paid</div></div>
       <div class="stat"><div class="sn cr" id="stCancelled">—</div><div class="sl">Cancelled</div></div>
-    </div>
-
-    <div class="main" id="adminActivitySection" style="display:none;padding-top:12px;padding-bottom:6px">
-      <div class="activity-panel">
-        <div class="activity-hdr">
-          <h2>กิจกรรมล่าสุดของแอดมิน</h2>
-          <button class="rfbtn" id="activityRefreshBtn">↻ รีเฟรช</button>
-        </div>
-        <div id="adminActivityFeed"><div class="activity-empty">กำลังโหลด...</div></div>
-      </div>
     </div>
 
     <!-- VIEW MODE SWITCH -->
@@ -634,6 +625,19 @@
           <button class="smbtn smg" id="promoSaveBtn" style="padding:10px 18px; font-size:.82rem">✓ Save Promotion</button>
           <button class="smbtn" id="promoDeactivateBtn" style="background:#3d1010; border-color:var(--dan); color:var(--dan); padding:10px 18px; font-size:.82rem">✕ Deactivate Immediately</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADMIN ACTIVITY LOG TAB -->
+  <div id="tabActivity" style="display:none">
+    <div class="main" id="adminActivitySection">
+      <div class="activity-panel">
+        <div class="activity-hdr">
+          <h2>กิจกรรมล่าสุดของแอดมิน</h2>
+          <button class="rfbtn" id="activityRefreshBtn">↻ รีเฟรช</button>
+        </div>
+        <div id="adminActivityFeed"><div class="activity-empty">เลือกแท็บนี้เพื่อโหลดประวัติการทำงาน</div></div>
       </div>
     </div>
   </div>
@@ -976,7 +980,12 @@ async function checkSession(){
   }catch{}
   return false;
 }
-function showApp(n){$("loginScreen").style.display="none";$("mainApp").style.display="block";$("adminBadge").textContent=n;}
+function showApp(n){
+  $("loginScreen").style.display="none";
+  $("mainApp").style.display="block";
+  $("adminBadge").textContent=n;
+  updateActivityTabAccess();
+}
 $("pinEye").addEventListener("click",()=>{const p=$("pinIn");p.type=p.type==="password"?"text":"password";});
 $("pinIn").addEventListener("keydown",e=>{if(e.key==="Enter")$("loginBtn").click();});
 $("loginBtn").addEventListener("click",async()=>{
@@ -1011,6 +1020,7 @@ document.querySelectorAll(".tab").forEach(btn=>{
     $("tabPending").style.display   =btn.dataset.tab==="pending"   ?"block":"none";
     $("tabCustomers").style.display =btn.dataset.tab==="customers" ?"block":"none";
     $("tabPromo").style.display     =btn.dataset.tab==="promo"     ?"block":"none";
+    $("tabActivity").style.display  =btn.dataset.tab==="activity"  ?"block":"none";
     if(btn.dataset.tab==="passes")   loadActivePasses();
     if(btn.dataset.tab==="daily")    loadDailyView();
     if(btn.dataset.tab==="slots")    {
@@ -1021,6 +1031,7 @@ document.querySelectorAll(".tab").forEach(btn=>{
     if(btn.dataset.tab==="pending")  renderPendingTab();
     if(btn.dataset.tab==="customers") renderCustomerListTab();
     if(btn.dataset.tab==="promo")    loadPromoTab();
+    if(btn.dataset.tab==="activity") loadActivityFeed();
   });
 });
 
@@ -1065,6 +1076,19 @@ const ACTIVITY_STATUS_LABELS = {
 
 function canViewActivityFeed(){
   return currentAdminRole==="owner"||currentAdminRole==="ultra_admin";
+}
+
+function isActivityTabSelected(){
+  return document.querySelector(".tab.on")?.dataset.tab==="activity";
+}
+
+function updateActivityTabAccess(){
+  const btn=$("activityTabBtn");
+  const allowed=canViewActivityFeed();
+  btn.style.display=allowed?"block":"none";
+  if(!allowed&&isActivityTabSelected()){
+    document.querySelector('[data-tab="bookings"]').click();
+  }
 }
 
 function activityTimeLabel(value){
@@ -1116,12 +1140,10 @@ function renderActivityFeed(entries){
 }
 
 async function loadActivityFeed(){
-  const section=$("adminActivitySection");
   if(!canViewActivityFeed()){
-    section.style.display="none";
+    $("adminActivityFeed").innerHTML=`<div class="activity-warning">บัญชีนี้ไม่มีสิทธิ์ดูประวัติการทำงาน</div>`;
     return;
   }
-  section.style.display="block";
   $("adminActivityFeed").innerHTML=`<div class="activity-empty">กำลังโหลด...</div>`;
   try{
     const res=await fetch("/api/admin-ops",{
@@ -1149,7 +1171,7 @@ function reportAdminActivity({auditAction,targetId,branchId=DEFAULT_BRANCH_ID,be
       console.warn("[activity-report]",data.error||`HTTP ${res.status}`);
       return;
     }
-    if(canViewActivityFeed()) loadActivityFeed();
+    if(canViewActivityFeed()&&isActivityTabSelected()) loadActivityFeed();
   }).catch(e=>console.warn("[activity-report]",e));
 }
 
@@ -1195,12 +1217,7 @@ async function loadBookings(){
     allBookings=snap.docs.map(d=>({id:d.id,...d.data()}));
     updateStats();renderBookings();
     $("lastUpd").textContent=`Updated ${new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}`;
-  }catch(e){
-    console.error(e);
-    $("bookingsList").innerHTML=`<div class="estate">❌ Failed to load. Check Firestore rules.</div>`;
-  }finally{
-    loadActivityFeed();
-  }
+  }catch(e){console.error(e);$("bookingsList").innerHTML=`<div class="estate">❌ Failed to load. Check Firestore rules.</div>`;}
 }
 
 function updateStats(){
@@ -2340,7 +2357,7 @@ $("addPassBtn").addEventListener("click", async()=>{
 
     const pkg = PACKAGES[pkgType];
     showToast(`✓ ${pkg.packageName} added for ${selectedUser.name}`);
-    if(canViewActivityFeed()) loadActivityFeed();
+    if(canViewActivityFeed()&&isActivityTabSelected()) loadActivityFeed();
 
     // Fire-and-forget LINE notification
     if (window.sendLineNotification && selectedUser.id) {
