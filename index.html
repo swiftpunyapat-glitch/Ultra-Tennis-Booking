@@ -226,8 +226,101 @@
     .toast.show{opacity:1;transform:translate(-50%,0);}
     .toast.err{background:var(--danger);}
 
+    /* Phase 1 app shell: visual enhancement only */
+    body{
+      background:
+        radial-gradient(circle at 85% 0,rgba(31,122,224,.28),transparent 34rem),
+        linear-gradient(145deg,#06172e,#0b2742 55%,#071c35);
+    }
+    .shell{
+      min-height:100dvh;
+      padding-bottom:calc(94px + env(safe-area-inset-bottom));
+      background:var(--bg);
+      box-shadow:0 24px 80px rgba(0,0,0,.28);
+      overflow:hidden;
+    }
+    .pheader{
+      background:rgba(7,28,53,.96);
+      border-bottom-color:rgba(255,255,255,.10);
+      box-shadow:0 10px 28px rgba(3,17,34,.22);
+    }
+    .pname{color:#fff;}
+    .psub{color:#adc0d8;}
+    .lang-toggle{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.12);}
+    .lang-btn{color:#b8c8db;}
+    .lang-btn.on{background:var(--yellow);color:var(--ut-navy);box-shadow:none;}
+
+    .home-wrap{padding:18px 16px 8px;}
+    .home-kicker{font-size:.72rem;font-weight:900;letter-spacing:.14em;text-transform:uppercase;color:var(--ut-blue);}
+    .home-title{margin-top:4px;font-size:1.45rem;line-height:1.25;color:var(--ut-navy);font-weight:950;}
+    .home-hours{margin-top:7px;font-size:.78rem;color:var(--muted);line-height:1.55;}
+    .home-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px;}
+    .home-action{
+      min-height:98px;padding:12px 8px;border:1px solid var(--line);border-radius:16px;
+      background:#fff;color:var(--ink);display:flex;flex-direction:column;align-items:center;
+      justify-content:center;gap:7px;text-align:center;box-shadow:0 8px 22px rgba(11,39,66,.07);
+    }
+    .home-action-icon{
+      width:38px;height:38px;border-radius:12px;background:var(--soft);color:var(--brand-dark);
+      display:grid;place-items:center;font-size:1.05rem;font-weight:900;
+    }
+    .home-action-label{font-size:.72rem;line-height:1.25;font-weight:850;}
+    .home-primary{
+      width:100%;min-height:128px;margin-top:16px;padding:20px;border-radius:20px;
+      background:linear-gradient(135deg,var(--yellow),#ffdf62);color:var(--ut-navy);
+      display:flex;align-items:center;gap:16px;text-align:left;
+      box-shadow:0 16px 32px rgba(255,199,44,.28);
+    }
+    .home-primary-icon{
+      width:56px;height:56px;flex:0 0 56px;border-radius:17px;background:rgba(11,39,66,.12);
+      display:grid;place-items:center;font-size:1.65rem;
+    }
+    .home-primary-copy{display:grid;gap:3px;flex:1;}
+    .home-primary-copy strong{font-size:1.18rem;font-weight:950;}
+    .home-primary-copy span{font-size:.76rem;line-height:1.45;opacity:.78;}
+    .home-primary-arrow{font-size:1.35rem;font-weight:900;}
+    .home-section-label{margin:20px 2px 10px;font-size:.72rem;color:var(--muted);font-weight:900;letter-spacing:.08em;text-transform:uppercase;}
+    .home-wide-card{
+      width:100%;padding:15px 16px;border:1px solid var(--line);border-radius:16px;background:#fff;
+      color:var(--ink);display:flex;align-items:center;gap:13px;text-align:left;
+      box-shadow:0 8px 22px rgba(11,39,66,.07);
+    }
+    .home-wide-card + .home-wide-card{margin-top:10px;}
+    .home-wide-card .home-action-icon{flex:0 0 38px;}
+    .home-wide-copy{display:grid;gap:2px;flex:1;}
+    .home-wide-copy strong{font-size:.86rem;color:var(--ut-navy);}
+    .home-wide-copy span{font-size:.7rem;color:var(--muted);line-height:1.4;}
+    .home-wide-arrow{color:var(--muted);font-weight:900;}
+
+    .bottom-nav{
+      position:fixed;z-index:90;left:50%;bottom:0;transform:translateX(-50%);
+      width:min(100%,520px);min-height:76px;padding:7px 8px calc(7px + env(safe-area-inset-bottom));
+      display:grid;grid-template-columns:repeat(4,1fr);align-items:end;
+      background:rgba(7,28,53,.97);border-top:1px solid rgba(255,255,255,.10);
+      box-shadow:0 -12px 30px rgba(3,17,34,.22);backdrop-filter:blur(14px);
+    }
+    .bottom-nav-btn{
+      min-height:58px;background:transparent;color:#8fa6c1;border-radius:12px;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+      font-size:.64rem;font-weight:800;
+    }
+    .bottom-nav-icon{font-size:1.12rem;line-height:1;}
+    .bottom-nav-btn.on{color:var(--yellow);background:rgba(255,199,44,.08);}
+    .bottom-nav-btn.primary .bottom-nav-icon{
+      width:34px;height:34px;border-radius:11px;background:var(--yellow);color:var(--ut-navy);
+      display:grid;place-items:center;margin-top:-13px;box-shadow:0 8px 18px rgba(255,199,44,.24);
+    }
+    .toast{bottom:calc(90px + env(safe-area-inset-bottom));}
+
+    @media(min-width:521px){
+      body{padding:22px 0;}
+      .shell{min-height:calc(100dvh - 44px);border-radius:24px;}
+      .bottom-nav{bottom:22px;border-radius:0 0 24px 24px;}
+    }
+
     @media(max-width:380px){
-      .hgrid{grid-template-columns:1fr;}
+      .home-actions{gap:7px;}
+      .home-action{padding-inline:5px;}
       .tgrid{grid-template-columns:repeat(3,1fr);}
       .ptgrid,.fgrid{grid-template-columns:1fr;}
       .crow{flex-direction:column;align-items:stretch;}
@@ -264,37 +357,52 @@
 
   <!-- VIEW: HOME -->
   <div id="viewHome">
-    <div style="padding:20px 16px 8px">
-      <p style="font-size:.82rem;color:var(--muted);text-align:center" data-i18n="homeHours">Open daily 06:00–00:00 · Floor G, Omni Business Mall</p>
-    </div>
-    <div class="hgrid" style="grid-template-columns:1fr">
-      <button class="hcard" id="btnSingle" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
-        <div class="hcard-icon" style="font-size:2rem">🎾</div>
-        <div>
-          <div class="hcard-label" style="font-size:1rem" data-i18n="bookSingle">Book Single Use</div>
-          <div class="hcard-sub" id="homeSingleSub" style="font-size:.8rem;margin-top:3px" data-i18n="singleSub">฿350 / hour · Pay by QR slip</div>
-        </div>
+    <div class="home-wrap">
+      <div class="home-kicker">Ultra Tennis</div>
+      <h1 class="home-title" data-i18n="homeHeroTitle">จองห้องซ้อมเทนนิสง่ายในไม่กี่ขั้นตอน</h1>
+      <p class="home-hours" data-i18n="homeHours">Open daily 06:00–00:00 · Floor G, Omni Business Mall</p>
+
+      <button class="home-primary" id="btnSingle" type="button">
+        <span class="home-primary-icon">🎾</span>
+        <span class="home-primary-copy">
+          <strong data-i18n="bookSingle">Book Single Use</strong>
+          <span id="homeSingleSub" data-i18n="singleSub">฿350 / hour · Pay by QR slip</span>
+        </span>
+        <span class="home-primary-arrow" aria-hidden="true">→</span>
       </button>
-      <button class="hcard" id="btnRegister" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
-        <div class="hcard-icon" style="font-size:2rem">👤</div>
-        <div>
-          <div class="hcard-label" style="font-size:1rem" data-i18n="registerProfile">Register Profile</div>
-          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="registerSub">Verify name/phone for passes</div>
-        </div>
+
+      <div class="home-section-label" data-i18n="homeServices">บริการของคุณ</div>
+      <div class="home-actions">
+        <button class="home-action" id="btnMyBookings" type="button">
+          <span class="home-action-icon">▣</span>
+          <span class="home-action-label" data-i18n="myBookingPass">My Booking & My Pass</span>
+        </button>
+        <button class="home-action" id="btnPromotions" type="button">
+          <span class="home-action-icon">%</span>
+          <span class="home-action-label" data-i18n="promotions">Promotions</span>
+        </button>
+        <button class="home-action" id="btnRegister" type="button">
+          <span class="home-action-icon">✓</span>
+          <span class="home-action-label" data-i18n="registerProfile">Register Profile</span>
+        </button>
+      </div>
+
+      <div class="home-section-label" data-i18n="homeStart">เริ่มต้นใช้งาน</div>
+      <button class="home-wide-card" id="homeBookingShortcut" type="button">
+        <span class="home-action-icon">+</span>
+        <span class="home-wide-copy">
+          <strong data-i18n="bookRoomShortcut">จองห้องซ้อม</strong>
+          <span data-i18n="bookRoomShortcutSub">เลือกวันและเวลาว่างจากระบบจริง</span>
+        </span>
+        <span class="home-wide-arrow" aria-hidden="true">›</span>
       </button>
-      <button class="hcard" id="btnPromotions" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
-        <div class="hcard-icon" style="font-size:2rem">🎫</div>
-        <div>
-          <div class="hcard-label" style="font-size:1rem" data-i18n="promotions">Promotions</div>
-          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="promotionsSub">Ultra Starter, Pass, and Coaching</div>
-        </div>
-      </button>
-      <button class="hcard" id="btnMyBookings" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
-        <div class="hcard-icon" style="font-size:2rem">📋</div>
-        <div>
-          <div class="hcard-label" style="font-size:1rem" data-i18n="myBookingPass">My Booking & My Pass</div>
-          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="myBookingSub">View bookings · Check pass balance</div>
-        </div>
+      <button class="home-wide-card" id="homeMyShortcut" type="button">
+        <span class="home-action-icon">⌁</span>
+        <span class="home-wide-copy">
+          <strong data-i18n="myShortcut">ดูการจองและ My Pass</strong>
+          <span data-i18n="myShortcutSub">ตรวจสอบสถานะการจอง ยอดคงเหลือ และชำระเงินต่อ</span>
+        </span>
+        <span class="home-wide-arrow" aria-hidden="true">›</span>
       </button>
     </div>
   </div>
@@ -522,6 +630,21 @@
     </div>
   </div>
 
+  <nav class="bottom-nav" id="bottomNav" aria-label="เมนูหลัก">
+    <button class="bottom-nav-btn on" id="navHome" type="button" data-view="viewHome">
+      <span class="bottom-nav-icon">⌂</span><span data-i18n="navHome">หน้าหลัก</span>
+    </button>
+    <button class="bottom-nav-btn" id="navMyBookings" type="button" data-view="viewMyBookings">
+      <span class="bottom-nav-icon">▣</span><span data-i18n="navBookings">การจอง</span>
+    </button>
+    <button class="bottom-nav-btn primary" id="navBook" type="button" data-view="viewBooking">
+      <span class="bottom-nav-icon">+</span><span data-i18n="navBook">จอง</span>
+    </button>
+    <button class="bottom-nav-btn" id="navPromotions" type="button" data-view="viewPromotions">
+      <span class="bottom-nav-icon">%</span><span data-i18n="navPackages">แพ็กเกจ</span>
+    </button>
+  </nav>
+
 </div><!-- /shell -->
 
 <div class="toast" id="toast"></div>
@@ -617,6 +740,17 @@ const I18N = {
     connectingLine:"กำลังเชื่อมต่อ LINE...",
     loadingPass:"กำลังโหลดข้อมูลแพ็กเกจ...",
     homeHours:"เปิดทุกวัน 06:00–00:00 · ชั้น G, Omni Business Mall",
+    homeHeroTitle:"จองห้องซ้อมเทนนิสง่ายในไม่กี่ขั้นตอน",
+    homeServices:"บริการของคุณ",
+    homeStart:"เริ่มต้นใช้งาน",
+    bookRoomShortcut:"จองห้องซ้อม",
+    bookRoomShortcutSub:"เลือกวันและเวลาว่างจากระบบจริง",
+    myShortcut:"ดูการจองและ My Pass",
+    myShortcutSub:"ตรวจสอบสถานะการจอง ยอดคงเหลือ และชำระเงินต่อ",
+    navHome:"หน้าหลัก",
+    navBookings:"การจอง",
+    navBook:"จอง",
+    navPackages:"แพ็กเกจ",
     bookSingle:"จองใช้บริการรายครั้ง",
     singleSub:"350 บาท / ชั่วโมง · ชำระผ่าน QR และอัปโหลดสลิป",
     myBookingPass:"การจองและแพ็กเกจของฉัน",
@@ -744,6 +878,17 @@ const I18N = {
     connectingLine:"Connecting to LINE...",
     loadingPass:"Loading your pass info...",
     homeHours:"Open daily 06:00–00:00 · Floor G, Omni Business Mall",
+    homeHeroTitle:"Book your tennis practice room in a few easy steps",
+    homeServices:"Your services",
+    homeStart:"Get started",
+    bookRoomShortcut:"Book a practice room",
+    bookRoomShortcutSub:"Choose a live available date and time",
+    myShortcut:"View bookings and My Pass",
+    myShortcutSub:"Check booking status, balance, and resume payment",
+    navHome:"Home",
+    navBookings:"Bookings",
+    navBook:"Book",
+    navPackages:"Packages",
     bookSingle:"Book Single Use",
     singleSub:"฿350 / hour · Pay by QR slip",
     myBookingPass:"My Booking & My Pass",
@@ -914,6 +1059,9 @@ function setupLanguageToggle() {
 function showView(id) {
   VIEWS.forEach(v => { const el=$(v); if(el) el.style.display="none"; });
   const el=$(id); if(el) el.style.display="block";
+  document.querySelectorAll(".bottom-nav-btn").forEach(btn=>{
+    btn.classList.toggle("on",btn.dataset.view===id);
+  });
   window.scrollTo(0,0);
 }
 
@@ -1132,9 +1280,15 @@ function setupNav() {
   if (_navBound) return;
   _navBound = true;
   $("btnSingle").addEventListener("click", ()=>{ openBookingView(); });
+  $("homeBookingShortcut").addEventListener("click", ()=>{ openBookingView(); });
   $("btnMyBookings").addEventListener("click",()=>{ openMyBookings(); });
+  $("homeMyShortcut").addEventListener("click",()=>{ openMyBookings(); });
   $("btnRegister").addEventListener("click", ()=>{ openRegisterView(); });
   $("btnPromotions").addEventListener("click", ()=>{ showView("viewPromotions"); });
+  $("navHome").addEventListener("click",()=>showView("viewHome"));
+  $("navMyBookings").addEventListener("click",()=>openMyBookings());
+  $("navBook").addEventListener("click",()=>openBookingView());
+  $("navPromotions").addEventListener("click",()=>showView("viewPromotions"));
   $("bkBack").addEventListener("click",   ()=>showView("viewHome"));
   $("myBack").addEventListener("click",   ()=>showView("viewHome"));
   $("regBack").addEventListener("click",  ()=>showView("viewHome"));
