@@ -249,6 +249,16 @@
     .lang-toggle{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.12);}
     .lang-btn{color:#b8c8db;}
     .lang-btn.on{background:var(--yellow);color:var(--ut-navy);box-shadow:none;}
+    .ui-preview-banner{
+      display:none;padding:10px 14px;background:#fff3cd;border-bottom:1px solid #e9c95d;
+      color:#604b00;font-size:.76rem;font-weight:850;line-height:1.45;text-align:center;
+    }
+    .ui-preview-banner.show{display:block;}
+    .ui-preview-mode #confirmBkBtn,
+    .ui-preview-mode #submitSlipBtn,
+    .ui-preview-mode #btnSaveRegister{
+      filter:grayscale(.65);box-shadow:none;cursor:not-allowed;
+    }
 
     .home-wrap{padding:18px 16px 8px;}
     .home-kicker{font-size:.72rem;font-weight:900;letter-spacing:.14em;text-transform:uppercase;color:var(--ut-blue);}
@@ -354,6 +364,10 @@
       <button class="lang-btn" data-lang="en" type="button">EN</button>
     </div>
   </header>
+
+  <div class="ui-preview-banner" id="uiPreviewBanner" role="status">
+    UI Preview Mode — LINE login skipped. Do not test real booking/payment here.
+  </div>
 
   <!-- VIEW: HOME -->
   <div id="viewHome">
@@ -678,6 +692,7 @@ isSupported().then(ok=>{ if(ok) getAnalytics(fbApp); }).catch(()=>{});
 // ── CONSTANTS ───────────────────────────────────────────────────
 const LIFF_ID     = "2010034901-ClPr9N5v";
 const _isLineApp  = /Line\//i.test(navigator.userAgent); // true inside LINE's in-app browser
+const UI_PREVIEW_MODE = new URLSearchParams(window.location.search).get("uiPreview") === "1";
 const RESOURCE_ID = "room1";
 // Must match DEFAULT_BRANCH_ID in api/_lib/admin-auth.js and admin.html.
 // Stamped on new bookings/slots; legacy docs without it resolve to this branch.
@@ -1117,6 +1132,23 @@ function showLiffRecoveryUI() {
 // ── LIFF INIT ───────────────────────────────────────────────────
 async function initLiff() {
   const tStart = performance.now();
+
+  if(UI_PREVIEW_MODE){
+    state.lineProfile = { displayName:"UI Preview", pictureUrl:null, userId:"ui-preview-user" };
+    document.body.classList.add("ui-preview-mode");
+    $("pname").textContent = state.lineProfile.displayName;
+    $("avatarEl").textContent = "UI";
+    $("uiPreviewBanner").classList.add("show");
+    updateHomeSingleUsePricing();
+    $("loverlay").style.display="none";
+    $("shell").style.display="block";
+    setupUiPreviewSafety();
+    setupNav();
+    showView("viewHome");
+    console.warn("[uiPreview] LINE login and real write actions are disabled.");
+    return;
+  }
+
   $("ltext").textContent=t("connectingLine");
   let liffInitOk = false;
   try {
@@ -1276,6 +1308,20 @@ async function checkEligibility() {
 
 // ── NAVIGATION ──────────────────────────────────────────────────
 let _navBound = false;
+let _uiPreviewSafetyBound = false;
+function setupUiPreviewSafety() {
+  if(!UI_PREVIEW_MODE || _uiPreviewSafetyBound) return;
+  _uiPreviewSafetyBound = true;
+  const blockedIds = new Set(["confirmBkBtn","submitSlipBtn","btnSaveRegister"]);
+  document.addEventListener("click", event=>{
+    const target = event.target.closest("button");
+    if(!target || !blockedIds.has(target.id)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    showToast("UI Preview Mode: real booking, payment, slip, and profile actions are disabled.", true);
+  }, true);
+}
+
 function setupNav() {
   if (_navBound) return;
   _navBound = true;
