@@ -2400,16 +2400,14 @@ async function loadActivePasses(){
         btn.disabled=true;
         try{
           const passId=btn.dataset.deactivate;
-          const pass=activePasses.find(p=>p.id===passId);
-          await updateDoc(doc(db,"customer_packages",passId),{status:"inactive",updatedAt:serverTimestamp()});
-          reportAdminActivity({
-            auditAction:"pass_deactivate_client",
-            targetId:passId,
-            branchId:pass?.branchId||DEFAULT_BRANCH_ID,
-            before:{status:pass?.status||"active"},
-            after:{status:"inactive"},
-            note:`ปิดใช้งาน ${pass?.packageName||"แพ็กเกจ"} ของ ${pass?.customerName||"ลูกค้า"}`,
+          // Server-side deactivate (action:deactivate_pass) — validates session + writes audit.
+          const res=await fetch("/api/admin-user-action",{
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({action:"deactivate_pass",passId}),
           });
+          const data=await res.json().catch(()=>({}));
+          if(!res.ok||!data.ok){ showToast(data.error||"Failed.",true); btn.disabled=false; return; }
           showToast("Pass deactivated.");loadActivePasses();
         }catch(e){showToast("Failed.",true);btn.disabled=false;}
       });
@@ -2490,42 +2488,22 @@ $("minConfirm").addEventListener("click",async()=>{
   const newRemaining=minNewRemaining(action,oldRemaining,value);
   // Validation: remaining cannot go below 0.
   if(newRemaining<0){ showToast("Remaining minutes cannot go below 0.",true); return; }
-  const deltaMinutes=newRemaining-oldRemaining;
-  const adminName=currentAdminName||"admin";
-
   const btn=$("minConfirm"); btn.disabled=true; btn.textContent="Saving...";
   try{
-    // Atomic: update the pass + write the audit log together.
-    const batch=writeBatch(db);
-    batch.update(doc(db,"customer_packages",minPass.id),{
-      remainingMinutes:newRemaining,
-      updatedAt:serverTimestamp(),
+    // Server-side adjust (action:adjust_pass_minutes) — recomputes from the
+    // current DB value in a transaction and writes pass + log + audit. The
+    // oldRemaining/newRemaining computed above are only a client-side preview.
+    const res=await fetch("/api/admin-user-action",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"adjust_pass_minutes",passId:minPass.id,adjustAction:action,value,reason}),
     });
-    batch.set(doc(collection(db,"customer_package_logs")),{
-      packageId:minPass.id,
-      lineUserId:minPass.lineUserId||"",
-      customerName:minPass.customerName||"",
-      customerPhone:minPass.customerPhone||"",
-      packageType:minPass.packageType||"",
-      packageName:minPass.packageName||"",
-      action,
-      oldRemainingMinutes:oldRemaining,
-      newRemainingMinutes:newRemaining,
-      deltaMinutes,
-      reason,
-      adminName,
-      createdAt:serverTimestamp(),
-    });
-    await batch.commit();
-    reportAdminActivity({
-      auditAction:"pass_adjust_client",
-      targetId:minPass.id,
-      branchId:minPass.branchId||DEFAULT_BRANCH_ID,
-      before:{remainingMinutes:oldRemaining},
-      after:{remainingMinutes:newRemaining},
-      note:`ปรับ ${minPass.packageName||"แพ็กเกจ"} ของ ${minPass.customerName||"ลูกค้า"} ${oldRemaining} → ${newRemaining} นาที${reason?` · ${reason}`:""}`,
-    });
-    showToast(`✓ ${minPass.packageName||"Pass"} → ${newRemaining} min`);
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok){
+      showToast(data.error||"Failed to adjust minutes.",true);
+      return;
+    }
+    showToast(`✓ ${minPass.packageName||"Pass"} → ${data.newRemainingMinutes} min`);
     closeMinModal();
     loadActivePasses();
   }catch(e){
