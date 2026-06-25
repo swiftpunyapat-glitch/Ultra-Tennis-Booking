@@ -1520,41 +1520,23 @@ async function markPaid(b,opts={}){
   const originalText=btn?.textContent||"";
   if(btn){btn.disabled=true;btn.textContent="Saving...";}
 
-  const slotId=`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`;
-  // ── Phase A: Firestore payment update (must succeed before anything else) ──
+  // ── Phase A: server-side payment confirmation (atomic, session-checked) ──
+  // Authoritative booking+slot write runs on the server (operation:approve_slip),
+  // which validates the session, branch access, slot ownership, and the legal
+  // transition, and writes its own audit log. Calendar + notify stay client-side.
   try{
-    await runTransaction(db, async t => {
-      const slotRef = doc(db,"booking_slots",slotId);
-      const slotSnap = await t.get(slotRef);
-      if (!slotSnap.exists()) {
-        throw new Error("Conflict: Slot document does not exist.");
-      }
-      const slotData = slotSnap.data();
-      const ownsSlot = slotData.bookingId === b.id || slotData.bookingCode === b.bookingCode;
-      if (!ownsSlot) {
-        throw new Error("Conflict: Slot is owned by another booking.");
-      }
-      const bookingUpdate={paymentStatus:"paid",bookingStatus:"confirmed",status:"confirmed",adminReviewedAt:serverTimestamp(),confirmedAt:serverTimestamp(),updatedAt:serverTimestamp()};
-      if(withoutSlip){
-        bookingUpdate.confirmedByAdmin=true;
-        bookingUpdate.confirmedWithoutSlip=true;
-        bookingUpdate.paymentNote="Admin confirmed payment without slip";
-      }
-      t.update(doc(db,"bookings",b.id),bookingUpdate);
-      t.update(slotRef,{paymentStatus:"paid",bookingStatus:"confirmed",bookingId:b.id,bookingCode:b.bookingCode});
+    const res=await fetch("/api/admin-edit-booking-accounting",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({operation:"approve_slip",bookingId:b.id,withoutSlip}),
     });
-  }catch(e){console.error(e);showToast(e.message||"Failed to save payment.",true);if(btn){btn.disabled=false;btn.textContent=originalText||"✓ Mark as Paid";}return;}
-
-  reportAdminActivity({
-    auditAction:"mark_paid_client",
-    targetId:b.id,
-    branchId:b.branchId||DEFAULT_BRANCH_ID,
-    before:{paymentStatus:b.paymentStatus||null,bookingStatus:b.bookingStatus||null},
-    after:{paymentStatus:"paid",bookingStatus:"confirmed"},
-    note:withoutSlip
-      ?`ยืนยันรับชำระเงินโดยไม่มีสลิป ${b.bookingCode||""}`
-      :`อนุมัติสลิปและยืนยันการชำระเงิน ${b.bookingCode||""}`,
-  });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok){
+      showToast(data.error||"Failed to save payment.",true);
+      if(btn){btn.disabled=false;btn.textContent=originalText||"✓ Mark as Paid";}
+      return;
+    }
+  }catch(e){console.error(e);showToast("Network error — payment not saved.",true);if(btn){btn.disabled=false;btn.textContent=originalText||"✓ Mark as Paid";}return;}
 
   // ── Phase B: fire-and-forget LINE notification (does not block) ──
   if (canNotifyLine(b.lineUserId) && window.sendLineNotification) {
@@ -1592,28 +1574,20 @@ async function cancelBooking(b){
   if(!confirm(`Cancel ${b.bookingCode}?\n${b.customerName} · ${b.date} · ${b.startTime}\n\nThis releases the slot.`))return;
   const btn=document.querySelector(`[data-cancel="${b.id}"]`);if(btn){btn.disabled=true;btn.textContent="Cancelling...";}
   try{
-    await runTransaction(db, async t => {
-      const slotRef = doc(db,"booking_slots",`${RESOURCE_ID}_${b.date}_${b.startTime?.replace(":","")}`);
-      const slotSnap = await t.get(slotRef);
-      t.update(doc(db,"bookings",b.id),{bookingStatus:"cancelled",paymentStatus:"rejected",cancelReason:"Slip rejected or payment not received",cancelledAt:serverTimestamp(),updatedAt:serverTimestamp()});
-      if (slotSnap.exists()) {
-        const slotData = slotSnap.data();
-        const ownsSlot = slotData.bookingId === b.id || slotData.bookingCode === b.bookingCode;
-        if (ownsSlot) {
-          t.update(slotRef,{bookingStatus:"cancelled",paymentStatus:"rejected"});
-        }
-      }
+    // Server-side cancel (operation:reject_payment) — validates session, branch,
+    // slot ownership, blocks paid bookings (refund instead), and writes its own
+    // audit log. Releases the slot when this booking owns it.
+    const res=await fetch("/api/admin-edit-booking-accounting",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({operation:"reject_payment",bookingId:b.id}),
     });
-    reportAdminActivity({
-      auditAction:b.paymentStatus==="pending_review"?"slip_reject_client":"cancel_booking_client",
-      targetId:b.id,
-      branchId:b.branchId||DEFAULT_BRANCH_ID,
-      before:{paymentStatus:b.paymentStatus||null,bookingStatus:b.bookingStatus||null},
-      after:{paymentStatus:"rejected",bookingStatus:"cancelled"},
-      note:b.paymentStatus==="pending_review"
-        ?`ปฏิเสธสลิปและยกเลิกการจอง ${b.bookingCode||""}`
-        :`ยกเลิกการจอง ${b.bookingCode||""}`,
-    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok){
+      showToast(data.error||"Failed.",true);
+      if(btn){btn.disabled=false;btn.textContent="✗ Cancel";}
+      return;
+    }
     // Fire-and-forget: notify the customer their booking was cancelled. Must not block admin flow.
     if (canNotifyLine(b.lineUserId) && window.sendLineNotification) {
       window.sendLineNotification({
@@ -1624,7 +1598,7 @@ async function cancelBooking(b){
         date: b.date,
         startTime: b.startTime,
         endTime: b.endTime,
-        reason: b.cancelReason || "สลิปไม่ถูกต้องหรือไม่พบยอดโอน"
+        reason: data.booking?.cancelReason || "สลิปไม่ถูกต้องหรือไม่พบยอดโอน"
       });
     }
     showToast(`✗ ${b.bookingCode} cancelled`);await loadBookings();
