@@ -38,6 +38,7 @@ const VALID_ACTIONS = [
   'rating_submit', 'rating_list',
   'dashboard',
   'audit_log_write', 'audit_log_list',
+  'slot_bulk_set', 'slot_close_unbooked', 'slot_toggle', 'holiday_set',
 ];
 
 const INCIDENT_SEVERITIES = ['low', 'medium', 'high', 'critical'];
@@ -54,6 +55,35 @@ const CLIENT_AUDIT_ACTIONS = [
 ];
 
 const BRANCH_ID_RE = /^[a-z0-9_-]{2,30}$/;
+
+// ── Slot management constants (mirror admin.html:896-897,2034-2037) ─
+// Slot docs are single-resource/single-branch today (room1 / ladprao1).
+const SLOT_RESOURCE_ID = 'room1';
+const SLOT_OPEN_HOUR  = 6;   // normal hours 06:00–23:00
+const SLOT_CLOSE_HOUR = 24;
+const SLOT_LN_HOURS   = [0, 1, 2, 3, 4, 5]; // Late Night 00:00–05:00
+const SLOT_HOUR_SETS  = ['normal', 'late_night'];
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const slotPad      = h => String(h).padStart(2, '0');
+const slotDocId    = (date, h) => `${SLOT_RESOURCE_ID}_${date}_${slotPad(h)}00`;
+const slotStartStr = h => `${slotPad(h)}:00`;
+const slotEndStr   = h => (h + 1 >= 24 ? '00:00' : `${slotPad(h + 1)}:00`);
+const normalHours  = () => { const a = []; for (let i = SLOT_OPEN_HOUR; i < SLOT_CLOSE_HOUR; i++) a.push(i); return a; };
+
+// Ported 1:1 from admin.html:927-935 (isLiveBookedSlot). A booking_slots doc
+// blocks its hour only when confirmed, or pending_payment that has not yet
+// expired. Expiry field is `expiresAt` (a Firestore Timestamp on the slot doc).
+function isLiveBookedSlot(slotData, nowMs = Date.now()) {
+  if (!slotData) return false;
+  if (slotData.bookingStatus === 'confirmed') return true;
+  if (slotData.bookingStatus === 'pending_payment') {
+    const exp = slotData.expiresAt;
+    const expMs = exp && typeof exp.toMillis === 'function' ? exp.toMillis() : null;
+    return expMs !== null && expMs > nowMs;
+  }
+  return false;
+}
 
 // ── Shared helpers ────────────────────────────────────────────────
 function parseBody(req) {
@@ -172,6 +202,10 @@ export default async function handler(req, res) {
     case 'dashboard':              return handleDashboard(res, session, body);
     case 'audit_log_write':        return handleAuditLogWrite(res, session, body);
     case 'audit_log_list':         return handleAuditLogList(res, session, body);
+    case 'slot_bulk_set':          return handleSlotBulkSet(res, session, body);
+    case 'slot_close_unbooked':    return handleSlotCloseUnbooked(res, session, body);
+    case 'slot_toggle':            return handleSlotToggle(res, session, body);
+    case 'holiday_set':            return handleHolidaySet(res, session, body);
     default:
       // Unreachable (VALID_ACTIONS gate above) — defensive.
       return res.status(400).json({ ok: false, error: `Unknown action "${action}"` });
@@ -678,5 +712,226 @@ async function handleAuditLogList(res, session, body) {
   } catch (e) {
     console.error('[audit_log_list]', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to list audit log' });
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Slot management (available_slots / holidays)
+// ════════════════════════════════════════════════════════════════════
+// All slot writes touch available_slots / holidays ONLY — never booking_slots,
+// and never cancel a booking. Any non-viewer admin with branch access may call
+// these (operational config). Mirrors the former client-direct writes in
+// admin.html (setSlots / openAll / closeUnbooked / toggleSlot / holSave).
+
+// Shared guard for every slot action. Returns true if the response was already
+// sent (caller must return); false if the caller may proceed.
+function slotGuardSent(res, session) {
+  if (session.role === 'viewer') {
+    res.status(403).json({ ok: false, error: 'Viewers cannot manage slots' });
+    return true;
+  }
+  if (!hasBranchAccess(session, DEFAULT_BRANCH_ID)) {
+    res.status(403).json({ ok: false, error: 'No access to this branch' });
+    return true;
+  }
+  return false;
+}
+
+// slot_bulk_set — open or close whole-day (or late-night) hour ranges across
+// one or more dates. onlyMissing:true skips slots that already exist (= openAll).
+// batch.set OVERWRITES each available_slots doc (same as the old client batch).
+async function handleSlotBulkSet(res, session, body) {
+  if (slotGuardSent(res, session)) return;
+
+  const { hourSet, op } = body;
+  const onlyMissing = body.onlyMissing === true;
+  const dates = Array.isArray(body.dates)
+    ? body.dates.filter(d => typeof d === 'string' && DATE_RE.test(d))
+    : [];
+  if (!dates.length || dates.length > 31) {
+    return res.status(400).json({ ok: false, error: 'dates must be 1-31 valid YYYY-MM-DD strings' });
+  }
+  if (!SLOT_HOUR_SETS.includes(hourSet)) {
+    return res.status(400).json({ ok: false, error: `hourSet must be one of: ${SLOT_HOUR_SETS.join(', ')}` });
+  }
+  if (op !== 'open' && op !== 'close') {
+    return res.status(400).json({ ok: false, error: "op must be 'open' or 'close'" });
+  }
+
+  const hours = hourSet === 'late_night' ? SLOT_LN_HOURS : normalHours();
+  const db = getDbOr500(res); if (!db) return;
+
+  try {
+    const existing = new Set();
+    if (onlyMissing) {
+      const snaps = await Promise.all(dates.map(d =>
+        db.collection('available_slots')
+          .where('date', '==', d).where('resourceId', '==', SLOT_RESOURCE_ID).get()
+      ));
+      snaps.forEach(s => s.forEach(doc => existing.add(doc.id)));
+    }
+
+    const now = FieldValue.serverTimestamp();
+    const targets = [];
+    for (const date of dates) {
+      for (const h of hours) {
+        const id = slotDocId(date, h);
+        if (onlyMissing && existing.has(id)) continue;
+        targets.push({ id, date, h });
+      }
+    }
+    if (!targets.length) return res.status(200).json({ ok: true, count: 0 });
+
+    // Chunk to stay under Firestore's 500-write batch limit.
+    let written = 0;
+    for (let i = 0; i < targets.length; i += 450) {
+      const batch = db.batch();
+      for (const t of targets.slice(i, i + 450)) {
+        const ref = db.collection('available_slots').doc(t.id);
+        batch.set(ref, op === 'close'
+          ? { resourceId: SLOT_RESOURCE_ID, branchId: DEFAULT_BRANCH_ID, date: t.date, startTime: slotStartStr(t.h), endTime: slotEndStr(t.h), status: 'closed', closedAt: now, closedBy: session.name, openedAt: null, openedBy: null }
+          : { resourceId: SLOT_RESOURCE_ID, branchId: DEFAULT_BRANCH_ID, date: t.date, startTime: slotStartStr(t.h), endTime: slotEndStr(t.h), status: 'open',   openedAt: now, openedBy: session.name, closedAt: null, closedBy: null }
+        );
+        written++;
+      }
+      await batch.commit();
+    }
+
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+      action: 'slot_bulk_set',
+      targetId: dates.length > 1 ? `${dates[0]}..${dates[dates.length - 1]}` : dates[0],
+      after: { op, hourSet, dates: dates.length, count: written, onlyMissing },
+    });
+    return res.status(200).json({ ok: true, count: written });
+  } catch (e) {
+    console.error('[slot_bulk_set]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to set slots' });
+  }
+}
+
+// slot_close_unbooked — close every open slot on a date that does NOT currently
+// hold a live booking. Reads booking_slots (never writes it).
+async function handleSlotCloseUnbooked(res, session, body) {
+  if (slotGuardSent(res, session)) return;
+
+  const { date } = body;
+  if (typeof date !== 'string' || !DATE_RE.test(date)) {
+    return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
+  }
+
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    const [avSnap, bkSnap] = await Promise.all([
+      db.collection('available_slots')
+        .where('date', '==', date).where('resourceId', '==', SLOT_RESOURCE_ID).where('status', '==', 'open').get(),
+      db.collection('booking_slots')
+        .where('date', '==', date).where('resourceId', '==', SLOT_RESOURCE_ID).get(),
+    ]);
+
+    const nowMs = Date.now();
+    const booked = new Set();
+    bkSnap.forEach(d => { const bd = d.data(); if (isLiveBookedSlot(bd, nowMs)) booked.add(bd.hour); });
+
+    const toClose = avSnap.docs.filter(d => !booked.has(d.data().startTime));
+    if (!toClose.length) return res.status(200).json({ ok: true, count: 0 });
+
+    const now = FieldValue.serverTimestamp();
+    let written = 0;
+    for (let i = 0; i < toClose.length; i += 450) {
+      const batch = db.batch();
+      for (const d of toClose.slice(i, i + 450)) {
+        batch.update(d.ref, { status: 'closed', closedAt: now, closedBy: session.name });
+        written++;
+      }
+      await batch.commit();
+    }
+
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+      action: 'slot_close_unbooked', targetId: date, after: { count: written },
+    });
+    return res.status(200).json({ ok: true, count: written });
+  } catch (e) {
+    console.error('[slot_close_unbooked]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to close unbooked slots' });
+  }
+}
+
+// slot_toggle — open / reopen / close a single slot. Closing a slot that holds
+// a live booking is refused (409): the grid disables it, and a direct API call
+// must never strand a booking by hiding its availability config.
+async function handleSlotToggle(res, session, body) {
+  if (slotGuardSent(res, session)) return;
+
+  const { date, op } = body;
+  const hour = Number(body.hour);
+  if (typeof date !== 'string' || !DATE_RE.test(date)) {
+    return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
+  }
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    return res.status(400).json({ ok: false, error: 'hour must be an integer 0-23' });
+  }
+  if (op !== 'open' && op !== 'close') {
+    return res.status(400).json({ ok: false, error: "op must be 'open' or 'close'" });
+  }
+
+  const db = getDbOr500(res); if (!db) return;
+  const id  = slotDocId(date, hour);
+  const ref = db.collection('available_slots').doc(id);
+  const now = FieldValue.serverTimestamp();
+
+  try {
+    if (op === 'open') {
+      await ref.set({
+        resourceId: SLOT_RESOURCE_ID, branchId: DEFAULT_BRANCH_ID, date,
+        startTime: slotStartStr(hour), endTime: slotEndStr(hour),
+        status: 'open', openedAt: now, openedBy: session.name, closedAt: null, closedBy: null,
+      });
+    } else {
+      const bkSnap = await db.collection('booking_slots').doc(id).get();
+      if (bkSnap.exists && isLiveBookedSlot(bkSnap.data(), Date.now())) {
+        return res.status(409).json({ ok: false, error: 'Cannot close a slot with a live booking' });
+      }
+      const avSnap = await ref.get();
+      if (!avSnap.exists) return res.status(404).json({ ok: false, error: 'Slot not found' });
+      await ref.update({ status: 'closed', closedAt: now, closedBy: session.name });
+    }
+
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+      action: 'slot_toggle', targetId: id, after: { hour, op },
+    });
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error('[slot_toggle]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to toggle slot' });
+  }
+}
+
+// holiday_set — mark / unmark a date as a holiday (used by Off-Peak eligibility).
+async function handleHolidaySet(res, session, body) {
+  if (slotGuardSent(res, session)) return;
+
+  const { date } = body;
+  if (typeof date !== 'string' || !DATE_RE.test(date)) {
+    return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
+  }
+  const isHoliday = body.isHoliday === true;
+  const name = clampStr(body.name ?? '', 100);
+
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    await db.collection('holidays').doc(date).set({
+      date, isHoliday, name, updatedBy: session.name, updatedAt: FieldValue.serverTimestamp(),
+    });
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+      action: 'holiday_set', targetId: `holidays/${date}`, after: { isHoliday, name },
+    });
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error('[holiday_set]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to save holiday' });
   }
 }
