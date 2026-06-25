@@ -64,6 +64,42 @@ import { FieldValue }          from 'firebase-admin/firestore';
 // ── Shared constants ──────────────────────────────────────────────
 const RESOURCE_ID = 'room1';
 
+// ── Reschedule helpers (ported 1:1 from admin.html) ───────────────
+const RESCHED_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const RESCHED_TIME_RE = /^\d{2}:\d{2}$/;
+
+// Pending reschedule is a derived state — a flag on a 'rescheduled' booking,
+// NOT a raw status (rules enum has no 'pending_reschedule'). admin.html:1233.
+function isPendingRescheduleBooking(b) {
+  return b?.bookingStatus === 'pending_reschedule' ||
+         (b?.bookingStatus === 'rescheduled' && b?.pendingReschedule === true);
+}
+
+// Deterministic slot id: room1_<date>_<HHMM> (startTime with ':' stripped).
+function reschedSlotId(resourceId, date, startTime) {
+  return `${resourceId || RESOURCE_ID}_${date}_${String(startTime).replace(':', '')}`;
+}
+
+// End time one hour after an "HH:00" start; midnight-crossing → "00:00".
+function nextHourEnd(startTime) {
+  const h = Number(String(startTime).split(':')[0]) + 1;
+  return h >= 24 ? '00:00' : `${String(h).padStart(2, '0')}:00`;
+}
+
+// Ported 1:1 from admin.html:927-935. A booking_slots doc blocks its hour only
+// when confirmed, or pending_payment that has not yet expired. Expiry field is
+// `expiresAt` (a Firestore Timestamp on the slot doc).
+function isLiveBookedSlot(slotData, nowMs = Date.now()) {
+  if (!slotData) return false;
+  if (slotData.bookingStatus === 'confirmed') return true;
+  if (slotData.bookingStatus === 'pending_payment') {
+    const exp = slotData.expiresAt;
+    const expMs = exp && typeof exp.toMillis === 'function' ? exp.toMillis() : null;
+    return expMs !== null && expMs > nowMs;
+  }
+  return false;
+}
+
 // ── accounting_edit constants ─────────────────────────────────────
 const VALID_ACCOUNTING_TYPES = [
   'normal_paid', 'normal_unpaid', 'pending_review', 'rejected',
@@ -211,7 +247,7 @@ export default async function handler(req, res) {
   // ── Route by operation ────────────────────────────────────────────
   const operation = body.operation || 'accounting_edit';
 
-  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking'];
+  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel'];
   if (!VALID_OPERATIONS.includes(operation)) {
     return res.status(400).json({ ok: false, error: `Invalid operation. Must be one of: ${VALID_OPERATIONS.join(', ')}.` });
   }
@@ -304,6 +340,15 @@ export default async function handler(req, res) {
   }
   if (operation === 'reject_payment') {
     return handleRejectPayment({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+  }
+  if (operation === 'reschedule_park') {
+    return handleReschedulePark({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim() });
+  }
+  if (operation === 'reschedule_assign') {
+    return handleRescheduleAssign({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+  }
+  if (operation === 'reschedule_cancel') {
+    return handleRescheduleCancel({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim() });
   }
   return handleMarkPaid({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
 }
@@ -1013,4 +1058,293 @@ async function handleDeleteBooking({ res, adminName, session, db, booking, booki
   });
 
   return res.status(200).json({ ok: true });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handleReschedulePark — confirmed → rescheduled + pendingReschedule flag.
+// Releases the original slot; assigns no new slot yet. Calendar delete +
+// admin notification stay client-side (fire-and-forget after ok).
+// ════════════════════════════════════════════════════════════════════
+async function handleReschedulePark({ res, adminName, session, db, booking, bookingRef, bookingId }) {
+  if (!hasBranchAccess(session, resolveBranchId(booking))) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
+  }
+  if (booking.bookingStatus === 'cancelled') {
+    return res.status(409).json({ ok: false, error: 'Cannot reschedule a cancelled booking' });
+  }
+  if (isPendingRescheduleBooking(booking)) {
+    return res.status(409).json({ ok: false, error: 'Booking is already pending reschedule' });
+  }
+  if (!booking.date || !booking.startTime) {
+    return res.status(400).json({ ok: false, error: 'Booking date/time is missing' });
+  }
+
+  const fromDate  = booking.pendingRescheduleFromDate      || booking.previousDate      || booking.date;
+  const fromStart = booking.pendingRescheduleFromStartTime || booking.previousStartTime || booking.startTime;
+  const fromEnd   = booking.pendingRescheduleFromEndTime   || booking.previousEndTime   || booking.endTime;
+
+  const oldSlotRef = db.collection('booking_slots').doc(reschedSlotId(booking.resourceId, booking.date, booking.startTime));
+
+  try {
+    await db.runTransaction(async (t) => {
+      const slotSnap = await t.get(oldSlotRef);
+      const bSnap = await t.get(bookingRef);
+      if (!bSnap.exists) throw new Error('BOOKING_MISSING');
+      const bNow = bSnap.data();
+      if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
+      if (isPendingRescheduleBooking(bNow)) throw new Error('ALREADY_PENDING');
+
+      t.update(bookingRef, {
+        bookingStatus:                  'rescheduled',
+        pendingReschedule:              true,
+        pendingRescheduleStatus:        'pending',
+        pendingRescheduleAt:            FieldValue.serverTimestamp(),
+        pendingRescheduleBy:            adminName,
+        pendingRescheduleFromDate:      fromDate,
+        pendingRescheduleFromStartTime: fromStart,
+        pendingRescheduleFromEndTime:   fromEnd,
+        updatedAt:                      FieldValue.serverTimestamp(),
+      });
+      if (slotSnap.exists) {
+        const sd = slotSnap.data();
+        if (sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode) {
+          t.update(oldSlotRef, {
+            bookingStatus:               'rescheduled',
+            paymentStatus:               booking.paymentStatus,
+            pendingRescheduleReleasedAt: FieldValue.serverTimestamp(),
+            updatedAt:                   FieldValue.serverTimestamp(),
+          });
+        }
+      }
+    });
+  } catch (e) {
+    const map = {
+      BOOKING_MISSING: [404, 'Booking not found'],
+      CANCELLED:       [409, 'Cannot reschedule a cancelled booking'],
+      ALREADY_PENDING: [409, 'Booking is already pending reschedule'],
+    };
+    const [code, msg] = map[e.message] || [500, 'Failed to move to pending reschedule'];
+    if (code === 500) console.error('[reschedule_park] tx:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
+    action: 'reschedule_park', targetId: bookingId,
+    before: { bookingStatus: booking.bookingStatus, date: booking.date, startTime: booking.startTime },
+    after:  { bookingStatus: 'rescheduled', pendingRescheduleStatus: 'pending' },
+  });
+
+  return res.status(200).json({
+    ok: true,
+    booking: {
+      id: bookingId, bookingCode: booking.bookingCode, lineUserId: booking.lineUserId ?? null,
+      customerName: booking.customerName ?? '', customerPhone: booking.customerPhone ?? '',
+      paymentStatus: booking.paymentStatus, bookingType: booking.bookingType ?? null,
+      googleCalendarEventId: booking.googleCalendarEventId ?? null,
+      previousDate: fromDate, previousStartTime: fromStart, previousEndTime: fromEnd,
+    },
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handleRescheduleAssign — assign a new date/time (first-time reschedule of a
+// confirmed booking, OR assigning a pending-reschedule booking). The slot grab
+// is atomic; the new booking_slot lock is ALWAYS written as "confirmed" so the
+// customer UI reliably blocks it (it only blocks confirmed / unexpired pending).
+// Customer + admin notifications and Calendar sync stay client-side.
+// ════════════════════════════════════════════════════════════════════
+async function handleRescheduleAssign({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+  if (!hasBranchAccess(session, resolveBranchId(booking))) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
+  }
+  if (booking.bookingStatus === 'cancelled') {
+    return res.status(409).json({ ok: false, error: 'Cannot reschedule a cancelled booking' });
+  }
+  const { newDate, newStartTime } = body;
+  if (typeof newDate !== 'string' || !RESCHED_DATE_RE.test(newDate)) {
+    return res.status(400).json({ ok: false, error: 'newDate must be YYYY-MM-DD' });
+  }
+  if (typeof newStartTime !== 'string' || !RESCHED_TIME_RE.test(newStartTime)) {
+    return res.status(400).json({ ok: false, error: 'newStartTime must be HH:mm' });
+  }
+
+  const newEndTime = nextHourEnd(newStartTime);
+  const resourceId = booking.resourceId || RESOURCE_ID;
+  const oldSlotId  = reschedSlotId(resourceId, booking.date, booking.startTime);
+  const newSlotId  = reschedSlotId(resourceId, newDate, newStartTime);
+  const avRef      = db.collection('available_slots').doc(newSlotId);
+  const newSlotRef = db.collection('booking_slots').doc(newSlotId);
+  const oldSlotRef = db.collection('booking_slots').doc(oldSlotId);
+
+  let meta;
+  try {
+    meta = await db.runTransaction(async (t) => {
+      const [avSnap, newSnap, oldSnap, bSnap] = await Promise.all([
+        t.get(avRef), t.get(newSlotRef), t.get(oldSlotRef), t.get(bookingRef),
+      ]);
+      if (!bSnap.exists) throw new Error('BOOKING_MISSING');
+      const bNow = bSnap.data();
+      if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
+      if (!avSnap.exists || avSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
+      if (newSnap.exists && oldSlotId !== newSlotId) {
+        const nd = newSnap.data();
+        const ownsNew = nd.bookingId === bookingId || nd.bookingCode === booking.bookingCode;
+        if (!ownsNew && isLiveBookedSlot(nd)) throw new Error('SLOT_TAKEN');
+      }
+
+      const wasPending = isPendingRescheduleBooking(bNow);
+      const nextStatus = wasPending ? 'confirmed' : bNow.bookingStatus;
+      // QC: the slot lock must ALWAYS be "confirmed" regardless of the booking's
+      // own flow status, or the customer UI would treat the slot as free.
+      const slotNextStatus = 'confirmed';
+
+      const update = {
+        date: newDate, startTime: newStartTime, endTime: newEndTime,
+        bookingStatus: nextStatus,
+        previousDate:      booking.pendingRescheduleFromDate      || booking.previousDate      || booking.date,
+        previousStartTime: booking.pendingRescheduleFromStartTime || booking.previousStartTime || booking.startTime,
+        previousEndTime:   booking.pendingRescheduleFromEndTime   || booking.previousEndTime   || booking.endTime,
+        rescheduledAt: FieldValue.serverTimestamp(),
+        updatedAt:     FieldValue.serverTimestamp(),
+      };
+      if (wasPending) {
+        update.pendingReschedule = false;
+        update.pendingRescheduleStatus = 'assigned';
+        update.assignedFromPendingRescheduleAt = FieldValue.serverTimestamp();
+      }
+      t.update(bookingRef, update);
+
+      if (oldSlotId !== newSlotId && oldSnap.exists) {
+        const sd = oldSnap.data();
+        if (sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode) {
+          t.update(oldSlotRef, { bookingStatus: 'rescheduled', paymentStatus: booking.paymentStatus });
+        }
+      }
+
+      t.set(newSlotRef, {
+        bookingCode:   booking.bookingCode,
+        bookingId,
+        resourceId,
+        date:          newDate,
+        hour:          newStartTime,
+        bookingStatus: slotNextStatus,
+        paymentStatus: booking.paymentStatus,
+        expiresAt:     null,
+      });
+
+      return { wasPending, nextStatus };
+    });
+  } catch (e) {
+    const map = {
+      BOOKING_MISSING: [404, 'Booking not found'],
+      CANCELLED:       [409, 'Cannot reschedule a cancelled booking'],
+      SLOT_NOT_OPEN:   [409, 'Selected slot is not open'],
+      SLOT_TAKEN:      [409, 'Selected slot is already booked'],
+    };
+    const [code, msg] = map[e.message] || [500, 'Failed to reschedule'];
+    if (code === 500) console.error('[reschedule_assign] tx:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
+    action: 'reschedule_assign', targetId: bookingId,
+    before: { bookingStatus: booking.bookingStatus, date: booking.date, startTime: booking.startTime },
+    after:  { bookingStatus: meta.nextStatus, date: newDate, startTime: newStartTime, wasPending: meta.wasPending },
+  });
+
+  return res.status(200).json({
+    ok: true,
+    wasPending: meta.wasPending, nextStatus: meta.nextStatus,
+    newDate, newStartTime, newEndTime,
+    booking: {
+      id: bookingId, bookingCode: booking.bookingCode, lineUserId: booking.lineUserId ?? null,
+      paymentStatus: booking.paymentStatus, googleCalendarEventId: booking.googleCalendarEventId ?? null,
+      previousDate: booking.date, previousStartTime: booking.startTime, previousEndTime: booking.endTime,
+    },
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handleRescheduleCancel — best-effort restore a pending-reschedule booking to
+// its original slot. Writes an audit entry for BOTH outcomes (restored or not)
+// so the restore attempt is always traceable.
+// ════════════════════════════════════════════════════════════════════
+async function handleRescheduleCancel({ res, adminName, session, db, booking, bookingRef, bookingId }) {
+  if (!hasBranchAccess(session, resolveBranchId(booking))) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
+  }
+  if (!isPendingRescheduleBooking(booking)) {
+    return res.status(409).json({ ok: false, error: 'Booking is not pending reschedule' });
+  }
+
+  const origDate  = booking.pendingRescheduleFromDate      || booking.previousDate      || booking.date;
+  const origStart = booking.pendingRescheduleFromStartTime || booking.previousStartTime || booking.startTime;
+  const origEnd   = booking.pendingRescheduleFromEndTime   || booking.previousEndTime   || booking.endTime;
+  const resourceId = booking.resourceId || RESOURCE_ID;
+  const slotId  = reschedSlotId(resourceId, origDate, origStart);
+  const slotRef = db.collection('booking_slots').doc(slotId);
+  const avRef   = db.collection('available_slots').doc(slotId);
+
+  let restored;
+  try {
+    restored = await db.runTransaction(async (t) => {
+      const [avSnap, slotSnap, bSnap] = await Promise.all([
+        t.get(avRef), t.get(slotRef), t.get(bookingRef),
+      ]);
+      if (!bSnap.exists) throw new Error('BOOKING_MISSING');
+      if (!isPendingRescheduleBooking(bSnap.data())) throw new Error('NOT_PENDING');
+
+      const slotOpen = avSnap.exists && avSnap.data().status === 'open';
+      const sd = slotSnap.exists ? slotSnap.data() : null;
+      const notOccupiedByOther = !sd || !isLiveBookedSlot(sd) ||
+        sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode;
+
+      if (origDate && origStart && origEnd && slotOpen && notOccupiedByOther) {
+        t.set(slotRef, {
+          bookingCode: booking.bookingCode, bookingId, resourceId,
+          date: origDate, hour: origStart,
+          bookingStatus: 'confirmed', paymentStatus: booking.paymentStatus,
+          expiresAt: null, updatedAt: FieldValue.serverTimestamp(),
+        });
+        t.update(bookingRef, {
+          date: origDate, startTime: origStart, endTime: origEnd,
+          bookingStatus: 'confirmed', pendingReschedule: false,
+          pendingRescheduleStatus: 'cancelled_restored',
+          cancelledRestoredAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        return true;
+      }
+      return false;
+    });
+  } catch (e) {
+    const map = {
+      BOOKING_MISSING: [404, 'Booking not found'],
+      NOT_PENDING:     [409, 'Booking is not pending reschedule'],
+    };
+    const [code, msg] = map[e.message] || [500, 'Failed to cancel pending reschedule'];
+    if (code === 500) console.error('[reschedule_cancel] tx:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+
+  // QC: audit BOTH outcomes so a failed restore attempt is still traceable.
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
+    action: 'reschedule_cancel', targetId: bookingId,
+    before: { bookingStatus: booking.bookingStatus, pendingRescheduleStatus: booking.pendingRescheduleStatus || 'pending' },
+    after:  restored
+      ? { restored: true, bookingStatus: 'confirmed', pendingRescheduleStatus: 'cancelled_restored', date: origDate, startTime: origStart }
+      : { restored: false, reason: 'original_slot_unavailable' },
+  });
+
+  return res.status(200).json({
+    ok: true, restored,
+    booking: {
+      id: bookingId, bookingCode: booking.bookingCode, lineUserId: booking.lineUserId ?? null,
+      paymentStatus: booking.paymentStatus, googleCalendarEventId: booking.googleCalendarEventId ?? null,
+      date: origDate, startTime: origStart, endTime: origEnd,
+    },
+  });
 }
