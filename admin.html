@@ -3032,44 +3032,15 @@ async function moveToPendingReschedule(){
   if(!reschBooking.date||!reschBooking.startTime){showToast("Booking date/time is missing.",true);return;}
   if(!confirm(`Move ${reschBooking.bookingCode||"this booking"} to Pending Reschedule?\n\nThe original slot will be released and no new slot will be assigned yet.`)) return;
   const btn=$("mPendingResch");btn.disabled=true;btn.textContent="Moving...";
-  const oldSlId=`${RESOURCE_ID}_${reschBooking.date}_${reschBooking.startTime.replace(":","")}`;
   try{
-    await runTransaction(db, async t => {
-      const slotRef = doc(db,"booking_slots",oldSlId);
-      const slotSnap = await t.get(slotRef);
-      t.update(doc(db,"bookings",reschBooking.id),{
-        bookingStatus:"rescheduled",
-        pendingReschedule:true,
-        pendingRescheduleStatus:"pending",
-        pendingRescheduleAt:serverTimestamp(),
-        pendingRescheduleBy:currentAdminName||"admin",
-        pendingRescheduleFromDate:reschBooking.pendingRescheduleFromDate||reschBooking.previousDate||reschBooking.date,
-        pendingRescheduleFromStartTime:reschBooking.pendingRescheduleFromStartTime||reschBooking.previousStartTime||reschBooking.startTime,
-        pendingRescheduleFromEndTime:reschBooking.pendingRescheduleFromEndTime||reschBooking.previousEndTime||reschBooking.endTime,
-        updatedAt:serverTimestamp(),
-      });
-      if (slotSnap.exists()) {
-        const slotData = slotSnap.data();
-        const ownsSlot = slotData.bookingId === reschBooking.id || slotData.bookingCode === reschBooking.bookingCode;
-        if (ownsSlot) {
-          t.update(slotRef,{
-            bookingStatus:"rescheduled",
-            paymentStatus:reschBooking.paymentStatus,
-            pendingRescheduleReleasedAt:serverTimestamp(),
-            updatedAt:serverTimestamp(),
-          });
-        }
-      }
+    // Server-side park (operation:reschedule_park) — releases the original slot
+    // and flags the booking pending-reschedule; writes its own audit log.
+    const res=await fetch("/api/admin-edit-booking-accounting",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({operation:"reschedule_park",bookingId:reschBooking.id}),
     });
-
-    reportAdminActivity({
-      auditAction:"pending_reschedule_client",
-      targetId:reschBooking.id,
-      branchId:reschBooking.branchId||DEFAULT_BRANCH_ID,
-      before:{bookingStatus:reschBooking.bookingStatus||null,date:reschBooking.date||null,startTime:reschBooking.startTime||null},
-      after:{bookingStatus:"rescheduled",pendingRescheduleStatus:"pending"},
-      note:`ส่ง ${reschBooking.bookingCode||""} เข้ารอเลื่อนเวลา`,
-    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok){showToast(data.error||"Move to pending reschedule failed.",true);btn.disabled=false;btn.textContent="Move to Pending";return;}
 
     // ── Phase B: fire-and-forget admin notification ───────────────
     // Must not block or affect the reschedule; failure is logged only.
@@ -3156,66 +3127,18 @@ $("mConfirm").addEventListener("click",async()=>{
   const newDate=$("rDate").value;
   const endH=Number(reschTime.split(":")[0])+1;
   const newEnd=endH>=24?"00:00":`${String(endH).padStart(2,"0")}:00`;
-  const oldSlId=`${RESOURCE_ID}_${reschBooking.date}_${reschBooking.startTime.replace(":","")}`; 
-  const newSlId=`${RESOURCE_ID}_${newDate}_${reschTime.replace(":","")}`; 
-  const avSlId =`${RESOURCE_ID}_${newDate}_${reschTime.replace(":","")}`; 
   const wasPendingReschedule=isPendingRescheduleBooking(reschBooking);
-  const nextBookingStatus=wasPendingReschedule?"confirmed":reschBooking.bookingStatus;
 
   const btn=$("mConfirm");btn.disabled=true;btn.textContent=wasPendingReschedule?"Assigning...":"Rescheduling...";
   try{
-    await runTransaction(db,async t=>{
-      const[avSnap,newSnap,oldSnap]=await Promise.all([
-        t.get(doc(db,"available_slots",avSlId)),
-        t.get(doc(db,"booking_slots",newSlId)),
-        t.get(doc(db,"booking_slots",oldSlId))
-      ]);
-      if(!avSnap.exists()||avSnap.data().status!=="open") throw new Error("Selected slot is not open.");
-      if(newSnap.exists() && oldSlId !== newSlId){
-        const nd=newSnap.data();
-        if(nd.bookingCode!==reschBooking.bookingCode && isLiveBookedSlot(nd)) throw new Error(nd.bookingStatus==="pending_payment"?"Slot is temporarily held.":"Slot is already booked.");
-      }
-      const bookingUpdate={
-        date:newDate,startTime:reschTime,endTime:newEnd,
-        bookingStatus:nextBookingStatus,
-        previousDate:reschBooking.pendingRescheduleFromDate||reschBooking.previousDate||reschBooking.date,
-        previousStartTime:reschBooking.pendingRescheduleFromStartTime||reschBooking.previousStartTime||reschBooking.startTime,
-        previousEndTime:reschBooking.pendingRescheduleFromEndTime||reschBooking.previousEndTime||reschBooking.endTime,
-        rescheduledAt:serverTimestamp(),
-        updatedAt:serverTimestamp(),
-      };
-      if(wasPendingReschedule){
-        bookingUpdate.pendingReschedule=false;
-        bookingUpdate.pendingRescheduleStatus="assigned";
-        bookingUpdate.assignedFromPendingRescheduleAt=serverTimestamp();
-      }
-      t.update(doc(db,"bookings",reschBooking.id),bookingUpdate);
-      if(oldSlId !== newSlId && oldSnap.exists()) {
-        const slotData = oldSnap.data();
-        const ownsSlot = slotData.bookingId === reschBooking.id || slotData.bookingCode === reschBooking.bookingCode;
-        if(ownsSlot) {
-          t.update(doc(db,"booking_slots",oldSlId),{bookingStatus:"rescheduled",paymentStatus:reschBooking.paymentStatus});
-        }
-      }
-      t.set(doc(db,"booking_slots",newSlId),{
-        bookingCode:reschBooking.bookingCode,
-        bookingId:reschBooking.id,
-        resourceId:RESOURCE_ID,
-        date:newDate,
-        hour:reschTime,
-        bookingStatus:nextBookingStatus,
-        paymentStatus:reschBooking.paymentStatus,
-        expiresAt:null
-      });
+    // Server-side assign (operation:reschedule_assign) — atomic slot grab; the new
+    // booking_slot lock is written as "confirmed" server-side, and audit is written there.
+    const res=await fetch("/api/admin-edit-booking-accounting",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({operation:"reschedule_assign",bookingId:reschBooking.id,newDate,newStartTime:reschTime}),
     });
-    reportAdminActivity({
-      auditAction:"reschedule_client",
-      targetId:reschBooking.id,
-      branchId:reschBooking.branchId||DEFAULT_BRANCH_ID,
-      before:{bookingStatus:reschBooking.bookingStatus||null,date:reschBooking.date||null,startTime:reschBooking.startTime||null},
-      after:{bookingStatus:nextBookingStatus,date:newDate,startTime:reschTime},
-      note:`ยืนยันเวลาใหม่ ${reschBooking.bookingCode||""} เป็น ${newDate} ${reschTime}`,
-    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok){showToast(data.error||"Reschedule failed.",true);btn.disabled=false;btn.textContent=wasPendingReschedule?"Assign New Slot":"Confirm Reschedule";return;}
     // Fire-and-forget: notify the customer their booking was rescheduled. Must not block admin flow.
     if (canNotifyLine(reschBooking.lineUserId) && window.sendLineNotification) {
       window.sendLineNotification({
@@ -3312,62 +3235,16 @@ async function cancelPendingReschedule(b) {
   }
 
   try {
-    const slotId = `${RESOURCE_ID}_${origDate}_${origStart?.replace(":", "")}`;
-    const slotRef = doc(db, "booking_slots", slotId);
-    const availRef = doc(db, "available_slots", slotId);
-
-    let restoreSuccess = false;
-
-    await runTransaction(db, async t => {
-      const [availSnap, slotSnap] = await Promise.all([
-        t.get(availRef),
-        t.get(slotRef)
-      ]);
-
-      const slotOpen = availSnap.exists() && availSnap.data().status === "open";
-      const slotNotOccupiedByOther = !slotSnap.exists() || 
-        !isLiveBookedSlot(slotSnap.data()) || 
-        slotSnap.data().bookingId === b.id || 
-        slotSnap.data().bookingCode === b.bookingCode;
-
-      if (origDate && origStart && origEnd && slotOpen && slotNotOccupiedByOther) {
-        restoreSuccess = true;
-        t.set(slotRef, {
-          bookingCode: b.bookingCode,
-          bookingId: b.id,
-          resourceId: RESOURCE_ID,
-          date: origDate,
-          hour: origStart,
-          bookingStatus: "confirmed",
-          paymentStatus: b.paymentStatus,
-          expiresAt: null,
-          updatedAt: serverTimestamp()
-        });
-        t.update(doc(db, "bookings", b.id), {
-          date: origDate,
-          startTime: origStart,
-          endTime: origEnd,
-          bookingStatus: "confirmed",
-          pendingReschedule: false,
-          pendingRescheduleStatus: "cancelled_restored",
-          cancelledRestoredAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-      } else {
-        restoreSuccess = false;
-        console.log(`[Cancel Pending] Restoration skipped for booking ${b.bookingCode}. Reason: Slot ${origDate} ${origStart} is occupied, closed, or holiday.`);
-      }
+    // Server-side cancel-pending (operation:reschedule_cancel) — best-effort atomic
+    // restore to the original slot; the server audits both restored and not-restored.
+    const res = await fetch("/api/admin-edit-booking-accounting", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operation: "reschedule_cancel", bookingId: b.id }),
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) { showToast(data.error || "Operation failed.", true); return; }
 
-    if (restoreSuccess) {
-      reportAdminActivity({
-        auditAction:"reschedule_cancel_client",
-        targetId:b.id,
-        branchId:b.branchId||DEFAULT_BRANCH_ID,
-        before:{bookingStatus:b.bookingStatus||null,pendingRescheduleStatus:b.pendingRescheduleStatus||"pending"},
-        after:{bookingStatus:"confirmed",pendingRescheduleStatus:"cancelled_restored",date:origDate,startTime:origStart},
-        note:`ยกเลิกคำขอเลื่อนและคืนเวลาเดิม ${b.bookingCode||""}`,
-      });
+    if (data.restored === true) {
       if (b.paymentStatus === "paid" && !b.googleCalendarEventId) {
         try {
           const calBooking = { ...b, date: origDate, startTime: origStart, endTime: origEnd, bookingStatus: "confirmed" };
