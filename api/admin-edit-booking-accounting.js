@@ -57,7 +57,7 @@
 // Does NOT touch: paymentStatus, price, slipUrl, package fields, Google Calendar.
 // ════════════════════════════════════════════════════════════════════
 
-import { verifySession, requireRole, resolveBranchId } from './_lib/admin-auth.js';
+import { verifySession, requireRole, resolveBranchId, hasBranchAccess } from './_lib/admin-auth.js';
 import { getAdminDb, writeAuditLog } from './_lib/firebase-admin.js';
 import { FieldValue }          from 'firebase-admin/firestore';
 
@@ -211,7 +211,7 @@ export default async function handler(req, res) {
   // ── Route by operation ────────────────────────────────────────────
   const operation = body.operation || 'accounting_edit';
 
-  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'delete_booking'];
+  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking'];
   if (!VALID_OPERATIONS.includes(operation)) {
     return res.status(400).json({ ok: false, error: `Invalid operation. Must be one of: ${VALID_OPERATIONS.join(', ')}.` });
   }
@@ -298,6 +298,12 @@ export default async function handler(req, res) {
   }
   if (operation === 'delete_booking') {
     return handleDeleteBooking({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim() });
+  }
+  if (operation === 'approve_slip') {
+    return handleApproveSlip({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+  }
+  if (operation === 'reject_payment') {
+    return handleRejectPayment({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
   }
   return handleMarkPaid({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
 }
@@ -669,6 +675,10 @@ async function handleRefund({ res, adminName, session, db, booking, bookingRef, 
 async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
   const { amount, paymentMethod, paymentNote = '' } = body;
 
+  // Branch access (filter in memory — never where(branchId); legacy → ladprao1).
+  if (!hasBranchAccess(session, resolveBranchId(booking))) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
+  }
   if (booking.bookingStatus === 'cancelled') {
     return res.status(409).json({ ok: false, error: 'Cannot mark a cancelled booking as paid' });
   }
@@ -682,39 +692,50 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
   const slotId  = `${booking.resourceId || RESOURCE_ID}_${booking.date}_${booking.startTime?.replace(':', '')}`;
   const slotRef = db.collection('booking_slots').doc(slotId);
 
+  // Atomic read-check-write: a transaction (not batch) closes the TOCTOU gap
+  // between reading slot ownership and committing. All reads precede all writes.
   try {
-    const slotSnap = await slotRef.get();
-    if (!slotSnap.exists) {
-      return res.status(409).json({ ok: false, error: 'Slot does not exist' });
-    }
-    const slotData = slotSnap.data();
-    const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
-    if (!ownsSlot) {
-      return res.status(409).json({ ok: false, error: 'Conflict: Slot is owned by another booking' });
-    }
+    await db.runTransaction(async (t) => {
+      const slotSnap = await t.get(slotRef);
+      if (!slotSnap.exists) throw new Error('SLOT_MISSING');
+      const slotData = slotSnap.data();
+      const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+      if (!ownsSlot) throw new Error('SLOT_CONFLICT');
 
-    const batch = db.batch();
-    batch.update(bookingRef, {
-      paymentStatus:   'paid',
-      bookingStatus:   'confirmed',
-      status:          'confirmed',
-      price:           Number(amount),
-      paidAt:          FieldValue.serverTimestamp(),
-      paidBy:          adminName,
-      paymentMethod:   paymentMethod,
-      paymentNote:     String(paymentNote).slice(0, 400),
-      adminReviewedAt: FieldValue.serverTimestamp(),
-      confirmedAt:     FieldValue.serverTimestamp(),
-      updatedAt:       FieldValue.serverTimestamp(),
+      const bSnap = await t.get(bookingRef);
+      if (!bSnap.exists) throw new Error('BOOKING_MISSING');
+      const bNow = bSnap.data();
+      if (bNow.paymentStatus === 'paid') throw new Error('ALREADY_PAID');
+      if (bNow.paymentStatus !== 'unpaid') throw new Error('BAD_STATE');
+      if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
+
+      t.update(bookingRef, {
+        paymentStatus:   'paid',
+        bookingStatus:   'confirmed',
+        status:          'confirmed',
+        price:           Number(amount),
+        paidAt:          FieldValue.serverTimestamp(),
+        paidBy:          adminName,
+        paymentMethod:   paymentMethod,
+        paymentNote:     String(paymentNote).slice(0, 400),
+        adminReviewedAt: FieldValue.serverTimestamp(),
+        confirmedAt:     FieldValue.serverTimestamp(),
+        updatedAt:       FieldValue.serverTimestamp(),
+      });
+      t.update(slotRef, { paymentStatus: 'paid', bookingStatus: 'confirmed' });
     });
-    batch.update(slotRef, {
-      paymentStatus: 'paid',
-      bookingStatus: 'confirmed',
-    });
-    await batch.commit();
   } catch (e) {
-    console.error('[mark-paid] write:', e.message);
-    return res.status(500).json({ ok: false, error: 'Failed to update booking' });
+    const map = {
+      SLOT_MISSING:    [409, 'Slot does not exist'],
+      SLOT_CONFLICT:   [409, 'Conflict: Slot is owned by another booking'],
+      BOOKING_MISSING: [404, 'Booking not found'],
+      ALREADY_PAID:    [409, 'Booking is already paid'],
+      BAD_STATE:       [409, 'Booking is no longer unpaid'],
+      CANCELLED:       [409, 'Booking was cancelled'],
+    };
+    const [code, msg] = map[e.message] || [500, 'Failed to update booking'];
+    if (code === 500) console.error('[mark-paid] write:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
   }
 
   console.log(`[mark-paid] id:${bookingId} amount:${amount} method:${paymentMethod} admin:${adminName}`);
@@ -726,6 +747,190 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
     after: { paymentStatus: 'paid', bookingStatus: 'confirmed', price: Number(amount), paymentMethod },
   });
   return res.status(200).json({ ok: true });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handleApproveSlip — any valid admin, approves a slip / confirms payment.
+// Source paymentStatus: "pending_review" (normal slip approve) or "unpaid"
+// (Confirm Paid No-Slip). Price is NOT changed — keeps booking.price.
+// Calendar + customer notification stay client-side (fire-and-forget after ok).
+// Legal transition: paymentStatus {pending_review,unpaid}→paid, bookingStatus→confirmed.
+// ════════════════════════════════════════════════════════════════════
+async function handleApproveSlip({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+  const withoutSlip = body.withoutSlip === true;
+
+  if (!hasBranchAccess(session, resolveBranchId(booking))) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
+  }
+  // Pre-transaction guards (Admin SDK bypasses rules → validate transition here).
+  if (booking.bookingStatus === 'cancelled') {
+    return res.status(409).json({ ok: false, error: 'Cannot approve a cancelled booking' });
+  }
+  if (booking.paymentStatus === 'paid') {
+    return res.status(409).json({ ok: false, error: 'Booking is already paid' });
+  }
+  if (!['pending_review', 'unpaid'].includes(booking.paymentStatus)) {
+    return res.status(409).json({ ok: false, error: `Cannot approve: current paymentStatus is "${booking.paymentStatus}"` });
+  }
+
+  const slotId  = `${booking.resourceId || RESOURCE_ID}_${booking.date}_${booking.startTime?.replace(':', '')}`;
+  const slotRef = db.collection('booking_slots').doc(slotId);
+
+  try {
+    await db.runTransaction(async (t) => {
+      const slotSnap = await t.get(slotRef);
+      if (!slotSnap.exists) throw new Error('SLOT_MISSING');
+      const slotData = slotSnap.data();
+      const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+      if (!ownsSlot) throw new Error('SLOT_CONFLICT');
+
+      const bSnap = await t.get(bookingRef);
+      if (!bSnap.exists) throw new Error('BOOKING_MISSING');
+      const bNow = bSnap.data();
+      if (bNow.paymentStatus === 'paid') throw new Error('ALREADY_PAID');
+      if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
+      if (!['pending_review', 'unpaid'].includes(bNow.paymentStatus)) throw new Error('BAD_STATE');
+
+      const update = {
+        paymentStatus:   'paid',
+        bookingStatus:   'confirmed',
+        status:          'confirmed',
+        paidBy:          adminName,
+        paidAt:          FieldValue.serverTimestamp(),
+        confirmedAt:     FieldValue.serverTimestamp(),
+        adminReviewedAt: FieldValue.serverTimestamp(),
+        updatedAt:       FieldValue.serverTimestamp(),
+      };
+      if (withoutSlip) {
+        update.confirmedByAdmin     = true;
+        update.confirmedWithoutSlip = true;
+        update.paymentNote          = 'Admin confirmed payment without slip';
+      }
+      t.update(bookingRef, update);
+      t.update(slotRef, {
+        paymentStatus: 'paid',
+        bookingStatus: 'confirmed',
+        bookingId,
+        bookingCode:   booking.bookingCode,
+      });
+    });
+  } catch (e) {
+    const map = {
+      SLOT_MISSING:    [409, 'Slot does not exist'],
+      SLOT_CONFLICT:   [409, 'Conflict: Slot is owned by another booking'],
+      BOOKING_MISSING: [404, 'Booking not found'],
+      ALREADY_PAID:    [409, 'Booking is already paid'],
+      CANCELLED:       [409, 'Booking was cancelled'],
+      BAD_STATE:       [409, 'Booking is no longer awaiting payment'],
+    };
+    const [code, msg] = map[e.message] || [500, 'Failed to approve booking'];
+    if (code === 500) console.error('[approve_slip] write:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+
+  console.log(`[approve_slip] id:${bookingId} from:${booking.paymentStatus} withoutSlip:${withoutSlip} admin:${adminName}`);
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role,
+    branchId: resolveBranchId(booking),
+    action: 'approve_slip', targetId: bookingId,
+    before: { paymentStatus: booking.paymentStatus, bookingStatus: booking.bookingStatus },
+    after:  { paymentStatus: 'paid', bookingStatus: 'confirmed', withoutSlip },
+  });
+  return res.status(200).json({
+    ok: true,
+    booking: {
+      id:                    bookingId,
+      bookingCode:           booking.bookingCode,
+      lineUserId:            booking.lineUserId ?? null,
+      date:                  booking.date,
+      startTime:             booking.startTime,
+      endTime:               booking.endTime,
+      googleCalendarEventId: booking.googleCalendarEventId ?? null,
+    },
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handleRejectPayment — any valid admin, rejects a slip / cancels an unpaid
+// booking and releases its slot. Paid bookings are blocked (use refund).
+// Legal transition: paymentStatus {pending_review,unpaid}→rejected, bookingStatus→cancelled.
+// ════════════════════════════════════════════════════════════════════
+async function handleRejectPayment({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+  if (!hasBranchAccess(session, resolveBranchId(booking))) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
+  }
+  if (booking.bookingStatus === 'cancelled') {
+    return res.status(409).json({ ok: false, error: 'Booking is already cancelled' });
+  }
+  if (!['pending_review', 'unpaid'].includes(booking.paymentStatus)) {
+    return res.status(409).json({ ok: false, error: `Cannot reject: paymentStatus is "${booking.paymentStatus}" (use refund for paid bookings)` });
+  }
+
+  const reason = (typeof body.reason === 'string' && body.reason.trim())
+    ? body.reason.trim().slice(0, 400)
+    : 'Slip rejected or payment not received';
+
+  const slotId  = `${booking.resourceId || RESOURCE_ID}_${booking.date}_${booking.startTime?.replace(':', '')}`;
+  const slotRef = db.collection('booking_slots').doc(slotId);
+
+  try {
+    await db.runTransaction(async (t) => {
+      const bSnap = await t.get(bookingRef);
+      if (!bSnap.exists) throw new Error('BOOKING_MISSING');
+      const bNow = bSnap.data();
+      if (bNow.bookingStatus === 'cancelled') throw new Error('ALREADY_CANCELLED');
+      if (bNow.paymentStatus === 'paid') throw new Error('ALREADY_PAID');
+
+      const slotSnap = await t.get(slotRef);
+
+      t.update(bookingRef, {
+        bookingStatus: 'cancelled',
+        status:        'cancelled',
+        paymentStatus: 'rejected',
+        cancelReason:  reason,
+        cancelledBy:   adminName,
+        cancelledAt:   FieldValue.serverTimestamp(),
+        updatedAt:     FieldValue.serverTimestamp(),
+      });
+      if (slotSnap.exists) {
+        const slotData = slotSnap.data();
+        const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+        if (ownsSlot) {
+          t.update(slotRef, { bookingStatus: 'cancelled', paymentStatus: 'rejected' });
+        }
+      }
+    });
+  } catch (e) {
+    const map = {
+      BOOKING_MISSING:   [404, 'Booking not found'],
+      ALREADY_CANCELLED: [409, 'Booking is already cancelled'],
+      ALREADY_PAID:      [409, 'Booking is already paid (use refund)'],
+    };
+    const [code, msg] = map[e.message] || [500, 'Failed to reject booking'];
+    if (code === 500) console.error('[reject_payment] write:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+
+  console.log(`[reject_payment] id:${bookingId} from:${booking.paymentStatus} admin:${adminName}`);
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role,
+    branchId: resolveBranchId(booking),
+    action: 'reject_payment', targetId: bookingId,
+    before: { paymentStatus: booking.paymentStatus, bookingStatus: booking.bookingStatus },
+    after:  { paymentStatus: 'rejected', bookingStatus: 'cancelled' },
+  });
+  return res.status(200).json({
+    ok: true,
+    booking: {
+      id:           bookingId,
+      bookingCode:  booking.bookingCode,
+      lineUserId:   booking.lineUserId ?? null,
+      date:         booking.date,
+      startTime:    booking.startTime,
+      endTime:      booking.endTime,
+      cancelReason: reason,
+    },
+  });
 }
 
 // ════════════════════════════════════════════════════════════════════
