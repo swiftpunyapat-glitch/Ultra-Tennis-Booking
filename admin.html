@@ -2038,19 +2038,16 @@ const fEnd=h=>h+1>=24?"00:00":`${String(h+1).padStart(2,"0")}:00`;
 function dateRange(s,n){const d=[],b=new Date(s+"T00:00:00");for(let i=0;i<n;i++){const x=new Date(b);x.setDate(b.getDate()+i);d.push(formatLocalISODate(x));}return d;}
 
 async function setSlots(dates,close=false,hours=null){
-  // hours defaults to allH() (06:00–00:00). Pass LN_HOURS for late night only.
-  const hoursToSet=hours||allH();
-  const admin=currentAdminName||"admin",now=Timestamp.now(),batch=writeBatch(db);
-  dates.forEach(date=>{
-    hoursToSet.forEach(h=>{
-      const ref=doc(db,"available_slots",slId(date,h));
-      batch.set(ref,close
-        ?{resourceId:RESOURCE_ID,branchId:DEFAULT_BRANCH_ID,date,startTime:fH(h),endTime:fEnd(h),status:"closed",closedAt:now,closedBy:admin,openedAt:null,openedBy:null}
-        :{resourceId:RESOURCE_ID,branchId:DEFAULT_BRANCH_ID,date,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null}
-      );
-    });
+  // Server-side bulk open/close (action:slot_bulk_set). hours===LN_HOURS means
+  // late night; otherwise normal (06:00–23:00). Throws on failure so existing
+  // callers' try/catch keep working unchanged.
+  const hourSet=hours?"late_night":"normal";
+  const res=await fetch("/api/admin-ops",{
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({action:"slot_bulk_set",dates,hourSet,op:close?"close":"open"}),
   });
-  await batch.commit();
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok||!data.ok) throw new Error(data.error||"Failed to set slots");
 }
 
 function getViewDate(){return $("viewDate").value;}
@@ -2117,38 +2114,30 @@ $("loadSlotsBtn").addEventListener("click",()=>{
 
 $("openAllBtn").addEventListener("click",async()=>{
   const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}
-  const admin=currentAdminName||"admin",now=Timestamp.now(),batch=writeBatch(db);
-  // Load current to only create missing ones
-  const snap=await getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)));
-  const existing=new Set();snap.forEach(x=>existing.add(x.data().startTime));
-  let count=0;
-  allH().forEach(h=>{
-    if(!existing.has(fH(h))){
-      batch.set(doc(db,"available_slots",slId(d,h)),{resourceId:RESOURCE_ID,date:d,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null});
-      count++;
-    }
-  });
-  if(count===0){showToast("All slots already set.");return;}
-  await batch.commit();showToast(`✓ Opened ${count} new slots for ${d}`);await loadSlotGrid(d);
-  if(dvLastLoad===d) loadDailyView();
+  try{
+    // Server creates only the missing slots (onlyMissing) — same as before.
+    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"slot_bulk_set",dates:[d],hourSet:"normal",op:"open",onlyMissing:true})});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok){showToast(data.error||"Failed.",true);return;}
+    if(data.count===0){showToast("All slots already set.");return;}
+    showToast(`✓ Opened ${data.count} new slots for ${d}`);await loadSlotGrid(d);
+    if(dvLastLoad===d) loadDailyView();
+  }catch(e){console.error(e);showToast("Failed.",true);}
 });
 
 $("closeUnbookedBtn").addEventListener("click",async()=>{
   const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}
   if(!confirm(`Close all UNBOOKED open slots for ${d}?`))return;
-  const admin=currentAdminName||"admin",now=Timestamp.now();
-
-  const[avSnap,bkSnap]=await Promise.all([
-    getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID),where("status","==","open"))),
-    getDocs(query(collection(db,"booking_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)))
-  ]);
-  const booked=new Set();const now2=new Date();
-  bkSnap.forEach(x=>{const bd=x.data();if(isLiveBookedSlot(bd,now2)) booked.add(bd.hour);});
-  const batch=writeBatch(db);let count=0;
-  avSnap.forEach(x=>{if(!booked.has(x.data().startTime)){batch.update(x.ref,{status:"closed",closedAt:now,closedBy:admin});count++;}});
-  if(!count){showToast("No unbooked open slots to close.");return;}
-  await batch.commit();showToast(`✓ Closed ${count} unbooked slots`);await loadSlotGrid(d);
-  if(dvLastLoad===d) loadDailyView();
+  try{
+    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"slot_close_unbooked",date:d})});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok){showToast(data.error||"Failed.",true);return;}
+    if(!data.count){showToast("No unbooked open slots to close.");return;}
+    showToast(`✓ Closed ${data.count} unbooked slots`);await loadSlotGrid(d);
+    if(dvLastLoad===d) loadDailyView();
+  }catch(e){console.error(e);showToast("Failed.",true);}
 });
 
 async function loadSlotGrid(dateISO){
@@ -2194,14 +2183,14 @@ async function loadSlotGrid(dateISO){
 }
 
 async function toggleSlot(btn,dateISO){
-  const act=btn.dataset.act,h=Number(btn.dataset.h),existId=btn.dataset.id;
-  const admin=currentAdminName||"admin",now=Timestamp.now();
+  const act=btn.dataset.act,h=Number(btn.dataset.h);
+  const op=(act==="create"||act==="reopen")?"open":"close";
   btn.disabled=true;
   try{
-    if(act==="create"||act==="reopen"){
-      const id=existId||slId(dateISO,h);
-      await setDoc(doc(db,"available_slots",id),{resourceId:RESOURCE_ID,branchId:DEFAULT_BRANCH_ID,date:dateISO,startTime:fH(h),endTime:fEnd(h),status:"open",openedAt:now,openedBy:admin,closedAt:null,closedBy:null});
-    }else{await updateDoc(doc(db,"available_slots",existId),{status:"closed",closedAt:now,closedBy:admin});}
+    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"slot_toggle",date:dateISO,hour:h,op})});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok){showToast(data.error||"Toggle failed.",true);btn.disabled=false;return;}
     loadSlotGrid(dateISO);
     if(dvLastLoad===dateISO) loadDailyView();
   }catch(e){console.error(e);showToast("Toggle failed.",true);btn.disabled=false;}
@@ -2211,9 +2200,11 @@ async function toggleSlot(btn,dateISO){
 $("holSave").addEventListener("click",async()=>{
   const d=getViewDate();if(!d){showToast("No date loaded.",true);return;}
   const isHol=$("holCheck").checked,name=$("holName").value.trim();
-  const admin=currentAdminName||"admin";
   try{
-    await setDoc(doc(db,"holidays",d),{date:d,isHoliday:isHol,name,updatedBy:admin,updatedAt:serverTimestamp()});
+    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"holiday_set",date:d,isHoliday:isHol,name})});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok){showToast(data.error||"Failed to save holiday.",true);return;}
     $("holActiveTag").style.display=isHol?"inline-block":"none";
     showToast(isHol?`✓ ${d} marked as holiday`:`✓ ${d} holiday removed`);
   }catch(e){console.error(e);showToast("Failed to save holiday.",true);}
