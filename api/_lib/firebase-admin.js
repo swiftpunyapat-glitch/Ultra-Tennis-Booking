@@ -6,6 +6,7 @@
 
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 
 export function getAdminDb() {
   if (!getApps().length) {
@@ -17,6 +18,14 @@ export function getAdminDb() {
     initializeApp({ credential: cert(sa) });
   }
   return getFirestore();
+}
+
+// Firebase Auth admin instance. getAdminDb() ensures the app is initialized.
+// Because init uses a service-account cert, createCustomToken() signs locally
+// with the SA private key — no "Service Account Token Creator" IAM role needed.
+export function getAdminAuth() {
+  getAdminDb();
+  return getAuth();
 }
 
 // ── Branch helpers ───────────────────────────────────────────────────
