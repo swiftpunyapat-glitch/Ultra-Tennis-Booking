@@ -167,6 +167,9 @@
     .spreview{max-width:100%;max-height:140px;border-radius:5px;margin-top:8px;object-fit:contain;}
     .btn-slip{width:100%;min-height:44px;border-radius:var(--r);background:linear-gradient(135deg,var(--ut-blue),var(--ut-cyan));color:#fff;font-weight:900;font-size:.9rem;box-shadow:0 10px 22px rgba(31,122,224,.24);}
     .btn-slip:disabled{background:#cbd7e3;color:#728195;box-shadow:none;cursor:not-allowed;}
+    .btn-cancel-booking{width:100%;min-height:40px;margin-top:10px;border:1px solid var(--line);border-radius:var(--r);background:transparent;color:var(--muted);font-weight:800;font-size:.82rem;}
+    .btn-cancel-booking:hover:not(:disabled){border-color:var(--danger);color:var(--danger);}
+    .btn-cancel-booking:disabled{opacity:.55;cursor:not-allowed;}
 
     /* Package cards */
     .pkggrid{display:grid;gap:10px;margin-bottom:12px;}
@@ -600,6 +603,7 @@
         </div>
         <input type="file" id="slipIn" accept="image/*" style="display:none"/>
         <button class="btn-slip" id="submitSlipBtn" disabled data-i18n="submitSlip">Submit Payment Slip</button>
+        <button class="btn-cancel-booking" id="cancelBookingBtn" type="button" data-i18n="cancelBooking">Cancel Booking</button>
       </div>
     </div>
   </div>
@@ -766,6 +770,9 @@ import {
 import {
   getStorage, ref as sRef, uploadBytes, getDownloadURL
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-storage.js";
+import {
+  getAuth, signInWithCustomToken
+} from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
 
 // ── FIREBASE ────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -780,7 +787,35 @@ const firebaseConfig = {
 const fbApp  = initializeApp(firebaseConfig);
 const db     = getFirestore(fbApp);
 const storage= getStorage(fbApp);
+const fbAuth = getAuth(fbApp);
 isSupported().then(ok=>{ if(ok) getAnalytics(fbApp); }).catch(()=>{});
+
+// ── PHASE 2 / STAGE 0: Firebase custom-token sign-in (additive) ──────
+// Verifies the LIFF id_token server-side (/api/auth-line) and signs in so
+// request.auth.uid === lineUserId. Best-effort ONLY: any failure logs and
+// returns false; the app keeps working unauthenticated (firestore.rules still
+// permit it in Stage 0). Does NOT touch rules or block the booking flow.
+async function ensureFirebaseAuth(lineUserId){
+  try{
+    if(!lineUserId || lineUserId === "guest" || lineUserId === "manual") return false;
+    if(fbAuth.currentUser && fbAuth.currentUser.uid === lineUserId) return true; // already signed in
+    const idToken = liff.getIDToken();
+    if(!idToken){ console.warn("[auth] no LIFF id_token (enable 'openid' scope on the LIFF app)"); return false; }
+    const r = await fetch("/api/auth-line",{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ idToken })
+    });
+    const d = await r.json().catch(()=>({}));
+    if(!r.ok || !d.ok || !d.customToken){ console.warn("[auth] mint failed:", d.error || r.status); return false; }
+    await signInWithCustomToken(fbAuth, d.customToken);
+    const match = fbAuth.currentUser?.uid === lineUserId;
+    console.log("[auth] signed in uid=", fbAuth.currentUser?.uid, "match=", match);
+    return match;
+  }catch(e){
+    console.warn("[auth] additive sign-in failed, continuing unauthenticated:", e);
+    return false;
+  }
+}
 
 // ── CONSTANTS ───────────────────────────────────────────────────
 const LIFF_ID     = "2010034901-ClPr9N5v";
@@ -877,6 +912,11 @@ const I18N = {
     total:"ยอดชำระ",
     paymentDue:"กรุณาชำระเงินภายใน 15 นาที",
     confirmBooking:"ยืนยันการจอง",
+    cancelBooking:"ยกเลิกการจอง",
+    cancelConfirm:"ต้องการยกเลิกการจองนี้ใช่ไหม? เวลาที่จองไว้จะถูกปล่อยคืนทันที",
+    cancelling:"กำลังยกเลิก...",
+    cancelledToast:"ยกเลิกการจองแล้ว",
+    cancelFailed:"ยกเลิกไม่สำเร็จ กรุณาลองใหม่",
     saving:"กำลังบันทึก...",
     paymentRequired:"กรุณาชำระเงิน",
     passPaymentRequired:"กรุณาชำระเงินแพ็กเกจ",
@@ -1004,6 +1044,11 @@ const I18N = {
     total:"Total",
     paymentDue:"Payment due within 15 minutes.",
     confirmBooking:"Confirm Booking",
+    cancelBooking:"Cancel Booking",
+    cancelConfirm:"Cancel this booking? Your held time slot will be released immediately.",
+    cancelling:"Cancelling...",
+    cancelledToast:"Booking cancelled",
+    cancelFailed:"Failed to cancel. Please try again.",
     saving:"Saving...",
     paymentRequired:"Payment Required",
     passPaymentRequired:"Pass Payment Required",
@@ -1235,6 +1280,11 @@ async function initLiff() {
   const av = $("avatarEl");
   if(state.lineProfile.pictureUrl) av.innerHTML=`<img src="${state.lineProfile.pictureUrl}" alt="Avatar"/>`;
   else av.textContent = state.lineProfile.displayName.charAt(0).toUpperCase();
+
+  // Phase 2 / Stage 0 (additive): authenticate with Firebase using the verified
+  // LINE identity (uid = lineUserId). Fire-and-forget — must never block boot or
+  // the booking flow; it resolves long before the first customer write.
+  ensureFirebaseAuth(state.lineProfile?.userId).catch(()=>{});
 
   // Set default pricing text first, then immediately hide loading screen
   updateHomeSingleUsePricing();
@@ -1687,21 +1737,39 @@ async function openBookingView() {
   updatePromoBanner();
   updateHomeSingleUsePricing();
 
-  // Load slots and eligibility concurrently to improve performance
+  // Load slots, eligibility, and saved profile concurrently to improve performance
   const t0 = performance.now();
   await Promise.all([
     loadSlotsAndRender(getSelectedDateISO()),
-    checkEligibility()
+    checkEligibility(),
+    prefillCustomerInfo()
   ]);
   console.log(`[perf] Slots & eligibility loaded in ${(performance.now() - t0).toFixed(1)}ms`);
 
   updatePaymentTypeButtons();
   updateBookingConfirmBtn();
+}
 
-  // Pre-fill name
-  const nameInput=$("bkName");
-  if(!nameInput.value && state.lineProfile.displayName !== "Guest")
-    nameInput.value = state.lineProfile.displayName;
+// Auto-fill the booking form from the customer's saved registration profile
+// (registered_users/{userId}), falling back to the LINE display name. Never
+// overwrites a value the customer has already typed this session.
+async function prefillCustomerInfo() {
+  const nameInput=$("bkName"), phoneInput=$("bkPhone");
+  const uid=state.lineProfile?.userId;
+  let reg=null;
+  if(uid && uid!=="guest"){
+    try {
+      const snap=await getDoc(doc(db,"registered_users",uid));
+      if(snap.exists()) reg=snap.data();
+    } catch(e){ console.warn("[prefill] registered_users read failed:", e?.code||e?.message||e); }
+  }
+  if(!nameInput.value.trim()){
+    if(reg?.name) nameInput.value=reg.name;
+    else if(state.lineProfile.displayName!=="Guest") nameInput.value=state.lineProfile.displayName;
+  }
+  if(!phoneInput.value.trim() && reg?.phone){
+    phoneInput.value=reg.phone;
+  }
 }
 
 function buildDates() {
@@ -2169,6 +2237,13 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
   $("slipIn").value="";
   $("slipArea").classList.remove("has");
   $("submitSlipBtn").disabled=true;
+  // Cancel button: only for pending booking checkout, not pass purchases.
+  const cancelBtn=$("cancelBookingBtn");
+  if(cancelBtn){
+    cancelBtn.style.display = state.paymentMode==="booking" ? "block" : "none";
+    cancelBtn.disabled=false;
+    cancelBtn.textContent=t("cancelBooking");
+  }
   const downloadQrBtn=$("downloadQrBtn");
   downloadQrBtn.style.display="none";
   downloadQrBtn.dataset.qrSrc="";
@@ -2356,6 +2431,63 @@ $("submitSlipBtn").addEventListener("click", async()=>{
     console.error("Slip upload failed:",e);
     showToast(e.message||t("uploadFailed"),true);
     btn.disabled=false; btn.textContent=t("submitSlip");
+  }
+});
+
+// ── CANCEL BOOKING (from payment screen) ────────────────────────
+// Releases the held slot immediately by marking the booking_slot cancelled,
+// so it no longer blocks others (loadSlotsAndRender only blocks confirmed or
+// unexpired pending_payment slots). Uses update (not delete) to match the
+// permissions already exercised by the slip-upload transaction.
+$("cancelBookingBtn").addEventListener("click", async()=>{
+  // Pass purchases don't hold a slot — just leave the screen.
+  if(state.paymentMode!=="booking" || !state.currentBookingDocId){
+    showView("viewHome"); return;
+  }
+  if(!window.confirm(t("cancelConfirm"))) return;
+
+  const btn=$("cancelBookingBtn");
+  btn.disabled=true; btn.textContent=t("cancelling");
+  try {
+    const b=state.currentBookingData||{};
+    const bookingRef=doc(db,"bookings",state.currentBookingDocId);
+    const slotId = (b.date && b.startTime)
+      ? `${RESOURCE_ID}_${b.date}_${b.startTime.replace(":","")}`
+      : null;
+
+    await runTransaction(db, async tx=>{
+      // Read first (transactions require all reads before writes).
+      const slotRef = slotId ? doc(db,"booking_slots",slotId) : null;
+      const slotSnap = slotRef ? await tx.get(slotRef) : null;
+
+      tx.update(bookingRef,{
+        bookingStatus:"cancelled",
+        cancelReason:"customer_cancelled",
+        updatedAt:serverTimestamp(),
+      });
+
+      // Only release the slot if it still belongs to this booking and isn't
+      // already confirmed (defensive — a confirmed slot shouldn't be freed here).
+      if(slotSnap && slotSnap.exists()){
+        const sd=slotSnap.data();
+        const ownsSlot = sd.bookingId===state.currentBookingDocId
+          || sd.bookingCode===state.currentBookingCode;
+        if(ownsSlot && sd.bookingStatus!=="confirmed"){
+          tx.update(slotRef,{ bookingStatus:"cancelled", paymentStatus:"cancelled" });
+        }
+      }
+    });
+
+    localStorage.removeItem("ut_pending_booking");
+    state.currentBookingCode=null;
+    state.currentBookingDocId=null;
+    state.currentBookingData=null;
+    showToast(t("cancelledToast"));
+    showView("viewHome");
+  } catch(e){
+    console.error("Cancel booking failed:",e);
+    showToast(e.message||t("cancelFailed"),true);
+    btn.disabled=false; btn.textContent=t("cancelBooking");
   }
 });
 
