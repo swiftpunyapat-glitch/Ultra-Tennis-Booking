@@ -527,12 +527,17 @@
                 <option value="ultra_pass_20">⚡ Ultra Pass 20 Hours (20 Hours · ฿5,900)</option>
                 <option value="beginner_coaching_5">🎓 Beginner Coaching (5 Hours · ฿3,500)</option>
                 <option value="coach_at_ultra_10">🎾 Coaching at Ultra (10 Hours · ฿3,000)</option>
+                <option value="monstr_event_pass">🎟️ MONSTR Event Pass (1 Hour · single-use · Mon–Fri)</option>
               </select>
             </div>
           </div>
           <div class="smrow" style="margin-bottom:12px">
             <div class="smf"><label>Valid From</label><input type="date" id="validFromDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%"/></div>
             <div class="smf"><label>Admin Note (optional)</label><input type="text" id="passNote" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%" placeholder="e.g. Paid via bank transfer"/></div>
+          </div>
+          <div class="smrow" id="eventPassRow" style="margin-bottom:12px;display:none">
+            <div class="smf"><label>Event End Date (MONSTR · optional)</label><input type="date" id="eventEndDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%"/><div style="font-size:.66rem;color:var(--m);margin-top:3px">ว่าง = หมดอายุ 30 วันหลัง issue</div></div>
+            <div class="smf"><label>Event Name (optional)</label><input type="text" id="eventName" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%" placeholder="MONSTR Tournament"/></div>
           </div>
           <button class="smbtn smg" id="addPassBtn" style="width:100%;padding:12px;font-size:.88rem" disabled>✓ Add Pass for User</button>
         </div>
@@ -2220,7 +2225,8 @@ const PACKAGES = {
   // Legacy
   ultra_10:             { packageType: "ultra_10",             packageName: "Ultra Pass 10 Hours",  totalMinutes: 600,  validityDays: 90 },
   ultra_20:             { packageType: "ultra_20",             packageName: "Ultra Pass 20 Hours",  totalMinutes: 1200, validityDays: 180 },
-  offpeak:              { packageType: "offpeak",              packageName: "Off-Peak Pass",        totalMinutes: null, validityDays: 30 }
+  offpeak:              { packageType: "offpeak",              packageName: "Off-Peak Pass",        totalMinutes: null, validityDays: 30 },
+  monstr_event_pass:    { packageType: "monstr_event_pass",    packageName: "MONSTR Event Pass",    totalMinutes: 60,   validityDays: 30 }
 };
 
 let selectedUser = null;
@@ -2290,11 +2296,18 @@ function selectRegisteredUser(user) {
   $("addPassBtn").disabled = false;
 }
 
+// Show the event-end / event-name row only for the MONSTR Event Pass.
+$("packageSelect").addEventListener("change", ()=>{
+  $("eventPassRow").style.display = $("packageSelect").value === "monstr_event_pass" ? "flex" : "none";
+});
+
 $("addPassBtn").addEventListener("click", async()=>{
   if(!selectedUser) { showToast("Please select a user first.", true); return; }
   const pkgType = $("packageSelect").value;
   const validFrom = $("validFromDate").value;
   const note = $("passNote").value.trim();
+  const eventEndDate = $("eventEndDate").value;
+  const eventName = $("eventName").value.trim();
 
   if (!pkgType) { showToast("Please select a package.", true); return; }
 
@@ -2311,7 +2324,9 @@ $("addPassBtn").addEventListener("click", async()=>{
         targetUserId: selectedUser.id,
         packageType: pkgType,
         validFrom: validFrom || undefined,
-        note: note || undefined
+        note: note || undefined,
+        eventEndDate: (pkgType === "monstr_event_pass" && eventEndDate) ? eventEndDate : undefined,
+        eventName:    (pkgType === "monstr_event_pass" && eventName)    ? eventName    : undefined
       })
     });
 
@@ -2347,6 +2362,9 @@ $("addPassBtn").addEventListener("click", async()=>{
     $("packageSelect").value = "";
     $("validFromDate").value = "";
     $("passNote").value = "";
+    $("eventEndDate").value = "";
+    $("eventName").value = "";
+    $("eventPassRow").style.display = "none";
     $("addPassBtn").disabled = true;
     
     // Refresh display
