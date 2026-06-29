@@ -57,6 +57,16 @@ const ACTIVE_PACKAGES = {
     validityDays: 60,
     ownerRole: "coach",
     requireStudentInfo: true
+  },
+  monstr_event_pass: {
+    packageType: "monstr_event_pass",
+    packageName: "MONSTR Event Pass",
+    price: 0,
+    totalMinutes: 60,        // single 1-hour use (deduct 60 → 0)
+    validityDays: 30,        // default; admin may override with eventEndDate
+    ownerRole: "customer",
+    isEventPass: true,
+    restrictDays: [1, 2, 3, 4, 5]   // Mon-Fri (booking also rejects holidays)
   }
 };
 
@@ -73,7 +83,7 @@ export default async function handler(req, res) {
   }
   const adminName = session.name;
 
-  const { action, targetUserId, packageType, validFrom, note } = req.body || {};
+  const { action, targetUserId, packageType, validFrom, note, eventEndDate, eventName } = req.body || {};
 
   // ── Pricing actions (owner-only) ─────────────────────────────────
   if (action === 'save_special_promotion' || action === 'deactivate_special_promotion') {
@@ -138,7 +148,20 @@ export default async function handler(req, res) {
       vFrom = new Date();
     }
 
-    const vUntil = new Date(vFrom.getTime() + pkg.validityDays * 24 * 60 * 60 * 1000);
+    // Event passes may carry an explicit expiry = end of the event day (Bangkok);
+    // otherwise fall back to validityDays from validFrom.
+    let vUntil;
+    if (pkg.isEventPass && eventEndDate) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(eventEndDate)) {
+        return res.status(400).json({ ok: false, error: `Invalid eventEndDate (expected YYYY-MM-DD): ${eventEndDate}` });
+      }
+      vUntil = new Date(`${eventEndDate}T23:59:59+07:00`);
+      if (isNaN(vUntil.getTime())) {
+        return res.status(400).json({ ok: false, error: `Invalid eventEndDate: ${eventEndDate}` });
+      }
+    } else {
+      vUntil = new Date(vFrom.getTime() + pkg.validityDays * 24 * 60 * 60 * 1000);
+    }
 
     // 3. Prepare package payload
     const packagePayload = {
@@ -174,6 +197,18 @@ export default async function handler(req, res) {
     }
     if (pkg.requiresCoachOrAdminBooking) {
       packagePayload.requiresCoachOrAdminBooking = true;
+    }
+    // Event-pass fields (MONSTR Event Pass): single-use, Mon-Fri + non-holiday,
+    // hard-scoped to ladprao1/room1. Booking flow enforces the restrictions.
+    if (pkg.isEventPass) {
+      packagePayload.isEventPass  = true;
+      packagePayload.restrictDays = pkg.restrictDays || [1, 2, 3, 4, 5];
+      packagePayload.branchId     = "ladprao1";
+      packagePayload.resourceId   = "room1";
+      packagePayload.eventUsedAt  = null;
+      if (typeof eventName === "string" && eventName.trim()) {
+        packagePayload.eventName = eventName.trim().slice(0, 120);
+      }
     }
 
     // 4. Create new document in customer_packages
