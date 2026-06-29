@@ -542,6 +542,7 @@
           <button class="ptbtn on" data-pt="single"><span class="pt-name" data-i18n="singleUse">Single Use</span><small class="pt-sub" id="ptSingleSub">฿350</small></button>
           <button class="ptbtn" data-pt="ultra" id="ptUltra" disabled><span class="pt-name" data-i18n="usePackage">Use Package</span><small class="pt-sub" id="ptUltraSub">No active pass</small></button>
           <button class="ptbtn" data-pt="offpeak" id="ptOffpeak" disabled><span class="pt-name" data-i18n="offPeak">Off-Peak</span><small class="pt-sub" id="ptOffpeakSub">No active pass</small></button>
+          <button class="ptbtn" data-pt="event" id="ptEvent" disabled><span class="pt-name">🎟️ MONSTR</span><small class="pt-sub" id="ptEventSub">No active pass</small></button>
         </div>
       </div>
 
@@ -795,23 +796,37 @@ isSupported().then(ok=>{ if(ok) getAnalytics(fbApp); }).catch(()=>{});
 // request.auth.uid === lineUserId. Best-effort ONLY: any failure logs and
 // returns false; the app keeps working unauthenticated (firestore.rules still
 // permit it in Stage 0). Does NOT touch rules or block the booking flow.
+// Stage-0 adoption beacon → /api/admin-ops (action:auth_metric). Counts only;
+// never sends a token or lineUserId. Fully fire-and-forget — never blocks.
+function authMetric(event){
+  try{
+    fetch("/api/admin-ops",{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ action:"auth_metric", event })
+    }).catch(()=>{});
+  }catch(_){ /* ignore */ }
+}
 async function ensureFirebaseAuth(lineUserId){
   try{
     if(!lineUserId || lineUserId === "guest" || lineUserId === "manual") return false;
     if(fbAuth.currentUser && fbAuth.currentUser.uid === lineUserId) return true; // already signed in
+    authMetric("auth_attempt");
     const idToken = liff.getIDToken();
-    if(!idToken){ console.warn("[auth] no LIFF id_token (enable 'openid' scope on the LIFF app)"); return false; }
+    if(!idToken){ authMetric("auth_skip_no_id_token"); console.warn("[auth] no LIFF id_token (enable 'openid' scope on the LIFF app)"); return false; }
     const r = await fetch("/api/auth-line",{
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ idToken })
     });
     const d = await r.json().catch(()=>({}));
-    if(!r.ok || !d.ok || !d.customToken){ console.warn("[auth] mint failed:", d.error || r.status); return false; }
+    if(!r.ok || !d.ok || !d.customToken){ authMetric("auth_failed"); console.warn("[auth] mint failed:", d.error || r.status); return false; }
     await signInWithCustomToken(fbAuth, d.customToken);
+    authMetric("auth_success");
     const match = fbAuth.currentUser?.uid === lineUserId;
+    authMetric(match ? "uid_match_true" : "uid_match_false");
     console.log("[auth] signed in uid=", fbAuth.currentUser?.uid, "match=", match);
     return match;
   }catch(e){
+    authMetric("auth_failed");
     console.warn("[auth] additive sign-in failed, continuing unauthenticated:", e);
     return false;
   }
@@ -855,7 +870,7 @@ const state = {
   currentDateIsHoliday: false,
   bookingPaymentType: "single",
   // Eligibility
-  eligibility: { hasUltra:false, ultraPkg:null, hasOffpeak:false, offpeakPkg:null },
+  eligibility: { hasUltra:false, ultraPkg:null, hasOffpeak:false, offpeakPkg:null, hasEvent:false, eventPkg:null },
   // Current booking/purchase (for payment panel)
   paymentMode: null, // "booking" | "pass"
   currentBookingCode: null,
@@ -1372,9 +1387,12 @@ async function initLiff() {
 
 // ── ELIGIBILITY ─────────────────────────────────────────────────
 const ROOM_PASS_TYPES = ["ultra_starter_3", "ultra_pass_10", "ultra_pass_20", "ultra_10", "ultra_20"];
+// Event passes are NOT room/ultra passes — kept separate so they keep their
+// own Mon-Fri + holiday restrictions (do NOT add to ROOM_PASS_TYPES).
+const EVENT_PASS_TYPES = ["monstr_event_pass"];
 
 async function checkEligibility() {
-  state.eligibility = { hasUltra: false, ultraPkg: null, hasOffpeak: false, offpeakPkg: null };
+  state.eligibility = { hasUltra: false, ultraPkg: null, hasOffpeak: false, offpeakPkg: null, hasEvent: false, eventPkg: null };
   if(state.lineProfile.userId === "guest") return;
   try {
     const snap = await getDocs(query(
@@ -1385,6 +1403,7 @@ async function checkEligibility() {
     const now = new Date();
     const roomPkgs = [];
     const offpeakPkgs = [];
+    const eventPkgs = [];
 
     snap.forEach(d => {
       const p = { id:d.id, ...d.data() };
@@ -1399,6 +1418,12 @@ async function checkEligibility() {
       if(p.packageType === "offpeak") {
         offpeakPkgs.push({ ...p, validUntilDate: validUntil });
       }
+      // Event passes (MONSTR): minute-based single use; still has minutes left.
+      if(EVENT_PASS_TYPES.includes(p.packageType)) {
+        if((p.remainingMinutes||0) >= 60) {
+          eventPkgs.push({ ...p, validUntilDate: validUntil });
+        }
+      }
     });
 
     if (roomPkgs.length > 0) {
@@ -1410,6 +1435,11 @@ async function checkEligibility() {
       offpeakPkgs.sort((a, b) => a.validUntilDate - b.validUntilDate);
       state.eligibility.hasOffpeak = true;
       state.eligibility.offpeakPkg = offpeakPkgs[0];
+    }
+    if (eventPkgs.length > 0) {
+      eventPkgs.sort((a, b) => a.validUntilDate - b.validUntilDate);
+      state.eligibility.hasEvent = true;
+      state.eligibility.eventPkg = eventPkgs[0];
     }
   } catch(e) { console.error("Eligibility check failed:",e); }
 }
@@ -1871,20 +1901,27 @@ function getDisabledReason(time, h) {
     if(state.currentDateIsHoliday) return t("offPeakHoliday");
     if(h<OFFPEAK.startHour||h+1>OFFPEAK.endHour) return t("offPeakHours");
   }
+  if(state.bookingPaymentType==="event"){
+    const day=getSelectedDate().getDay();
+    if(day<1||day>5) return "MONSTR Event Pass: ใช้ได้เฉพาะจันทร์–ศุกร์";
+    if(state.currentDateIsHoliday) return "MONSTR Event Pass: ใช้ในวันหยุดไม่ได้";
+  }
   return "";
 }
 
 function updatePaymentTypeButtons() {
   const el = state.eligibility;
-  const uBtn = $("ptUltra"), oBtn = $("ptOffpeak");
+  const uBtn = $("ptUltra"), oBtn = $("ptOffpeak"), eBtn = $("ptEvent");
   const grid = document.querySelector(".ptgrid");
   const isLN = state.time && isLateNightHour(parseInt(state.time, 10));
 
   if (isLN) {
     uBtn.disabled = true;
     oBtn.disabled = true;
+    eBtn.disabled = true;
     uBtn.style.display = "none";
     oBtn.style.display = "none";
+    eBtn.style.display = "none";
     if (grid) {
       grid.classList.add("single-only");
       grid.classList.remove("no-offpeak");
@@ -1905,6 +1942,15 @@ function updatePaymentTypeButtons() {
     } else {
       oBtn.style.display = "";
       if (grid) grid.classList.remove("no-offpeak");
+    }
+
+    // Event pass (MONSTR): show only when eligible.
+    eBtn.disabled = !el.hasEvent;
+    if (!el.hasEvent) {
+      eBtn.style.display = "none";
+      if (state.bookingPaymentType === "event") state.bookingPaymentType = "single";
+    } else {
+      eBtn.style.display = "";
     }
   }
 
@@ -1938,6 +1984,15 @@ function updatePaymentTypeButtons() {
     ? t("validUntil",{date:el.offpeakPkg.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—"})
     : t("noActivePass");
 
+  const eSub = $("ptEventSub");
+  if (eSub) {
+    eSub.textContent = isLN
+      ? t("noPassOption")
+      : el.hasEvent
+      ? t("validUntil",{date:el.eventPkg.validUntil?.toDate?.()?.toLocaleDateString("en-GB")||"—"})
+      : t("noActivePass");
+  }
+
   updateBookingPriceNote();
 }
 
@@ -1953,6 +2008,8 @@ function updateBookingPriceNote(){
     $("bkPrice").textContent="฿0 (Pass)";
     if(state.bookingPaymentType==="ultra" && state.eligibility.ultraPkg) {
       $("bkNote2").textContent=t("passNoteUltra",{packageName:state.eligibility.ultraPkg.packageName});
+    } else if(state.bookingPaymentType==="event") {
+      $("bkNote2").textContent="MONSTR Event Pass · 1 ชม. · จันทร์–ศุกร์ (ไม่รวมวันหยุด)";
     } else {
       $("bkNote2").textContent=t("passNoteOffpeak");
     }
@@ -1973,7 +2030,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
   if(!state.time){ showToast(t("selectTime"),true); return; }
 
   const payType = state.bookingPaymentType;
-  if(payType!=="single" && payType!=="ultra" && payType!=="offpeak"){
+  if(payType!=="single" && payType!=="ultra" && payType!=="offpeak" && payType!=="event"){
     showToast(t("invalidPayment"),true); return;
   }
   // Guests can't use passes — no LIFF userId means we can't verify ownership.
@@ -1984,6 +2041,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
   // (Server-side checks below are the real gate.)
   if(payType==="ultra"   && !state.eligibility.ultraPkg)   { showToast(t("noUltra"),true); return; }
   if(payType==="offpeak" && !state.eligibility.offpeakPkg) { showToast(t("noOffpeak"),true); return; }
+  if(payType==="event"   && !state.eligibility.eventPkg)   { showToast("ไม่มี MONSTR Event Pass ที่ใช้ได้",true); return; }
 
   const btn=$("confirmBkBtn"); btn.disabled=true; btn.textContent=t("saving");
   try {
@@ -2004,7 +2062,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       bookingCode:             code,
       resourceId:              RESOURCE_ID,
       branchId:                DEFAULT_BRANCH_ID,
-      bookingType:             isSingle ? singleType : payType==="ultra" ? (selectedPkg?.packageName || "Package Booking") : "Off-Peak Pass",
+      bookingType:             isSingle ? singleType : payType==="ultra" ? (selectedPkg?.packageName || "Package Booking") : payType==="event" ? "MONSTR Event Pass" : "Off-Peak Pass",
       lineUserId:              state.lineProfile.userId,
       lineDisplayName:         state.lineProfile.displayName,
       customerName:            name,
@@ -2059,6 +2117,17 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       bookingPayload.usedPackageName = selectedPkg.packageName;
     }
 
+    if (payType==="event") {
+      const ep = state.eligibility.eventPkg;
+      bookingPayload.packageId = ep.id;
+      bookingPayload.packageType = ep.packageType;
+      bookingPayload.packageName = ep.packageName;
+      bookingPayload.usedPackageId = ep.id;
+      bookingPayload.usedPackageType = ep.packageType;
+      bookingPayload.usedPackageName = ep.packageName;
+      bookingPayload.isEventBooking = true;
+    }
+
     const bookingRef = doc(collection(db,"bookings"));
     const slotRef    = doc(db,"booking_slots",slotDocId);
     const availRef   = doc(db,"available_slots",slotDocId);
@@ -2068,8 +2137,10 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       ? doc(db,"customer_packages",state.eligibility.ultraPkg.id)
       : payType==="offpeak"
       ? doc(db,"customer_packages",state.eligibility.offpeakPkg.id)
+      : payType==="event"
+      ? doc(db,"customer_packages",state.eligibility.eventPkg.id)
       : null;
-    const holRef = payType==="offpeak" ? doc(db,"holidays",dateISO) : null;
+    const holRef = (payType==="offpeak"||payType==="event") ? doc(db,"holidays",dateISO) : null;
 
     await runTransaction(db, async t=>{
       const readPromises = [t.get(slotRef), t.get(availRef)];
@@ -2103,6 +2174,32 @@ $("confirmBkBtn").addEventListener("click", async()=>{
         if((pd.remainingMinutes||0)<60) throw new Error("Not enough minutes left on your pass.");
         t.update(pkgRef,{
           remainingMinutes: pd.remainingMinutes-60,
+          updatedAt:        serverTimestamp(),
+        });
+      }
+
+      // ── Pass validation: MONSTR EVENT PASS ────────────────────
+      // Single-use 1hr, Mon-Fri, non-holiday, ladprao1/room1. Deduct 60 → 0.
+      if(payType==="event"){
+        if(!pkgSnap||!pkgSnap.exists()) throw new Error("Event pass not found.");
+        const pd=pkgSnap.data();
+        if(pd.lineUserId!==state.lineProfile.userId) throw new Error("Pass does not belong to this account.");
+        if(pd.status!=="active") throw new Error("Pass is not active.");
+        const validUntil=pd.validUntil?.toDate?.();
+        if(!validUntil||validUntil<new Date()) throw new Error("Event pass has expired.");
+        if((pd.remainingMinutes||0)<60) throw new Error("This event pass has already been used.");
+        // Branch/resource scope — only enforced when the field exists on the pass.
+        if(pd.branchId && pd.branchId!==DEFAULT_BRANCH_ID) throw new Error("Event pass is for a different branch.");
+        if(pd.resourceId && pd.resourceId!==RESOURCE_ID)   throw new Error("Event pass is for a different resource.");
+        // Mon-Fri only.
+        const dow=getSelectedDate().getDay(); // 0=Sun..6=Sat
+        if(dow<1||dow>5) throw new Error("MONSTR Event Pass: Mon–Fri only.");
+        // No holidays.
+        if(holSnap?.exists?.() && holSnap.data().isHoliday===true) throw new Error("MONSTR Event Pass: holidays excluded.");
+        // Single use: deduct 60 → 0 (no status:"used" flip).
+        t.update(pkgRef,{
+          remainingMinutes: pd.remainingMinutes-60,
+          eventUsedAt:      serverTimestamp(),
           updatedAt:        serverTimestamp(),
         });
       }
@@ -2207,7 +2304,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
     } else {
       // Refresh local eligibility so the buttons reflect the just-deducted pass state
       // next time the user opens the booking view.
-      state.eligibility = { hasUltra:false, ultraPkg:null, hasOffpeak:false, offpeakPkg:null };
+      state.eligibility = { hasUltra:false, ultraPkg:null, hasOffpeak:false, offpeakPkg:null, hasEvent:false, eventPkg:null };
       try { await checkEligibility(); } catch(_) { /* non-fatal */ }
       showSuccess("✅",t("bookingConfirmed"),code,`${name} · ${dateISO} · ${state.time}–${endTime} · ${displayBookingType(bookingPayload.bookingType)}`);
     }
