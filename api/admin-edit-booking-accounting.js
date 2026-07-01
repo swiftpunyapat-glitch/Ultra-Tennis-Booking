@@ -1461,6 +1461,16 @@ async function handleCoachLessonUpdate({ res, session, db, booking, bookingRef, 
   if (isCoach && booking.coachId !== session.name) {
     return res.status(403).json({ ok: false, error: 'This booking is not assigned to you' });
   }
+  // Coach 2A: enforce session revocation (sv). A PIN reset invalidates old cookies.
+  if (isCoach) {
+    try {
+      const a = await db.collection('coach_auth').doc(session.name).get();
+      const storedSv = a.exists ? (Number(a.data().sessionVersion) || 1) : 1;
+      if ((session.sv ?? 1) !== storedSv) {
+        return res.status(401).json({ ok: false, error: 'Session revoked — please log in again' });
+      }
+    } catch (e) { console.warn('[coach_lesson_update] sv check:', e.message); }
+  }
   if (!hasBranchAccess(session, resolveBranchId(booking))) {
     return res.status(403).json({ ok: false, error: 'No access to this branch' });
   }

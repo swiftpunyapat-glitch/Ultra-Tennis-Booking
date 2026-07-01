@@ -24,12 +24,13 @@
 
 import {
   verifySession, requireRole, hasBranchAccess, resolveBranchId, DEFAULT_BRANCH_ID,
+  randomResetCode, hashResetCode, verifyResetCode, hashPin, getAdminUser,
 } from './_lib/admin-auth.js';
 import {
   getAdminDb, serializeFsDoc, writeAuditLog,
   BRANCH_STATUSES, statusFlags,
 } from './_lib/firebase-admin.js';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 
 // ── Constants ─────────────────────────────────────────────────────
 const VALID_ACTIONS = [
@@ -41,6 +42,7 @@ const VALID_ACTIONS = [
   'slot_bulk_set', 'slot_close_unbooked', 'slot_toggle', 'holiday_set',
   'auth_metric',
   'coach_create', 'coach_list', 'coach_set_active', 'coach_my_bookings',
+  'coach_reset_code', 'coach_set_pin',
 ];
 
 // Coach login name = coaches doc id = booking.coachName. Keep it Firestore-id
@@ -201,6 +203,9 @@ export default async function handler(req, res) {
   if (action === 'auth_metric') {
     return handleAuthMetric(req, res, body);
   }
+  if (action === 'coach_set_pin') {
+    return handleCoachSetPin(res, body);   // public — gated by admin-issued reset code
+  }
 
   // ── Everything else requires a valid admin session ─────────────────
   const session = verifySession(req);
@@ -225,6 +230,7 @@ export default async function handler(req, res) {
     case 'coach_list':             return handleCoachList(res, session, body);
     case 'coach_set_active':       return handleCoachSetActive(res, session, body);
     case 'coach_my_bookings':      return handleCoachMyBookings(res, session, body);
+    case 'coach_reset_code':       return handleCoachResetCode(res, session, body);
     default:
       // Unreachable (VALID_ACTIONS gate above) — defensive.
       return res.status(400).json({ ok: false, error: `Unknown action "${action}"` });
@@ -999,6 +1005,11 @@ async function handleCoachCreate(res, session, body) {
   if (!COACH_NAME_RE.test(name)) {
     return res.status(400).json({ ok: false, error: 'name must be 1-60 chars (letters/Thai/digits/space . _ -), no "/"' });
   }
+  // Coach names must NOT collide with an ADMIN_USERS_JSON account, or login
+  // would route to the admin path (env PIN) and the coach could never sign in.
+  if (getAdminUser(name)) {
+    return res.status(409).json({ ok: false, error: `"${name}" is reserved by an admin account — choose another coach name` });
+  }
   if (!hasBranchAccess(session, branchId)) {
     return res.status(403).json({ ok: false, error: 'No access to this branch' });
   }
@@ -1092,6 +1103,20 @@ async function handleCoachMyBookings(res, session, body) {
   }
 
   const db = getDbOr500(res); if (!db) return;
+
+  // Coach 2A: enforce session revocation — a PIN reset bumps sessionVersion,
+  // invalidating older cookies. (Fail-open on read error; the cookie is still
+  // cryptographically valid, sv is an extra revocation layer.)
+  if (isCoach) {
+    try {
+      const a = await db.collection('coach_auth').doc(coachId).get();
+      const storedSv = a.exists ? (Number(a.data().sessionVersion) || 1) : 1;
+      if ((session.sv ?? 1) !== storedSv) {
+        return res.status(401).json({ ok: false, error: 'Session revoked — please log in again' });
+      }
+    } catch (e) { console.warn('[coach_my_bookings] sv check:', e.message); }
+  }
+
   const nowBkk  = new Date(Date.now() + 7 * 3600 * 1000);
   const today   = nowBkk.toISOString().slice(0, 10);
   const horizon = new Date(nowBkk.getTime() + 60 * 24 * 3600 * 1000).toISOString().slice(0, 10);
@@ -1125,5 +1150,105 @@ async function handleCoachMyBookings(res, session, body) {
   } catch (e) {
     console.error('[coach_my_bookings]', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to load schedule' });
+  }
+}
+
+// coach_reset_code — branch_manager+. Generates a one-time setup/reset code for
+// an ACTIVE coach, stores only its HASH (+30min expiry), and returns the code
+// ONCE to the admin. Admin gives it to the coach out-of-band. Admin never sees
+// the coach's PIN; the code is only a setup token. Never logs the code.
+async function handleCoachResetCode(res, session, body) {
+  if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+  const coachId = typeof body.coachId === 'string' ? body.coachId.trim() : '';
+  if (!coachId) return res.status(400).json({ ok: false, error: 'Missing coachId' });
+
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    const cs = await db.collection('coaches').doc(coachId).get();
+    if (!cs.exists) return res.status(404).json({ ok: false, error: 'Coach not found' });
+    const coach = cs.data();
+    if (!hasBranchAccess(session, resolveBranchId(coach))) {
+      return res.status(403).json({ ok: false, error: 'No access to this branch' });
+    }
+    if (coach.active === false) {
+      return res.status(409).json({ ok: false, error: 'Coach is inactive' });
+    }
+
+    const code = randomResetCode();
+    const authRef  = db.collection('coach_auth').doc(coachId);
+    const authSnap = await authRef.get();
+    // Bump sessionVersion on issue → any existing coach session is revoked
+    // immediately (covers a compromised/lost-device reset).
+    const sv = (authSnap.exists ? (Number(authSnap.data().sessionVersion) || 1) : 0) + 1;
+
+    await authRef.set({
+      coachId,
+      resetTokenHash:      hashResetCode(code),
+      resetTokenExpiresAt: Timestamp.fromMillis(Date.now() + 30 * 60 * 1000),
+      resetFailedAttempts: 0,
+      sessionVersion:      sv,
+      updatedAt:           FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: resolveBranchId(coach),
+      action: 'coach_reset_code', targetId: `coach_auth/${coachId}`,
+      after: { expiresInMinutes: 30 },   // never log the code
+    });
+    return res.status(200).json({ ok: true, coachId, code, expiresInMinutes: 30 });
+  } catch (e) {
+    console.error('[coach_reset_code]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to generate reset code' });
+  }
+}
+
+// coach_set_pin — PUBLIC (coach isn't logged in yet). Gated by the one-time
+// admin-issued reset code. Sets pinHash (scrypt), clears the token, and bumps
+// sessionVersion to revoke older sessions. Never stores/returns plaintext.
+async function handleCoachSetPin(res, body) {
+  const coachId = typeof body.coachId === 'string' ? body.coachId.trim() : '';
+  const code    = typeof body.code    === 'string' ? body.code.trim()    : '';
+  const newPin  = typeof body.newPin  === 'string' ? body.newPin.trim()  : '';
+  if (!coachId || !code) return res.status(400).json({ ok: false, error: 'coachId and code are required' });
+  if (!/^\d{6}$/.test(newPin)) return res.status(400).json({ ok: false, error: 'PIN must be exactly 6 digits' });
+
+  const db = getDbOr500(res); if (!db) return;
+  const ref = db.collection('coach_auth').doc(coachId);
+  try {
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(400).json({ ok: false, error: 'Invalid code' });
+    const auth = snap.data();
+    const exp  = auth.resetTokenExpiresAt?.toMillis?.() ?? 0;
+    if (!auth.resetTokenHash || exp < Date.now()) {
+      return res.status(400).json({ ok: false, error: 'Code expired or not set — ask admin to reissue' });
+    }
+    if (!verifyResetCode(code, auth.resetTokenHash)) {
+      // Rate guard: cap guesses per code, then invalidate → admin must reissue.
+      const attempts = (Number(auth.resetFailedAttempts) || 0) + 1;
+      const upd = { resetFailedAttempts: attempts, updatedAt: FieldValue.serverTimestamp() };
+      if (attempts >= 10) { upd.resetTokenHash = null; upd.resetTokenExpiresAt = null; }
+      try { await ref.update(upd); } catch { /* non-fatal */ }
+      return res.status(401).json({
+        ok: false,
+        error: attempts >= 10 ? 'Too many attempts — ask admin to reissue the code' : 'Invalid code',
+      });
+    }
+    const sv = (Number(auth.sessionVersion) || 1) + 1;   // bump → revoke old sessions
+    await ref.update({
+      pinHash:             hashPin(newPin),
+      pinSetAt:            FieldValue.serverTimestamp(),
+      resetTokenHash:      null,
+      resetTokenExpiresAt: null,
+      sessionVersion:      sv,
+      failedAttempts:      0,
+      lockedUntil:         null,
+      updatedAt:           FieldValue.serverTimestamp(),
+    });
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error('[coach_set_pin]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to set PIN' });
   }
 }
