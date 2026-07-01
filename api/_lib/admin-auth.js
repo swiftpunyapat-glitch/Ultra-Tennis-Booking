@@ -2,7 +2,10 @@ import { createHmac, timingSafeEqual } from 'crypto';
 
 const COOKIE = 'adminSession';
 
-export const ROLES = ['owner', 'ultra_admin', 'branch_manager', 'branch_staff', 'viewer'];
+// 'coach' is a non-admin operational role (coach.html terminal). It is NOT in
+// the admin privilege chain — requireRole is an allowlist, so coach endpoints
+// must opt it in explicitly and admin endpoints simply omit it.
+export const ROLES = ['owner', 'ultra_admin', 'branch_manager', 'branch_staff', 'viewer', 'coach'];
 export const ALL_BRANCHES = '*';
 
 // Branch helpers live here (not in their own _lib file) because every .js
