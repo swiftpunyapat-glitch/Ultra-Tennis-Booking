@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<meta name="robots" content="noindex,nofollow"/>
+<title>Courtline Academy — Coach</title>
+<style>
+  /* ── Courtline Academy brand (swap these 3 to rebrand) ───────────── */
+  :root{
+    --brand:#0e5c3a;      /* Courtline green */
+    --brand-2:#0a4a2e;
+    --accent:#c9f24d;     /* tennis-ball lime */
+    --bg:#eef2f0; --card:#ffffff; --ink:#152019; --muted:#6a7b72;
+    --line:#e2e8e4; --ok:#0b8a4e; --blue:#1f6fd6; --danger:#c0392b; --warn:#b9770a;
+    --r:12px; --sh:0 2px 10px rgba(10,40,25,.06);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans Thai",sans-serif;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.45}
+  .wrap{max-width:560px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column}
+  /* Header */
+  header{background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;padding:16px 16px 18px}
+  .logo{display:flex;align-items:center;gap:10px}
+  .logo .mark{width:34px;height:34px;border-radius:9px;background:var(--accent);color:var(--brand-2);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:900}
+  .logo .name{font-weight:900;letter-spacing:.5px;font-size:1.05rem}
+  .logo .sub{font-size:.68rem;opacity:.85;font-weight:600;letter-spacing:1px;text-transform:uppercase}
+  .hbar{display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:.8rem}
+  .hbar .who{opacity:.92}
+  .logout{background:rgba(255,255,255,.15);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:.78rem;font-weight:700;cursor:pointer}
+  /* Body */
+  main{flex:1;padding:14px 14px 40px}
+  .sec-title{font-size:.72rem;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin:16px 4px 8px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh);padding:13px 14px;margin-bottom:11px}
+  .c-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+  .c-time{font-weight:900;font-size:1.02rem}
+  .c-date{font-size:.72rem;color:var(--muted);font-weight:700}
+  .c-cust{margin-top:5px;font-weight:700}
+  .c-type{font-size:.76rem;color:var(--muted);margin-top:1px}
+  .badge{font-size:.66rem;font-weight:800;padding:3px 9px;border-radius:999px;white-space:nowrap}
+  .b-assigned{background:#eef1f0;color:#5b6b63}
+  .b-checked_in{background:#e6f0ff;color:var(--blue)}
+  .b-completed{background:#e3f6ec;color:var(--ok)}
+  .b-no_show{background:#fbe8e6;color:var(--danger)}
+  .acts{display:flex;gap:7px;margin-top:11px;flex-wrap:wrap}
+  .acts button{flex:1;min-width:88px;border:none;border-radius:9px;padding:9px 6px;font-size:.8rem;font-weight:800;cursor:pointer}
+  .a-in{background:#e6f0ff;color:var(--blue)}
+  .a-done{background:var(--brand);color:#fff}
+  .a-no{background:#fbe8e6;color:var(--danger)}
+  .acts button:disabled{opacity:.45;cursor:default}
+  .note-row{margin-top:10px}
+  .note-row textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-size:.82rem;font-family:inherit;resize:vertical;min-height:44px;background:#fafcfb;color:var(--ink)}
+  .note-row .save{margin-top:6px;background:#f0f4f2;color:var(--brand-2);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:.76rem;font-weight:800;cursor:pointer}
+  .empty{text-align:center;color:var(--muted);padding:26px 10px;font-size:.85rem}
+  /* Login */
+  .login{flex:1;display:flex;flex-direction:column;justify-content:center;padding:24px;gap:12px;max-width:360px;margin:0 auto;width:100%}
+  .login h1{font-size:1.1rem;text-align:center;margin:0 0 4px}
+  .login p{text-align:center;color:var(--muted);font-size:.8rem;margin:0 0 10px}
+  .login input{border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:1rem;background:#fff;color:var(--ink)}
+  .login button{background:var(--brand);color:#fff;border:none;border-radius:10px;padding:13px;font-size:.95rem;font-weight:800;cursor:pointer}
+  .login .err{color:var(--danger);font-size:.8rem;text-align:center;min-height:18px}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#152019;color:#fff;padding:10px 16px;border-radius:10px;font-size:.82rem;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50}
+  .toast.show{opacity:.96}
+  .toast.err{background:var(--danger)}
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- LOGIN -->
+  <div id="loginView" class="login">
+    <div class="logo" style="justify-content:center;color:var(--brand)">
+      <div class="mark">🎾</div>
+      <div><div class="name" style="color:var(--brand)">COURTLINE ACADEMY</div><div class="sub" style="color:var(--muted)">Coach Terminal</div></div>
+    </div>
+    <h1>เข้าสู่ระบบโค้ช</h1>
+    <p>ใช้ชื่อและ PIN ที่ได้รับจากแอดมิน</p>
+    <input id="liName" type="text" placeholder="ชื่อโค้ช (login name)" autocomplete="username"/>
+    <input id="liPin" type="password" inputmode="numeric" placeholder="PIN" autocomplete="current-password"/>
+    <div class="err" id="liErr"></div>
+    <button id="liBtn">เข้าสู่ระบบ</button>
+  </div>
+
+  <!-- APP -->
+  <div id="appView" class="hidden">
+    <header>
+      <div class="logo">
+        <div class="mark">🎾</div>
+        <div><div class="name">COURTLINE ACADEMY</div><div class="sub">Coach Terminal</div></div>
+      </div>
+      <div class="hbar">
+        <div class="who">👤 <strong id="whoName">—</strong></div>
+        <button class="logout" id="logoutBtn">ออกจากระบบ</button>
+      </div>
+    </header>
+    <main>
+      <div id="schedule"><div class="empty">กำลังโหลด...</div></div>
+    </main>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const API_OPS = "/api/admin-ops";
+const API_BK  = "/api/admin-edit-booking-accounting";
+let me = null;   // { name, role }
+
+function toast(msg, err){ const t=$("toast"); t.textContent=msg; t.className="toast show"+(err?" err":""); setTimeout(()=>t.className="toast",1900); }
+function esc(s){ return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+const LESSON = {
+  assigned:   {th:"มอบหมายแล้ว", cls:"b-assigned"},
+  checked_in: {th:"เช็คอินแล้ว", cls:"b-checked_in"},
+  completed:  {th:"สอนเสร็จ",    cls:"b-completed"},
+  no_show:    {th:"ไม่มา",        cls:"b-no_show"},
+};
+
+// ── Session ─────────────────────────────────────────────────────────
+async function checkSession(){
+  try{
+    const r = await fetch("/api/admin-session", { method:"GET" });
+    if(!r.ok) return null;
+    const d = await r.json();
+    return d.ok ? d : null;
+  }catch{ return null; }
+}
+function isCoachOrAdmin(role){ return role==="coach" || ["owner","ultra_admin","branch_manager","branch_staff"].includes(role); }
+
+async function boot(){
+  const s = await checkSession();
+  if(s && isCoachOrAdmin(s.role)){ me = s; showApp(); }
+  else showLogin();
+}
+function showLogin(){ $("appView").classList.add("hidden"); $("loginView").classList.remove("hidden"); }
+function showApp(){
+  $("loginView").classList.add("hidden"); $("appView").classList.remove("hidden");
+  $("whoName").textContent = me.name + (me.role!=="coach" ? ` (${me.role})` : "");
+  loadSchedule();
+}
+
+// ── Login ───────────────────────────────────────────────────────────
+$("liBtn").addEventListener("click", doLogin);
+$("liPin").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
+async function doLogin(){
+  const name=$("liName").value.trim(), pin=$("liPin").value;
+  $("liErr").textContent="";
+  if(!name||!pin){ $("liErr").textContent="กรอกชื่อและ PIN"; return; }
+  $("liBtn").disabled=true; $("liBtn").textContent="กำลังเข้าสู่ระบบ...";
+  try{
+    const r = await fetch("/api/admin-session", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"login",name,pin}) });
+    const d = await r.json().catch(()=>({}));
+    if(!r.ok || !d.ok){ $("liErr").textContent = d.error || "เข้าสู่ระบบไม่สำเร็จ"; return; }
+    if(!isCoachOrAdmin(d.role)){ $("liErr").textContent="บัญชีนี้ไม่ใช่โค้ช"; await fetch("/api/admin-session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"logout"})}); return; }
+    me = d; $("liPin").value=""; showApp();
+  }catch(e){ $("liErr").textContent="เครือข่ายมีปัญหา"; }
+  finally{ $("liBtn").disabled=false; $("liBtn").textContent="เข้าสู่ระบบ"; }
+}
+$("logoutBtn").addEventListener("click", async ()=>{
+  try{ await fetch("/api/admin-session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"logout"})}); }catch{}
+  me=null; showLogin();
+});
+
+// ── Schedule ────────────────────────────────────────────────────────
+async function loadSchedule(){
+  $("schedule").innerHTML = `<div class="empty">กำลังโหลดตาราง...</div>`;
+  try{
+    const r = await fetch(API_OPS, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"coach_my_bookings"}) });
+    const d = await r.json().catch(()=>({}));
+    if(!r.ok || !d.ok){ $("schedule").innerHTML=`<div class="empty">❌ ${esc(d.error||"โหลดไม่สำเร็จ")}</div>`; return; }
+    renderSchedule(d.bookings||[], d.today);
+  }catch(e){ $("schedule").innerHTML=`<div class="empty">❌ เครือข่ายมีปัญหา</div>`; }
+}
+
+function renderSchedule(list, today){
+  if(!list.length){ $("schedule").innerHTML=`<div class="empty">ยังไม่มีคาบสอนที่ได้รับมอบหมาย</div>`; return; }
+  const todayList = list.filter(b=>b.date===today);
+  const upcoming  = list.filter(b=>b.date>today);
+  let html = "";
+  html += `<div class="sec-title">วันนี้ (${esc(today)})</div>`;
+  html += todayList.length ? todayList.map(b=>card(b,false)).join("") : `<div class="empty">ไม่มีคาบสอนวันนี้</div>`;
+  if(upcoming.length){
+    html += `<div class="sec-title">คาบถัดไป</div>`;
+    html += upcoming.map(b=>card(b,true)).join("");
+  }
+  $("schedule").innerHTML = html;
+  list.forEach(b=>{
+    const ci=document.querySelector(`[data-in="${b.id}"]`);   if(ci) ci.addEventListener("click",()=>lessonAction(b.id,"check_in"));
+    const dn=document.querySelector(`[data-done="${b.id}"]`); if(dn) dn.addEventListener("click",()=>lessonAction(b.id,"complete"));
+    const no=document.querySelector(`[data-no="${b.id}"]`);   if(no) no.addEventListener("click",()=>lessonAction(b.id,"no_show"));
+    const sv=document.querySelector(`[data-savenote="${b.id}"]`); if(sv) sv.addEventListener("click",()=>saveNote(b.id));
+  });
+}
+
+function card(b, showDate){
+  const st = LESSON[b.lessonStatus] || LESSON.assigned;
+  const done = b.lessonStatus==="completed" || b.lessonStatus==="no_show";
+  return `<div class="card">
+    <div class="c-top">
+      <div>
+        <div class="c-time">${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</div>
+        ${showDate?`<div class="c-date">${esc(b.date||"")}</div>`:""}
+        <div class="c-cust">${esc(b.customerName||"—")}</div>
+        <div class="c-type">${esc(b.bookingType||"—")}</div>
+      </div>
+      <span class="badge ${st.cls}">${st.th}</span>
+    </div>
+    <div class="acts">
+      <button class="a-in"   data-in="${esc(b.id)}"   ${b.lessonStatus==="checked_in"||done?"disabled":""}>เช็คอิน</button>
+      <button class="a-done" data-done="${esc(b.id)}" ${done?"disabled":""}>สอนเสร็จ</button>
+      <button class="a-no"   data-no="${esc(b.id)}"   ${done?"disabled":""}>ไม่มา</button>
+    </div>
+    <div class="note-row">
+      <textarea id="note-${esc(b.id)}" placeholder="โน้ตหลังสอน...">${esc(b.lessonNote||"")}</textarea>
+      <button class="save" data-savenote="${esc(b.id)}">💾 บันทึกโน้ต</button>
+    </div>
+  </div>`;
+}
+
+async function lessonAction(bookingId, action){
+  const note = $(`note-${bookingId}`)?.value ?? "";
+  await postLesson(bookingId, { lessonAction:action, lessonNote:note });
+}
+async function saveNote(bookingId){
+  const note = $(`note-${bookingId}`)?.value ?? "";
+  await postLesson(bookingId, { lessonAction:"note", lessonNote:note });
+}
+async function postLesson(bookingId, extra){
+  try{
+    const r = await fetch(API_BK, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ operation:"coach_lesson_update", bookingId, ...extra }) });
+    const d = await r.json().catch(()=>({}));
+    if(!r.ok || !d.ok){ toast(d.error||"บันทึกไม่สำเร็จ", true); return; }
+    toast("✓ บันทึกแล้ว");
+    loadSchedule();
+  }catch(e){ toast("เครือข่ายมีปัญหา", true); }
+}
+
+boot();
+</script>
+</body>
+</html>
