@@ -539,7 +539,7 @@
       <div class="card" id="ptCard">
         <div class="slabel" data-i18n="paymentType">Payment Type</div>
         <div class="ptgrid">
-          <button class="ptbtn on" data-pt="single"><span class="pt-name" data-i18n="singleUse">Single Use</span><small class="pt-sub" id="ptSingleSub">฿350</small></button>
+          <button class="ptbtn on" data-pt="single"><span class="pt-name" data-i18n="singleUse">Single Use</span><small class="pt-sub" id="ptSingleSub" data-i18n="singleUseSub">จ่ายรายครั้ง / ราคาตามช่วงเวลา</small></button>
           <button class="ptbtn" data-pt="ultra" id="ptUltra" disabled><span class="pt-name" data-i18n="usePackage">Use Package</span><small class="pt-sub" id="ptUltraSub">No active pass</small></button>
           <button class="ptbtn" data-pt="offpeak" id="ptOffpeak" disabled><span class="pt-name" data-i18n="offPeak">Off-Peak</span><small class="pt-sub" id="ptOffpeakSub">No active pass</small></button>
           <button class="ptbtn" data-pt="event" id="ptEvent" disabled><span class="pt-name">🎟️ MONSTR</span><small class="pt-sub" id="ptEventSub">No active pass</small></button>
@@ -915,6 +915,7 @@ const I18N = {
     loadingSlots:"กำลังโหลดช่วงเวลา...",
     paymentType:"วิธีชำระ / สิทธิ์ที่ใช้",
     singleUse:"รายครั้ง",
+    singleUseSub:"จ่ายรายครั้ง / ราคาตามช่วงเวลา",
     ultraPass:"Ultra Pass",
     offPeak:"Off-Peak",
     noActivePass:"ยังไม่มีแพ็กเกจที่ใช้งานได้",
@@ -1047,6 +1048,7 @@ const I18N = {
     loadingSlots:"Loading slots...",
     paymentType:"Payment Type",
     singleUse:"Single Use",
+    singleUseSub:"Pay per use / price varies by time",
     ultraPass:"Ultra Pass",
     offPeak:"Off-Peak",
     noActivePass:"No active pass",
@@ -1963,18 +1965,11 @@ function updatePaymentTypeButtons() {
     btn.classList.toggle("on", btn.dataset.pt === state.bookingPaymentType);
   });
 
-  // Update Single Use button subtitle
-  const promo = getPromoState();
+  // Single Use now has dynamic pricing (standard / morning / voucher) — the
+  // label shows a descriptive subtitle, NOT a fixed price. The real amount is
+  // shown in the price note + payment panel from the quote / server result.
   const singleSub = $("ptSingleSub");
-  if (singleSub) {
-    if (isLN) {
-      singleSub.textContent = `฿${LATE_NIGHT_PRICE}`;
-    } else if (promo.active) {
-      singleSub.textContent = `฿${promo.price}`;
-    } else {
-      singleSub.textContent = `฿350`;
-    }
-  }
+  if (singleSub) singleSub.textContent = t("singleUseSub");
 
   $("ptUltraSub").textContent = isLN
     ? t("noPassOption")
