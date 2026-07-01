@@ -337,6 +337,7 @@
     <button class="tab" data-tab="pending" style="flex:0 0 auto">⏳ Pending</button>
     <button class="tab" data-tab="customers" style="flex:0 0 auto">👥 Customers</button>
     <button class="tab" data-tab="promo" style="flex:0 0 auto">🔥 Promotion</button>
+    <button class="tab" data-tab="coach" style="flex:0 0 auto">🎾 Coach</button>
     <button class="tab" id="activityTabBtn" data-tab="activity" style="display:none;flex:0 0 auto">📜 ประวัติการทำงาน</button>
   </div>
 
@@ -635,6 +636,19 @@
   </div>
 
   <!-- ADMIN ACTIVITY LOG TAB -->
+  <div id="tabCoach" style="display:none">
+    <div style="background:var(--s1);border:1px solid var(--bd);border-radius:10px;padding:14px;margin-bottom:12px">
+      <div style="font-weight:800;font-size:.95rem;margin-bottom:10px">🎾 Coach Management</div>
+      <div style="font-size:.7rem;color:var(--warn);margin-bottom:10px">⚠ ชื่อ Coach ต้องตรงกับ login name ใน ADMIN_USERS_JSON (role: coach) — credential/PIN ตั้งใน env เท่านั้น</div>
+      <div class="smrow" style="margin-bottom:8px">
+        <div class="smf"><label>Coach Name (login name)</label><input type="text" id="coachNameInput" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%" placeholder="e.g. CoachA"/></div>
+        <div class="smf"><label>Display Name (optional)</label><input type="text" id="coachDisplayInput" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%" placeholder="โค้ชเอ"/></div>
+      </div>
+      <button class="smbtn smg" id="coachCreateBtn" style="width:100%;padding:10px;font-size:.85rem">+ Add Coach</button>
+    </div>
+    <div id="coachListBox" style="display:flex;flex-direction:column;gap:8px"></div>
+  </div>
+
   <div id="tabActivity" style="display:none">
     <div class="main" id="adminActivitySection">
       <div class="activity-panel">
@@ -660,6 +674,19 @@
       <p id="rHint" style="font-size:.72rem;color:var(--m);margin-top:4px"></p>
     </div>
     <div class="mftr"><button class="mcancel" id="mCancel">Cancel</button><button class="mcancel" id="mPendingResch">Move to Pending</button><button class="mconfirm" id="mConfirm" disabled>Confirm Reschedule</button></div>
+  </div>
+</div>
+
+<!-- ASSIGN COACH MODAL -->
+<div class="moverlay" id="assignCoachModal" style="display:none">
+  <div class="mbox">
+    <div class="mhdr"><h2>👤 Assign Coach</h2><button class="mclose" id="acClose">✕</button></div>
+    <div class="mbody">
+      <div class="minfo"><strong id="acBkCode">—</strong><span id="acBkInfo" style="display:block;margin-top:3px;font-size:.75rem">—</span></div>
+      <div class="mfield"><label>Coach</label><select id="acCoachSelect" style="width:100%"><option value="">— Unassigned —</option></select></div>
+      <p style="font-size:.7rem;color:var(--m);margin-top:4px">เลือก coach ที่ active เพื่อมอบหมาย booking นี้ (lessonStatus → assigned)</p>
+    </div>
+    <div class="mftr"><button class="mcancel" id="acCancel">Cancel</button><button class="mconfirm" id="acSave">✓ Save</button></div>
   </div>
 </div>
 
@@ -1025,6 +1052,7 @@ document.querySelectorAll(".tab").forEach(btn=>{
     $("tabPending").style.display   =btn.dataset.tab==="pending"   ?"block":"none";
     $("tabCustomers").style.display =btn.dataset.tab==="customers" ?"block":"none";
     $("tabPromo").style.display     =btn.dataset.tab==="promo"     ?"block":"none";
+    $("tabCoach").style.display     =btn.dataset.tab==="coach"     ?"block":"none";
     $("tabActivity").style.display  =btn.dataset.tab==="activity"  ?"block":"none";
     if(btn.dataset.tab==="passes")   loadActivePasses();
     if(btn.dataset.tab==="daily")    loadDailyView();
@@ -1036,6 +1064,7 @@ document.querySelectorAll(".tab").forEach(btn=>{
     if(btn.dataset.tab==="pending")  renderPendingTab();
     if(btn.dataset.tab==="customers") renderCustomerListTab();
     if(btn.dataset.tab==="promo")    loadPromoTab();
+    if(btn.dataset.tab==="coach")    renderCoachTab();
     if(btn.dataset.tab==="activity") loadActivityFeed();
   });
 });
@@ -1282,8 +1311,124 @@ function renderBookings(){
     if(rf) rf.addEventListener("click",()=>openRefundModal(b));
     const cp=document.querySelector(`[data-copy-confirmed="${b.id}"]`);
     if(cp) cp.addEventListener("click",()=>copyConfirmedTextToClipboard(b));
+    const ac=document.querySelector(`[data-assign-coach="${b.id}"]`);
+    if(ac) ac.addEventListener("click",()=>openAssignCoachModal(b));
   });
 }
+
+// ── COACH MANAGEMENT (Phase Coach 1) ────────────────────────────────
+let coachCache = [];
+
+async function loadCoaches(activeOnly){
+  const res = await fetch("/api/admin-ops",{
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ action:"coach_list", activeOnly: activeOnly===true })
+  });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok || !data.ok) throw new Error(data.error || "Failed to load coaches");
+  return data.coaches || [];
+}
+
+async function renderCoachTab(){
+  const box = $("coachListBox");
+  box.innerHTML = `<div class="smempty">Loading...</div>`;
+  try{
+    coachCache = await loadCoaches(false);
+    if(!coachCache.length){ box.innerHTML = `<div class="smempty">ยังไม่มี coach — เพิ่มด้านบน</div>`; return; }
+    box.innerHTML = coachCache.map(c=>{
+      const active = c.active !== false;
+      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--s1);border:1px solid var(--bd);border-radius:8px;padding:10px 12px">
+        <div>
+          <div style="font-weight:800;font-size:.85rem">${esc(c.displayName||c.name)} ${active?'':'<span style="color:var(--m);font-weight:400">(inactive)</span>'}</div>
+          <div style="font-size:.7rem;color:var(--m)">login: ${esc(c.name)} · branch: ${esc(c.branchId||"ladprao1")}</div>
+        </div>
+        <button class="smbtn ${active?'':'smg'}" data-coach-toggle="${esc(c.id)}" data-coach-active="${active?'1':'0'}" style="padding:6px 12px;font-size:.75rem">${active?'Deactivate':'Activate'}</button>
+      </div>`;
+    }).join("");
+    box.querySelectorAll("[data-coach-toggle]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        const coachId = btn.dataset.coachToggle;
+        const newActive = btn.dataset.coachActive !== "1";
+        btn.disabled = true;
+        try{
+          const res = await fetch("/api/admin-ops",{
+            method:"POST", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({ action:"coach_set_active", coachId, active:newActive })
+          });
+          const data = await res.json().catch(()=>({}));
+          if(!res.ok || !data.ok){ showToast(data.error||"Failed.",true); btn.disabled=false; return; }
+          renderCoachTab();
+        }catch(e){ console.error(e); showToast("Failed.",true); btn.disabled=false; }
+      });
+    });
+  }catch(e){ console.error(e); box.innerHTML = `<div class="smempty">❌ ${esc(e.message||"Failed")}</div>`; }
+}
+
+$("coachCreateBtn").addEventListener("click", async ()=>{
+  const name = $("coachNameInput").value.trim();
+  const displayName = $("coachDisplayInput").value.trim();
+  if(!name){ showToast("กรอกชื่อ coach",true); return; }
+  const btn = $("coachCreateBtn"); btn.disabled = true; btn.textContent = "Adding...";
+  try{
+    const res = await fetch("/api/admin-ops",{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ action:"coach_create", name, displayName: displayName||undefined })
+    });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok || !data.ok){ showToast(data.error||"Failed to add coach.",true); return; }
+    $("coachNameInput").value=""; $("coachDisplayInput").value="";
+    showToast(`✓ เพิ่ม coach ${name}`);
+    renderCoachTab();
+  }catch(e){ console.error(e); showToast("Failed.",true); }
+  finally{ btn.disabled=false; btn.textContent="+ Add Coach"; }
+});
+
+// ── Assign coach modal ──────────────────────────────────────────────
+let assignCoachBooking = null;
+async function openAssignCoachModal(b){
+  assignCoachBooking = b;
+  $("acBkCode").textContent = b.bookingCode || "—";
+  $("acBkInfo").textContent = `${b.customerName||"—"} · ${b.date||"—"} ${b.startTime||"—"}–${b.endTime||"—"}`;
+  const sel = $("acCoachSelect");
+  sel.innerHTML = `<option value="">— Unassigned —</option>`;
+  $("assignCoachModal").style.display = "flex";
+  try{
+    const coaches = await loadCoaches(true);
+    coaches.forEach(c=>{
+      const opt = document.createElement("option");
+      opt.value = c.id;                              // value = stable coachId (doc id = login name)
+      opt.textContent = c.displayName || c.name;     // shows display name
+      if(b.coachId === c.id) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    if(b.coachId && !coaches.some(c=>c.id===b.coachId)){
+      const opt = document.createElement("option");
+      opt.value = b.coachId; opt.textContent = `${b.coachName||b.coachId} (inactive)`; opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }catch(e){ console.error(e); showToast("โหลดรายชื่อ coach ไม่ได้",true); }
+}
+function closeAssignCoachModal(){ $("assignCoachModal").style.display="none"; assignCoachBooking=null; }
+$("acClose").addEventListener("click", closeAssignCoachModal);
+$("acCancel").addEventListener("click", closeAssignCoachModal);
+$("assignCoachModal").addEventListener("click", e=>{ if(e.target===$("assignCoachModal")) closeAssignCoachModal(); });
+$("acSave").addEventListener("click", async ()=>{
+  if(!assignCoachBooking) return;
+  const coachId = $("acCoachSelect").value;   // stable id ("" = unassign)
+  const label = $("acCoachSelect").selectedOptions[0]?.textContent || coachId;
+  const btn = $("acSave"); btn.disabled = true; btn.textContent = "Saving...";
+  try{
+    const res = await fetch("/api/admin-edit-booking-accounting",{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ operation:"assign_coach", bookingId: assignCoachBooking.id, coachId })
+    });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok || !data.ok){ showToast(data.error||"Failed.",true); btn.disabled=false; btn.textContent="✓ Save"; return; }
+    showToast(coachId ? `✓ Assigned ${label}` : "✓ Unassigned");
+    closeAssignCoachModal();
+    await loadBookings();
+  }catch(e){ console.error(e); showToast("Failed.",true); btn.disabled=false; btn.textContent="✓ Save"; }
+});
 
 function renderPendingRescheduleList(){
   const panel=$("pendingReschedulePanel");
@@ -1435,6 +1580,7 @@ function cardHTML(b){
       ${canConfirmNoSlip?`<button class="bp" data-paid-noslip="${esc(b.id)}">✅ Confirm Paid (No Slip)</button>`:""}
       ${canResch?`<button class="br" data-resch="${esc(b.id)}">📅 Reschedule</button>`:""}
       ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}
+      <button class="br" data-assign-coach="${esc(b.id)}">👤 ${b.coachName?`Coach: ${esc(b.coachName)}`:"Assign Coach"}</button>
       ${rfBtn}${artAcctEdit}${artDelete}`;
 
   // ── Package usage value row ───────────────────────────────────────
