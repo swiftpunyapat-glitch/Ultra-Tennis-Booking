@@ -562,6 +562,7 @@
           <label><span data-i18n="name">Name</span><input type="text" id="bkName" autocomplete="name" placeholder="Full name"/></label>
           <label><span data-i18n="phone">Phone</span><input type="tel" id="bkPhone" autocomplete="tel" placeholder="Phone number"/></label>
           <label class="full"><span data-i18n="noteOptional">Note (optional)</span><textarea id="bkNote" rows="2" placeholder="Special requests..."></textarea></label>
+          <label class="full"><span>โค้ดส่วนลด (ถ้ามี)</span><input type="text" id="bkVoucher" autocomplete="off" placeholder="Voucher code" style="text-transform:uppercase"/></label>
         </div>
       </div>
 
@@ -841,6 +842,9 @@ const RESOURCE_ID = "room1";
 const DEFAULT_BRANCH_ID = "ladprao1";
 const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
 const PAY_MINS    = 15;
+// Pricing v2 Stage 2: server-authoritative create for single-use.
+const USE_SERVER_CREATE     = true;   // route single-use create through /api/booking (server prices it)
+const ALLOW_LEGACY_FALLBACK = true;   // if server-create hits a SYSTEM error, fall back to legacy client-create
 const OFFPEAK     = { startHour:9, endHour:15 }; // 09:00–15:00
 // Late Night Session: 00:00–06:00 · ฿450 · opened manually by Admin only.
 const LN_START    = 0, LN_END = 6;
@@ -2020,6 +2024,53 @@ function updateBookingConfirmBtn() {
   $("confirmBkBtn").disabled = !state.time;
 }
 
+// Pricing v2 Stage 2: try the server-authoritative create for a single-use
+// booking. Returns true (success, payment screen shown), "handled" (a legit
+// rejection was shown — do NOT fall back), or false (system error — caller may
+// fall back to legacy client-create).
+async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
+  try{
+    const res = await fetch("/api/booking", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        action:"create", date:dateISO, startTime:state.time,
+        customerName:name, customerPhone:phone, customerNote:note,
+        lineUserId:state.lineProfile.userId, lineDisplayName:state.lineProfile.displayName,
+        voucherCode: voucherCode || undefined,
+      }),
+    });
+    const d = await res.json().catch(()=>({}));
+    if(!res.ok || !d.ok){
+      // Legit rejections (bad input / slot taken / voucher invalid): show, no fallback.
+      if(d.code==="VALIDATION" || d.code==="SLOT" || d.code==="VOUCHER"){
+        showToast(d.error || t("bookingFailed"), true);
+        return "handled";
+      }
+      throw new Error(d.error || "server create failed");
+    }
+    // Success — mirror the legacy post-transaction success flow, using server data.
+    const b = d.booking;
+    const expiresAt = new Date(d.paymentExpiresAt);
+    const endTime = b.endTime;
+    state.currentBookingCode  = b.bookingCode;
+    state.currentBookingDocId = b.id;
+    state.currentBookingData  = { ...b, expiresAt, paymentQrType: b.qrType, price: b.finalPrice, qrAmount: b.qrAmount };
+    if(window.notifyAdmins){
+      window.notifyAdmins({ type:"new_booking_admin", bookingCode:b.bookingCode, customerName:name, customerPhone:phone, date:dateISO, startTime:state.time, endTime });
+    }
+    state.paymentMode="booking";
+    try{
+      localStorage.setItem("ut_pending_booking", JSON.stringify({ code:b.bookingCode, docId:b.id, expiresAt:expiresAt.getTime(), date:dateISO, startTime:state.time, endTime, price:b.finalPrice, isLN:b.qrType==="late_night" }));
+    }catch(_){}
+    showPaymentPanel(b.bookingCode, b.finalPrice, expiresAt, dateISO, `${state.time} – ${endTime}`, b.qrType==="late_night");
+    showView("viewPayment");
+    return true;
+  }catch(e){
+    console.warn("[booking] server-create failed —", (ALLOW_LEGACY_FALLBACK?"falling back to legacy client-create:":"no fallback:"), e);
+    return false;
+  }
+}
+
 // ── CONFIRM BOOKING ─────────────────────────────────────────────
 $("confirmBkBtn").addEventListener("click", async()=>{
   const name=$("bkName").value.trim(), phone=$("bkPhone").value.trim();
@@ -2045,6 +2096,15 @@ $("confirmBkBtn").addEventListener("click", async()=>{
 
   const btn=$("confirmBkBtn"); btn.disabled=true; btn.textContent=t("saving");
   try {
+    // Pricing v2 Stage 2: server-authoritative create for single-use only.
+    // Passes (ultra/offpeak/event) always use the legacy client path below.
+    if (payType === "single" && USE_SERVER_CREATE) {
+      const r = await tryServerCreate({ dateISO:getSelectedDateISO(), name, phone, note:$("bkNote").value.trim(), voucherCode:($("bkVoucher")?.value||"").trim().toUpperCase() });
+      if (r === true) { if($("bkVoucher")) $("bkVoucher").value=""; return; }   // success (finally resets btn)
+      if (r === "handled") return;                                              // legit rejection already shown
+      if (!ALLOW_LEGACY_FALLBACK) { showToast(t("bookingFailed"),true); return; }
+      // else: fall through to legacy client-create as a fallback ↓
+    }
     const code      = generateCode("UT");
     const dateISO   = getSelectedDateISO();
     const endTime   = formatEndTime(state.time);
@@ -2078,6 +2138,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       paymentStatus:           isSingle?"unpaid":"package",
       paymentExpiresAt:        expiresTS,
       slipUrl:                 null, slipUploadedAt:null, cancelReason:null,
+      createdVia:              (payType==="single" && USE_SERVER_CREATE) ? "legacy_fallback" : "client",
     };
 
     if (isSingle) {
@@ -2359,7 +2420,10 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
       } else if (bData.paymentQrType === "special" || bData.pricingMode === "special_promotion") {
         qrUrl = "/payment-qr-special.png";
       } else {
-        qrUrl = "/payment-qr.png";
+        // Pricing v2: fixed-amount QR selected by the (server-computed) qrAmount.
+        // Falls back to the booking price for legacy bookings (always 350 → normal).
+        const amt = Number(bData.qrAmount ?? bData.price ?? 0);
+        qrUrl = ({ 300:"/payment-qr-voucher-300.png", 320:"/payment-qr-morning-320.png", 330:"/payment-qr-morning-330.png", 350:"/payment-qr.png" })[amt] || "/payment-qr.png";
       }
     } else {
       if (isLateNightBooking) {
@@ -2546,34 +2610,23 @@ $("cancelBookingBtn").addEventListener("click", async()=>{
   const btn=$("cancelBookingBtn");
   btn.disabled=true; btn.textContent=t("cancelling");
   try {
-    const b=state.currentBookingData||{};
-    const bookingRef=doc(db,"bookings",state.currentBookingDocId);
-    const slotId = (b.date && b.startTime)
-      ? `${RESOURCE_ID}_${b.date}_${b.startTime.replace(":","")}`
-      : null;
-
-    await runTransaction(db, async tx=>{
-      // Read first (transactions require all reads before writes).
-      const slotRef = slotId ? doc(db,"booking_slots",slotId) : null;
-      const slotSnap = slotRef ? await tx.get(slotRef) : null;
-
-      tx.update(bookingRef,{
-        bookingStatus:"cancelled",
-        cancelReason:"customer_cancelled",
-        updatedAt:serverTimestamp(),
-      });
-
-      // Only release the slot if it still belongs to this booking and isn't
-      // already confirmed (defensive — a confirmed slot shouldn't be freed here).
-      if(slotSnap && slotSnap.exists()){
-        const sd=slotSnap.data();
-        const ownsSlot = sd.bookingId===state.currentBookingDocId
-          || sd.bookingCode===state.currentBookingCode;
-        if(ownsSlot && sd.bookingStatus!=="confirmed"){
-          tx.update(slotRef,{ bookingStatus:"cancelled", paymentStatus:"cancelled" });
-        }
-      }
+    // Server-side cancel (Admin SDK bypasses rules) — fixes the "Insufficient
+    // Permission" bug where the client set booking_slots.paymentStatus="cancelled"
+    // (not in the rules enum). Sends a Firebase ID token when signed in so the
+    // server can verify ownership (uid === booking.lineUserId).
+    const idToken = fbAuth.currentUser ? await fbAuth.currentUser.getIdToken().catch(()=>null) : null;
+    const res = await fetch("/api/booking", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        action:"cancel_pending",
+        bookingId: state.currentBookingDocId,
+        bookingCode: state.currentBookingCode,
+        lineUserId: state.lineProfile.userId,
+        idToken: idToken || undefined,
+      }),
     });
+    const d = await res.json().catch(()=>({}));
+    if(!res.ok || !d.ok){ showToast(d.error||t("cancelFailed"),true); btn.disabled=false; btn.textContent=t("cancelBooking"); return; }
 
     localStorage.removeItem("ut_pending_booking");
     state.currentBookingCode=null;
