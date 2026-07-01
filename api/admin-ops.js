@@ -40,7 +40,7 @@ const VALID_ACTIONS = [
   'audit_log_write', 'audit_log_list',
   'slot_bulk_set', 'slot_close_unbooked', 'slot_toggle', 'holiday_set',
   'auth_metric',
-  'coach_create', 'coach_list', 'coach_set_active',
+  'coach_create', 'coach_list', 'coach_set_active', 'coach_my_bookings',
 ];
 
 // Coach login name = coaches doc id = booking.coachName. Keep it Firestore-id
@@ -224,6 +224,7 @@ export default async function handler(req, res) {
     case 'coach_create':           return handleCoachCreate(res, session, body);
     case 'coach_list':             return handleCoachList(res, session, body);
     case 'coach_set_active':       return handleCoachSetActive(res, session, body);
+    case 'coach_my_bookings':      return handleCoachMyBookings(res, session, body);
     default:
       // Unreachable (VALID_ACTIONS gate above) — defensive.
       return res.status(400).json({ ok: false, error: `Unknown action "${action}"` });
@@ -1073,5 +1074,56 @@ async function handleCoachSetActive(res, session, body) {
   } catch (e) {
     console.error('[coach_set_active]', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to update coach' });
+  }
+}
+
+// coach_my_bookings — role coach (own schedule) or admin (pass coachId).
+// Returns a SCOPED view for the coach terminal only: date/time/customerName/
+// bookingType/lessonStatus/note. NEVER phone/lineUserId/slip/price/payment.
+async function handleCoachMyBookings(res, session, body) {
+  const isCoach = session.role === 'coach';
+  const isAdmin = requireRole(session, 'owner', 'ultra_admin', 'branch_manager', 'branch_staff');
+  if (!isCoach && !isAdmin) {
+    return res.status(403).json({ ok: false, error: 'Coach or admin only' });
+  }
+  const coachId = isCoach ? session.name : (typeof body.coachId === 'string' ? body.coachId.trim() : '');
+  if (!coachId) {
+    return res.status(400).json({ ok: false, error: 'coachId required' });
+  }
+
+  const db = getDbOr500(res); if (!db) return;
+  const nowBkk  = new Date(Date.now() + 7 * 3600 * 1000);
+  const today   = nowBkk.toISOString().slice(0, 10);
+  const horizon = new Date(nowBkk.getTime() + 60 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+  try {
+    // Single-field date range (no composite index). coachId + branch filtered in memory.
+    const snap = await db.collection('bookings')
+      .where('date', '>=', today).where('date', '<=', horizon).get();
+    const items = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(b => b.coachId === coachId)
+      .filter(b => b.bookingStatus !== 'cancelled')
+      .filter(b => hasBranchAccess(session, resolveBranchId(b)));
+
+    const bookings = items.map(b => ({
+      id:               b.id,
+      bookingCode:      b.bookingCode ?? null,
+      date:             b.date ?? null,
+      startTime:        b.startTime ?? null,
+      endTime:          b.endTime ?? null,
+      customerName:     b.customerName ?? '',
+      bookingType:      b.bookingType ?? null,
+      lessonStatus:     b.lessonStatus ?? 'assigned',
+      lessonNote:       typeof b.lessonNote === 'string' ? b.lessonNote : '',
+      coachCheckedInAt: b.coachCheckedInAt?.toMillis?.() ?? null,
+      coachCompletedAt: b.coachCompletedAt?.toMillis?.() ?? null,
+      coachNoShowAt:    b.coachNoShowAt?.toMillis?.() ?? null,
+    })).sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
+
+    return res.status(200).json({ ok: true, coachId, today, bookings });
+  } catch (e) {
+    console.error('[coach_my_bookings]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to load schedule' });
   }
 }

@@ -247,7 +247,7 @@ export default async function handler(req, res) {
   // ── Route by operation ────────────────────────────────────────────
   const operation = body.operation || 'accounting_edit';
 
-  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach'];
+  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach', 'coach_lesson_update'];
   if (!VALID_OPERATIONS.includes(operation)) {
     return res.status(400).json({ ok: false, error: `Invalid operation. Must be one of: ${VALID_OPERATIONS.join(', ')}.` });
   }
@@ -352,6 +352,9 @@ export default async function handler(req, res) {
   }
   if (operation === 'assign_coach') {
     return handleAssignCoach({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+  }
+  if (operation === 'coach_lesson_update') {
+    return handleCoachLessonUpdate({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
   }
   return handleMarkPaid({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
 }
@@ -1441,4 +1444,71 @@ async function handleAssignCoach({ res, adminName, session, db, booking, booking
     after:  { coachId: rawId, coachName: coachDisplay, lessonStatus: 'assigned' },
   });
   return res.status(200).json({ ok: true, coachId: rawId, coachName: coachDisplay });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handleCoachLessonUpdate — coach (owns the booking) or admin updates the
+// lesson lifecycle: check_in / complete / no_show / note. Tracks a SEPARATE
+// `lessonStatus` field — NEVER touches bookingStatus/paymentStatus.
+// ════════════════════════════════════════════════════════════════════
+async function handleCoachLessonUpdate({ res, session, db, booking, bookingRef, bookingId, body }) {
+  const isCoach = session.role === 'coach';
+  const isAdmin = requireRole(session, 'owner', 'ultra_admin', 'branch_manager', 'branch_staff');
+  if (!isCoach && !isAdmin) {
+    return res.status(403).json({ ok: false, error: 'Coach or admin only' });
+  }
+  // A coach may only act on bookings assigned to them.
+  if (isCoach && booking.coachId !== session.name) {
+    return res.status(403).json({ ok: false, error: 'This booking is not assigned to you' });
+  }
+  if (!hasBranchAccess(session, resolveBranchId(booking))) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
+  }
+  if (!booking.coachId) {
+    return res.status(409).json({ ok: false, error: 'No coach assigned to this booking' });
+  }
+  if (booking.bookingStatus === 'cancelled') {
+    return res.status(409).json({ ok: false, error: 'Booking is cancelled' });
+  }
+
+  const { lessonAction } = body;
+  const VALID = ['check_in', 'complete', 'no_show', 'note'];
+  if (!VALID.includes(lessonAction)) {
+    return res.status(400).json({ ok: false, error: `Invalid lessonAction. Must be one of: ${VALID.join(', ')}` });
+  }
+  const hasNote = typeof body.lessonNote === 'string';
+  const note    = hasNote ? body.lessonNote.slice(0, 500) : undefined;
+  if (lessonAction === 'note' && !hasNote) {
+    return res.status(400).json({ ok: false, error: 'lessonNote is required for the note action' });
+  }
+
+  const update = {
+    lessonUpdatedAt: FieldValue.serverTimestamp(),
+    lessonUpdatedBy: session.name,
+    updatedAt:       FieldValue.serverTimestamp(),
+  };
+  if (note !== undefined) update.lessonNote = note;
+
+  // Status actions set lessonStatus + a timestamp — NEVER bookingStatus/paymentStatus.
+  if (lessonAction !== 'note') {
+    const statusMap = { check_in: 'checked_in', complete: 'completed', no_show: 'no_show' };
+    const tsMap     = { check_in: 'coachCheckedInAt', complete: 'coachCompletedAt', no_show: 'coachNoShowAt' };
+    update.lessonStatus     = statusMap[lessonAction];
+    update[tsMap[lessonAction]] = FieldValue.serverTimestamp();
+  }
+
+  try {
+    await bookingRef.update(update);
+  } catch (e) {
+    console.error('[coach_lesson_update] write:', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to update lesson' });
+  }
+
+  await writeAuditLog(db, {
+    actor: session.name, actorRole: session.role, branchId: resolveBranchId(booking),
+    action: 'coach_lesson_update', targetId: bookingId,
+    before: { lessonStatus: booking.lessonStatus ?? null },
+    after:  { lessonAction, lessonStatus: update.lessonStatus ?? booking.lessonStatus ?? null },
+  });
+  return res.status(200).json({ ok: true, lessonStatus: update.lessonStatus ?? booking.lessonStatus ?? null });
 }
