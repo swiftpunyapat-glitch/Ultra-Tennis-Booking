@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHmac, timingSafeEqual, scryptSync, randomBytes, createHash } from 'crypto';
 
 const COOKIE = 'adminSession';
 
@@ -112,7 +112,64 @@ export function verifySession(req) {
     name:     data.name,
     role:     ROLES.includes(data.role) ? data.role : legacyRole(data.name),
     branches: data.branches === ALL_BRANCHES || Array.isArray(data.branches) ? data.branches : ALL_BRANCHES,
+    sv:       typeof data.sv === 'number' ? data.sv : null,   // coach session version (Coach 2A)
   };
+}
+
+// ── Coach credential crypto (Coach 2A) ─────────────────────────────
+// PINs are low-entropy → hash with scrypt + per-PIN salt + a server pepper so
+// a DB leak alone can't brute-force them. No plaintext PIN is ever stored.
+function pepper() {
+  return process.env.COACH_PIN_PEPPER || process.env.ADMIN_SESSION_SECRET || '';
+}
+
+// Returns "saltHex:hashHex". Verify with verifyPin.
+export function hashPin(pin) {
+  const salt = randomBytes(16).toString('hex');
+  const hash = scryptSync(String(pin), salt + pepper(), 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+export function verifyPin(pin, stored) {
+  if (typeof stored !== 'string' || !stored.includes(':')) return false;
+  const [salt, hash] = stored.split(':');
+  if (!salt || !hash) return false;
+  let derived;
+  try { derived = scryptSync(String(pin), salt + pepper(), 64).toString('hex'); }
+  catch { return false; }
+  const a = Buffer.from(derived, 'hex'), b = Buffer.from(hash, 'hex');
+  if (a.length !== b.length) return false;
+  try { return timingSafeEqual(a, b); } catch { return false; }
+}
+
+// One-time setup/reset code — 8 chars from an unambiguous alphabet.
+export function randomResetCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/O/0/1
+  const bytes = randomBytes(8);
+  let out = '';
+  for (let i = 0; i < 8; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+export function hashResetCode(code) {
+  return createHash('sha256').update(String(code).toUpperCase() + pepper()).digest('hex');
+}
+export function verifyResetCode(code, storedHash) {
+  if (typeof storedHash !== 'string' || !storedHash) return false;
+  const a = Buffer.from(hashResetCode(code), 'hex'), b = Buffer.from(storedHash, 'hex');
+  if (a.length !== b.length) return false;
+  try { return timingSafeEqual(a, b); } catch { return false; }
+}
+
+// Coach session cookie — role fixed 'coach', carries branches + sessionVersion (sv).
+export function createCoachSessionCookie(coachId, branches, sessionVersion) {
+  const hours = Math.max(1, parseInt(process.env.ADMIN_SESSION_HOURS ?? '24', 10));
+  const exp   = Date.now() + hours * 3_600_000;
+  const br    = branches === ALL_BRANCHES || (Array.isArray(branches) && branches.length)
+    ? branches : [DEFAULT_BRANCH_ID];
+  const payload = Buffer.from(JSON.stringify({
+    name: coachId, role: 'coach', branches: br, sv: Number(sessionVersion) || 1, exp,
+  })).toString('base64url');
+  const sig = sign(payload);
+  return `${COOKIE}=${payload}.${sig}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${hours * 3600}`;
 }
 
 // Back-compat wrapper: returns the admin name string (or null).
