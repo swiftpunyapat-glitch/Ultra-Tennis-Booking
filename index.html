@@ -570,7 +570,7 @@
         <div class="crow">
           <div>
             <div class="eyebrow" data-i18n="total">Total</div>
-            <h2 id="bkPrice">฿350</h2>
+            <h2 id="bkPrice">฿—</h2>
             <p id="bkNote2">Payment due within 15 minutes.</p>
           </div>
           <button class="btn-go" id="confirmBkBtn" disabled data-i18n="confirmBooking">Confirm Booking</button>
@@ -932,6 +932,8 @@ const I18N = {
     total:"ยอดชำระ",
     paymentDue:"กรุณาชำระเงินภายใน 15 นาที",
     confirmBooking:"ยืนยันการจอง",
+    confirmUsePass:"ยืนยันใช้ Pass",
+    calculatingPrice:"กำลังคำนวณราคา...",
     cancelBooking:"ยกเลิกการจอง",
     cancelConfirm:"ต้องการยกเลิกการจองนี้ใช่ไหม? เวลาที่จองไว้จะถูกปล่อยคืนทันที",
     cancelling:"กำลังยกเลิก...",
@@ -1065,6 +1067,8 @@ const I18N = {
     total:"Total",
     paymentDue:"Payment due within 15 minutes.",
     confirmBooking:"Confirm Booking",
+    confirmUsePass:"Confirm with Pass",
+    calculatingPrice:"Calculating price...",
     cancelBooking:"Cancel Booking",
     cancelConfirm:"Cancel this booking? Your held time slot will be released immediately.",
     cancelling:"Cancelling...",
@@ -1501,6 +1505,7 @@ function setupNav() {
       updateBookingConfirmBtn();
       // Update price display
       updateBookingPriceNote();
+      refreshQuote();
     });
   });
 }
@@ -1823,6 +1828,7 @@ function buildDates() {
       $("timeGrid").innerHTML=`<p class="tloading">${t("loading")}</p>`;
       await loadSlotsAndRender(getSelectedDateISO());
       updateBookingConfirmBtn();
+      refreshQuote();
     });
     strip.append(btn);
   }
@@ -1886,6 +1892,7 @@ function renderTimes() {
       updatePaymentTypeButtons();
       updateBookingConfirmBtn();
       updateBookingPriceNote();
+      refreshQuote();
     });
     grid.append(btn);
     if(!reason) avail++;
@@ -1995,14 +2002,58 @@ function updatePaymentTypeButtons() {
   updateBookingPriceNote();
 }
 
+// ── Server price quote (Pricing v2) — dynamic price on confirm button / note ──
+// The frontend NEVER decides the charged price (server booking_create recalcs);
+// this quote is DISPLAY-ONLY. latestQuote is kept only while it matches the
+// current date/startTime/payType/voucher context (race-safe against fast clicks).
+let latestQuote = null;    // { key, quote } | { key, failed:true } | null
+let quoteInFlight = null;  // key currently being fetched
+
+function currentQuoteKey(){
+  const date      = getSelectedDateISO();
+  const startTime = state.time || "";
+  const payType   = state.bookingPaymentType;
+  const voucher   = ($("bkVoucher")?.value || "").trim().toUpperCase();
+  return { date, startTime, payType, voucher, key:`${date}|${startTime}|${payType}|${voucher}` };
+}
+
+async function refreshQuote(){
+  const ctx = currentQuoteKey();
+  // Only single-use gets a server quote (passes are ฿0 / no QR).
+  if (ctx.payType !== "single" || !ctx.date || !ctx.startTime){
+    latestQuote = null; quoteInFlight = null;
+    updateBookingConfirmBtn(); updateBookingPriceNote();
+    return;
+  }
+  quoteInFlight = ctx.key;
+  updateBookingConfirmBtn(); updateBookingPriceNote();   // show "calculating…"
+  try{
+    const res = await fetch("/api/booking", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ action:"price_quote", date:ctx.date, startTime:ctx.startTime, payType:"single", voucherCode:ctx.voucher||undefined, lineUserId:state.lineProfile.userId }),
+    });
+    const d = await res.json().catch(()=>({}));
+    if (currentQuoteKey().key !== ctx.key) return;   // context changed → discard stale
+    latestQuote = (res.ok && d.ok && d.quote) ? { key:ctx.key, quote:d.quote } : { key:ctx.key, failed:true };
+  }catch(e){
+    if (currentQuoteKey().key === ctx.key) latestQuote = { key:ctx.key, failed:true };
+  }finally{
+    if (currentQuoteKey().key === ctx.key){ quoteInFlight = null; updateBookingConfirmBtn(); updateBookingPriceNote(); }
+  }
+}
+
 function updateBookingPriceNote(){
   if(!$("bkPrice")||!$("bkNote2")) return;
   if(state.bookingPaymentType==="single"){
-    const isLN=state.time && isLateNightHour(parseInt(state.time,10));
-    const promo = getPromoState();
-    const price = isLN ? LATE_NIGHT_PRICE : (promo.active ? promo.price : 350);
-    $("bkPrice").textContent=`฿${price}`;
-    $("bkNote2").textContent=t("paymentDue");
+    const ctx = currentQuoteKey();
+    if (quoteInFlight === ctx.key){
+      $("bkPrice").textContent = t("calculatingPrice");
+    } else if (latestQuote && latestQuote.key === ctx.key && latestQuote.quote){
+      $("bkPrice").textContent = `฿${Number(latestQuote.quote.finalPrice).toLocaleString("en-US")}`;
+    } else {
+      $("bkPrice").textContent = "฿—";
+    }
+    $("bkNote2").textContent = t("paymentDue");
   } else {
     $("bkPrice").textContent="฿0 (Pass)";
     if(state.bookingPaymentType==="ultra" && state.eligibility.ultraPkg) {
@@ -2016,8 +2067,26 @@ function updateBookingPriceNote(){
 }
 
 function updateBookingConfirmBtn() {
-  $("confirmBkBtn").disabled = !state.time;
+  const btn = $("confirmBkBtn");
+  if(!btn) return;
+  btn.disabled = !state.time;
+  const payType = state.bookingPaymentType;
+  if (payType !== "single"){
+    btn.textContent = (payType==="ultra"||payType==="offpeak"||payType==="event") ? t("confirmUsePass") : t("confirmBooking");
+    return;
+  }
+  const ctx = currentQuoteKey();
+  if (quoteInFlight === ctx.key){ btn.textContent = t("calculatingPrice"); return; }
+  if (latestQuote && latestQuote.key === ctx.key && latestQuote.quote){
+    btn.textContent = `${t("confirmBooking")} · ฿${Number(latestQuote.quote.finalPrice).toLocaleString("en-US")}`;
+    return;
+  }
+  btn.textContent = t("confirmBooking");
 }
+
+// Voucher code changes re-quote (debounced) so the confirm button reflects ฿300.
+let _voucherQuoteTimer=null;
+$("bkVoucher")?.addEventListener("input", ()=>{ clearTimeout(_voucherQuoteTimer); _voucherQuoteTimer=setTimeout(refreshQuote, 400); });
 
 // Pricing v2 Stage 2: try the server-authoritative create for a single-use
 // booking. Returns true (success, payment screen shown), "handled" (a legit
@@ -2367,7 +2436,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
   } catch(e){
     console.error(e); showToast(e.message||t("bookingFailed"),true);
   } finally {
-    btn.disabled=false; btn.textContent=t("confirmBooking");
+    btn.disabled=false; updateBookingConfirmBtn();   // restore dynamic price/label
   }
 });
 
