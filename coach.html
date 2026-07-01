@@ -78,6 +78,23 @@
     <input id="liPin" type="password" inputmode="numeric" placeholder="PIN" autocomplete="current-password"/>
     <div class="err" id="liErr"></div>
     <button id="liBtn">เข้าสู่ระบบ</button>
+    <button id="toSetup" style="background:none;border:none;color:var(--brand);font-weight:700;font-size:.82rem;cursor:pointer;margin-top:2px">🔑 ตั้ง / รีเซ็ต PIN ครั้งแรก</button>
+  </div>
+
+  <!-- SETUP PIN -->
+  <div id="setupView" class="login hidden">
+    <div class="logo" style="justify-content:center;color:var(--brand)">
+      <div class="mark">🔑</div>
+      <div><div class="name" style="color:var(--brand)">ตั้ง / รีเซ็ต PIN</div><div class="sub" style="color:var(--muted)">Courtline Academy</div></div>
+    </div>
+    <p>ใช้โค้ดที่ได้รับจากแอดมิน + ตั้ง PIN 6 หลักของคุณเอง</p>
+    <input id="suName" type="text" placeholder="ชื่อโค้ช (login name)" autocomplete="username"/>
+    <input id="suCode" type="text" placeholder="โค้ดจากแอดมิน" autocomplete="one-time-code" style="text-transform:uppercase"/>
+    <input id="suPin" type="password" inputmode="numeric" maxlength="6" placeholder="PIN ใหม่ (6 หลัก)"/>
+    <input id="suPin2" type="password" inputmode="numeric" maxlength="6" placeholder="ยืนยัน PIN อีกครั้ง"/>
+    <div class="err" id="suErr"></div>
+    <button id="suBtn">บันทึก PIN</button>
+    <button id="toLogin" style="background:none;border:none;color:var(--muted);font-weight:700;font-size:.82rem;cursor:pointer;margin-top:2px">← กลับหน้าเข้าสู่ระบบ</button>
   </div>
 
   <!-- APP -->
@@ -131,11 +148,35 @@ async function boot(){
   if(s && isCoachOrAdmin(s.role)){ me = s; showApp(); }
   else showLogin();
 }
-function showLogin(){ $("appView").classList.add("hidden"); $("loginView").classList.remove("hidden"); }
+function showLogin(){ $("appView").classList.add("hidden"); $("setupView").classList.add("hidden"); $("loginView").classList.remove("hidden"); }
+function showSetup(){ $("appView").classList.add("hidden"); $("loginView").classList.add("hidden"); $("setupView").classList.remove("hidden"); $("suErr").textContent=""; }
 function showApp(){
-  $("loginView").classList.add("hidden"); $("appView").classList.remove("hidden");
+  $("loginView").classList.add("hidden"); $("setupView").classList.add("hidden"); $("appView").classList.remove("hidden");
   $("whoName").textContent = me.name + (me.role!=="coach" ? ` (${me.role})` : "");
   loadSchedule();
+}
+
+// ── Setup / reset PIN ───────────────────────────────────────────────
+$("toSetup").addEventListener("click", ()=>{ $("suName").value = $("liName").value.trim(); showSetup(); });
+$("toLogin").addEventListener("click", showLogin);
+$("suBtn").addEventListener("click", doSetPin);
+$("suPin2").addEventListener("keydown", e=>{ if(e.key==="Enter") doSetPin(); });
+async function doSetPin(){
+  const coachId=$("suName").value.trim(), code=$("suCode").value.trim().toUpperCase(), pin=$("suPin").value, pin2=$("suPin2").value;
+  $("suErr").textContent="";
+  if(!coachId||!code){ $("suErr").textContent="กรอกชื่อและโค้ด"; return; }
+  if(!/^\d{6}$/.test(pin)){ $("suErr").textContent="PIN ต้องเป็นตัวเลข 6 หลัก"; return; }
+  if(pin!==pin2){ $("suErr").textContent="PIN ไม่ตรงกัน"; return; }
+  $("suBtn").disabled=true; $("suBtn").textContent="กำลังบันทึก...";
+  try{
+    const r=await fetch(API_OPS,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_set_pin",coachId,code,newPin:pin})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok){ $("suErr").textContent=d.error||"ตั้ง PIN ไม่สำเร็จ"; return; }
+    toast("✓ ตั้ง PIN สำเร็จ เข้าสู่ระบบได้เลย");
+    $("suCode").value=""; $("suPin").value=""; $("suPin2").value="";
+    $("liName").value=coachId; showLogin();
+  }catch(e){ $("suErr").textContent="เครือข่ายมีปัญหา"; }
+  finally{ $("suBtn").disabled=false; $("suBtn").textContent="บันทึก PIN"; }
 }
 
 // ── Login ───────────────────────────────────────────────────────────

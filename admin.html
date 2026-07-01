@@ -1342,9 +1342,27 @@ async function renderCoachTab(){
           <div style="font-weight:800;font-size:.85rem">${esc(c.displayName||c.name)} ${active?'':'<span style="color:var(--m);font-weight:400">(inactive)</span>'}</div>
           <div style="font-size:.7rem;color:var(--m)">login: ${esc(c.name)} · branch: ${esc(c.branchId||"ladprao1")}</div>
         </div>
-        <button class="smbtn ${active?'':'smg'}" data-coach-toggle="${esc(c.id)}" data-coach-active="${active?'1':'0'}" style="padding:6px 12px;font-size:.75rem">${active?'Deactivate':'Activate'}</button>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          ${active?`<button class="smbtn" data-coach-reset="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#1e2f4d;color:#8fb8ff;border:1px solid #2d4a7a">🔑 Reset PIN</button>`:''}
+          <button class="smbtn ${active?'':'smg'}" data-coach-toggle="${esc(c.id)}" data-coach-active="${active?'1':'0'}" style="padding:6px 12px;font-size:.75rem">${active?'Deactivate':'Activate'}</button>
+        </div>
       </div>`;
     }).join("");
+    box.querySelectorAll("[data-coach-reset]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        const coachId = btn.dataset.coachReset;
+        if(!confirm(`สร้างโค้ดตั้ง/รีเซ็ต PIN สำหรับ ${coachId}?\n(โค้ดเดิมและ session เดิมจะใช้ไม่ได้หลังโค้ชตั้ง PIN ใหม่)`)) return;
+        btn.disabled=true;
+        try{
+          const res = await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_reset_code",coachId})});
+          const data = await res.json().catch(()=>({}));
+          if(!res.ok||!data.ok){ showToast(data.error||"Failed.",true); btn.disabled=false; return; }
+          window.prompt(`โค้ดตั้ง/รีเซ็ต PIN ของ ${coachId} — หมดอายุใน ${data.expiresInMinutes} นาที\n\nให้โค้ชเปิด /coach.html → "ตั้ง/รีเซ็ต PIN" แล้วกรอกโค้ดนี้ (คัดลอกได้):`, data.code);
+          showToast("สร้างโค้ดแล้ว");
+        }catch(e){ console.error(e); showToast("Failed.",true); }
+        finally{ btn.disabled=false; }
+      });
+    });
     box.querySelectorAll("[data-coach-toggle]").forEach(btn=>{
       btn.addEventListener("click", async ()=>{
         const coachId = btn.dataset.coachToggle;
