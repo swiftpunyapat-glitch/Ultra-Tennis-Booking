@@ -39,6 +39,18 @@ const VALID_ACTIONS = [
   'dashboard',
   'audit_log_write', 'audit_log_list',
   'slot_bulk_set', 'slot_close_unbooked', 'slot_toggle', 'holiday_set',
+  'auth_metric',
+  'coach_create', 'coach_list', 'coach_set_active',
+];
+
+// Coach login name = coaches doc id = booking.coachName. Keep it Firestore-id
+// safe (no '/') and human-typeable.
+const COACH_NAME_RE = /^[a-zA-Z0-9ก-๙ _.\-]{1,60}$/;
+
+// Phase 2 Stage-0 adoption counters (public, no token/PII — counts only).
+const AUTH_METRIC_EVENTS = [
+  'auth_attempt', 'auth_success', 'auth_skip_no_id_token',
+  'auth_failed', 'uid_match_true', 'uid_match_false',
 ];
 
 const INCIDENT_SEVERITIES = ['low', 'medium', 'high', 'critical'];
@@ -182,9 +194,12 @@ export default async function handler(req, res) {
     return res.status(400).json({ ok: false, error: `Unknown action "${action}". Valid actions: ${VALID_ACTIONS.join(', ')}` });
   }
 
-  // ── Public action (no admin session) ──────────────────────────────
+  // ── Public actions (no admin session) ─────────────────────────────
   if (action === 'rating_submit') {
     return handleRatingSubmit(req, res, body);
+  }
+  if (action === 'auth_metric') {
+    return handleAuthMetric(req, res, body);
   }
 
   // ── Everything else requires a valid admin session ─────────────────
@@ -206,6 +221,9 @@ export default async function handler(req, res) {
     case 'slot_close_unbooked':    return handleSlotCloseUnbooked(res, session, body);
     case 'slot_toggle':            return handleSlotToggle(res, session, body);
     case 'holiday_set':            return handleHolidaySet(res, session, body);
+    case 'coach_create':           return handleCoachCreate(res, session, body);
+    case 'coach_list':             return handleCoachList(res, session, body);
+    case 'coach_set_active':       return handleCoachSetActive(res, session, body);
     default:
       // Unreachable (VALID_ACTIONS gate above) — defensive.
       return res.status(400).json({ ok: false, error: `Unknown action "${action}"` });
@@ -933,5 +951,127 @@ async function handleHolidaySet(res, session, body) {
   } catch (e) {
     console.error('[holiday_set]', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to save holiday' });
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// auth_metric — PUBLIC. Phase 2 Stage-0 adoption counters.
+// Increments per-event counts on auth_metrics/{Bangkok-YYYY-MM-DD}. Stores
+// COUNTS ONLY — never an id_token, custom token, or lineUserId. Fire-and-forget
+// from the client; always 200 so it can never disturb the customer flow.
+// ════════════════════════════════════════════════════════════════════
+async function handleAuthMetric(req, res, body) {
+  const event = typeof body.event === 'string' ? body.event : '';
+  if (!AUTH_METRIC_EVENTS.includes(event)) {
+    return res.status(400).json({ ok: false, error: 'Invalid metric event' });
+  }
+  const db = getDbOr500(res); if (!db) return;
+  // Bangkok day (UTC+7) so counts bucket by local business day.
+  const dayKey = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+  try {
+    await db.collection('auth_metrics').doc(dayKey).set({
+      [event]:   FieldValue.increment(1),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (e) {
+    // Never disturb the client's fire-and-forget — log and acknowledge anyway.
+    console.warn('[auth_metric] increment failed:', e.message);
+  }
+  return res.status(200).json({ ok: true });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Coaches (admin-managed registry). coaches/{name} — doc id = login name =
+// booking.coachName. Coach LOGIN credential lives in ADMIN_USERS_JSON (env);
+// this collection is only the assignable/display registry. Server-only
+// (client catch-all deny). No finance/commission writes in MVP.
+// ════════════════════════════════════════════════════════════════════
+
+// coach_create — branch_manager and above.
+async function handleCoachCreate(res, session, body) {
+  if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+  const name        = typeof body.name === 'string' ? body.name.trim() : '';
+  const displayName = typeof body.displayName === 'string' ? body.displayName.trim() : '';
+  const branchId    = typeof body.branchId === 'string' && body.branchId ? body.branchId : DEFAULT_BRANCH_ID;
+  if (!COACH_NAME_RE.test(name)) {
+    return res.status(400).json({ ok: false, error: 'name must be 1-60 chars (letters/Thai/digits/space . _ -), no "/"' });
+  }
+  if (!hasBranchAccess(session, branchId)) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
+  }
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    const ref  = db.collection('coaches').doc(name);
+    const snap = await ref.get();
+    if (snap.exists) {
+      return res.status(409).json({ ok: false, error: `Coach "${name}" already exists` });
+    }
+    await ref.set({
+      name,
+      displayName: displayName || name,
+      branchId,
+      active:         true,
+      commissionRate: null,   // reserved for Coach Phase 3
+      createdBy:      session.name,
+      createdAt:      FieldValue.serverTimestamp(),
+      updatedAt:      FieldValue.serverTimestamp(),
+    });
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId,
+      action: 'coach_create', targetId: `coaches/${name}`,
+      after: { name, branchId, active: true },
+    });
+    return res.status(200).json({ ok: true, coachId: name });
+  } catch (e) {
+    console.error('[coach_create]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to create coach' });
+  }
+}
+
+// coach_list — any valid admin (used by the assign dropdown + Coach tab).
+// Partner-tier force-filtered to their own branches.
+async function handleCoachList(res, session, body) {
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    const snap = await db.collection('coaches').orderBy('name').get();
+    let items = snap.docs.map(d => ({ id: d.id, ...serializeFsDoc(d.data()) }));
+    items = filterToSessionBranches(session, items);
+    if (body.activeOnly === true) items = items.filter(c => c.active === true);
+    return res.status(200).json({ ok: true, coaches: items });
+  } catch (e) {
+    console.error('[coach_list]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to list coaches' });
+  }
+}
+
+// coach_set_active — branch_manager and above.
+async function handleCoachSetActive(res, session, body) {
+  if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+  const coachId = typeof body.coachId === 'string' ? body.coachId : '';
+  const active  = body.active === true;
+  if (!coachId) return res.status(400).json({ ok: false, error: 'Missing coachId' });
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    const ref  = db.collection('coaches').doc(coachId);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ ok: false, error: 'Coach not found' });
+    const coach = snap.data();
+    if (!hasBranchAccess(session, resolveBranchId(coach))) {
+      return res.status(403).json({ ok: false, error: 'No access to this branch' });
+    }
+    await ref.update({ active, updatedAt: FieldValue.serverTimestamp() });
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: resolveBranchId(coach),
+      action: 'coach_set_active', targetId: `coaches/${coachId}`,
+      before: { active: coach.active !== false }, after: { active },
+    });
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error('[coach_set_active]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to update coach' });
   }
 }

@@ -247,7 +247,7 @@ export default async function handler(req, res) {
   // ── Route by operation ────────────────────────────────────────────
   const operation = body.operation || 'accounting_edit';
 
-  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel'];
+  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach'];
   if (!VALID_OPERATIONS.includes(operation)) {
     return res.status(400).json({ ok: false, error: `Invalid operation. Must be one of: ${VALID_OPERATIONS.join(', ')}.` });
   }
@@ -349,6 +349,9 @@ export default async function handler(req, res) {
   }
   if (operation === 'reschedule_cancel') {
     return handleRescheduleCancel({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim() });
+  }
+  if (operation === 'assign_coach') {
+    return handleAssignCoach({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
   }
   return handleMarkPaid({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
 }
@@ -1347,4 +1350,95 @@ async function handleRescheduleCancel({ res, adminName, session, db, booking, bo
       date: origDate, startTime: origStart, endTime: origEnd,
     },
   });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handleAssignCoach — admin assigns (or clears) a coach on a booking.
+// Sets coachName/coachId + lessonStatus:"assigned". Does NOT touch
+// bookingStatus/paymentStatus. Coach actions on the lesson come later via
+// coach.html → coach_lesson_update (Coach Phase 2).
+// ════════════════════════════════════════════════════════════════════
+async function handleAssignCoach({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+  // Admin only — coaches cannot assign themselves.
+  if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+  if (!hasBranchAccess(session, resolveBranchId(booking))) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
+  }
+  if (booking.bookingStatus === 'cancelled') {
+    return res.status(409).json({ ok: false, error: 'Cannot assign a coach to a cancelled booking' });
+  }
+
+  // Input carries the STABLE coach id (= coaches doc id = login name).
+  // (Accept legacy `coachName` too for back-compat.)
+  const rawId = typeof body.coachId === 'string' ? body.coachId.trim()
+              : typeof body.coachName === 'string' ? body.coachName.trim() : '';
+
+  // ── Unassign (empty coachId) ───────────────────────────────────────
+  // Clear all coach fields. lessonStatus is cleared (never left "assigned").
+  if (!rawId) {
+    try {
+      await bookingRef.update({
+        coachId:         null,
+        coachName:       null,
+        lessonStatus:    null,
+        coachAssignedAt: null,
+        coachAssignedBy: null,
+        lessonUpdatedAt: FieldValue.serverTimestamp(),
+        updatedAt:       FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      console.error('[assign_coach] unassign:', e.message);
+      return res.status(500).json({ ok: false, error: 'Failed to unassign coach' });
+    }
+    await writeAuditLog(db, {
+      actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
+      action: 'assign_coach', targetId: bookingId,
+      before: { coachId: booking.coachId ?? null }, after: { coachId: null },
+    });
+    return res.status(200).json({ ok: true, coachId: null });
+  }
+
+  // ── Assign — coach must exist and be active ────────────────────────
+  let coach;
+  try {
+    const snap = await db.collection('coaches').doc(rawId).get();
+    if (!snap.exists) return res.status(404).json({ ok: false, error: `Coach "${rawId}" not found` });
+    coach = snap.data();
+  } catch (e) {
+    console.error('[assign_coach] read coach:', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to read coach' });
+  }
+  if (coach.active === false) {
+    return res.status(409).json({ ok: false, error: 'Coach is inactive' });
+  }
+
+  // coachId = stable id (doc id = login name); coachName = display name.
+  const coachDisplay = (typeof coach.displayName === 'string' && coach.displayName.trim())
+    ? coach.displayName.trim()
+    : rawId;
+
+  try {
+    await bookingRef.update({
+      coachId:         rawId,
+      coachName:       coachDisplay,
+      lessonStatus:    'assigned',
+      coachAssignedAt: FieldValue.serverTimestamp(),
+      coachAssignedBy: adminName,
+      lessonUpdatedAt: FieldValue.serverTimestamp(),
+      updatedAt:       FieldValue.serverTimestamp(),
+    });
+  } catch (e) {
+    console.error('[assign_coach] write:', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to assign coach' });
+  }
+
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
+    action: 'assign_coach', targetId: bookingId,
+    before: { coachId: booking.coachId ?? null },
+    after:  { coachId: rawId, coachName: coachDisplay, lessonStatus: 'assigned' },
+  });
+  return res.status(200).json({ ok: true, coachId: rawId, coachName: coachDisplay });
 }
