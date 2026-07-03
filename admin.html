@@ -738,9 +738,9 @@
         <div>
           <label>Booking Type</label>
           <select id="manType">
-            <option value="Manual Single Use">Manual Single Use (฿350)</option>
-            <option value="Paid Outside">Paid Outside (฿350)</option>
-            <option value="Pay at Counter">Pay at Counter (฿350)</option>
+            <option value="Manual Single Use">Manual Single Use</option>
+            <option value="Paid Outside">Paid Outside</option>
+            <option value="Pay at Counter">Pay at Counter</option>
             <option value="Ultra Pass Manual">Ultra Pass Manual (฿0)</option>
             <option value="Off-Peak Manual">Off-Peak Manual (฿0)</option>
           </select>
@@ -753,6 +753,10 @@
             <option value="package">package</option>
           </select>
         </div>
+      </div>
+      <div class="mfield">
+        <label>Price (฿) <span id="manPriceHint" style="font-weight:400;color:var(--m)"></span></label>
+        <input type="number" id="manPrice" min="0" step="1" placeholder="Auto-quoted from pricing rules"/>
       </div>
       <div class="mfield"><label>Note (optional)</label><input type="text" id="manNote" maxlength="500" placeholder="Any extra info"/></div>
       <p id="manHint" style="font-size:.72rem;color:var(--m);margin-top:4px"></p>
@@ -2963,6 +2967,18 @@ const MANUAL_PRICE = {
   "Manual Single Use":350, "Paid Outside":350, "Pay at Counter":350,
   "Ultra Pass Manual":0,   "Off-Peak Manual":0,
 };
+// Pricing v2: best-known hourly value for a booking. Prefer the price fields
+// stamped at creation over the flat 350 legacy default (mornings are 330/320,
+// late night 450). Used for accounting/mark-paid prefills only — the actual
+// charge always comes from the booking document itself.
+function bookingHourlyRate(b){
+  const dur = Math.max(1, calcBookingDuration(b) || 1);
+  for(const c of [b?.basePrice, b?.originalPrice, b?.effectivePrice, b?.price]){
+    const n = Number(c);
+    if(Number.isFinite(n) && n > 0) return Math.round(n / dur);
+  }
+  return 350;
+}
 const MANUAL_PACKAGE_TYPES=new Set(["Ultra Pass Manual","Off-Peak Manual"]);
 function manualPaymentStatusForType(bookingType){
   if(MANUAL_PACKAGE_TYPES.has(bookingType)) return "package";
@@ -3000,7 +3016,11 @@ function openManualModal(prefillDate,prefillTime){
   $("manHint").textContent="";
   $("manConfirm").disabled=false;
   $("manConfirm").textContent="Save Manual Booking";
+  manPriceDirty=false;
+  $("manPrice").value=MANUAL_PRICE["Manual Single Use"];
+  $("manPriceHint").textContent="";
   syncManualPaymentStatus();
+  refreshManualPrice();
   $("manModal").style.display="flex";
 }
 function closeManualModal(){ $("manModal").style.display="none"; }
@@ -3008,6 +3028,49 @@ $("manClose").addEventListener("click",closeManualModal);
 $("manCancel").addEventListener("click",closeManualModal);
 $("manModal").addEventListener("click",e=>{ if(e.target===$("manModal")) closeManualModal(); });
 $("manType").addEventListener("change",syncManualPaymentStatus);
+
+// ── Manual booking price: server-quoted (Pricing v2) ──────────────────
+// Prefill from /api/booking price_quote so morning (330/320), late-night (450)
+// and active promos land in the books at the real price. Admin can override by
+// typing — once edited, the quote stops fighting them until the modal reopens.
+let manPriceDirty=false, manQuoteSeq=0;
+$("manPrice").addEventListener("input",()=>{ manPriceDirty=true; $("manPriceHint").textContent="(manual override)"; });
+async function refreshManualPrice(){
+  const type=$("manType").value;
+  if(MANUAL_PACKAGE_TYPES.has(type)){
+    $("manPrice").value=0; $("manPrice").disabled=true;
+    $("manPriceHint").textContent="(package — ฿0)";
+    return;
+  }
+  $("manPrice").disabled=false;
+  if(manPriceDirty) return;
+  const date=$("manDate").value, time=$("manTime").value;
+  if(!date||!time) return;
+  const seq=++manQuoteSeq;
+  $("manPriceHint").textContent="(quoting…)";
+  try{
+    const res=await fetch("/api/booking",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ action:"price_quote", date, startTime:time, payType:"single" }),
+    });
+    const d=await res.json().catch(()=>({}));
+    if(seq!==manQuoteSeq||manPriceDirty) return; // stale response / admin typed meanwhile
+    if(d.ok&&d.quote){
+      $("manPrice").value=Number(d.quote.finalPrice)||MANUAL_PRICE[type]||350;
+      $("manPriceHint").textContent=`(${d.quote.pricingType})`;
+    }else{
+      $("manPrice").value=MANUAL_PRICE[type]??350;
+      $("manPriceHint").textContent="(quote failed — standard rate)";
+    }
+  }catch(_){
+    if(seq!==manQuoteSeq||manPriceDirty) return;
+    $("manPrice").value=MANUAL_PRICE[type]??350;
+    $("manPriceHint").textContent="(offline — standard rate)";
+  }
+}
+$("manDate").addEventListener("change",refreshManualPrice);
+$("manTime").addEventListener("change",refreshManualPrice);
+$("manType").addEventListener("change",refreshManualPrice);
 
 // Debounced phone history lookup (350ms, min 4 digits)
 let manPhoneTimer=null;
@@ -3085,7 +3148,13 @@ $("manConfirm").addEventListener("click",async()=>{
   const endTime=fEnd(startH);
   const code=genManualCode();
   const adminName=currentAdminName||"admin";
-  const price=MANUAL_PRICE[bookingType] ?? 350;
+  // Pricing v2: price comes from the (server-quoted, admin-editable) field —
+  // package types are always ฿0 regardless of what the disabled input holds.
+  const priceRaw=$("manPrice").value;
+  const price=MANUAL_PACKAGE_TYPES.has(bookingType)?0:Math.max(0,Number(priceRaw));
+  if(!MANUAL_PACKAGE_TYPES.has(bookingType)&&(priceRaw===""||!Number.isFinite(Number(priceRaw)))){
+    $("manPrice").focus(); showToast("Price required.",true); return;
+  }
   const slotId=`${RESOURCE_ID}_${date}_${time.replace(":","")}`;
   const slotRef=doc(db,"booking_slots",slotId);
   const availRef=doc(db,"available_slots",slotId);
@@ -3468,7 +3537,7 @@ function openMarkPaidModal(b){
   markPaidBooking=b;
   $("mpCode").textContent=b.bookingCode||"—";
   $("mpCustInfo").textContent=`${b.customerName||"—"} · ${b.date||"—"} ${b.startTime||"—"}–${b.endTime||"—"} · ฿${Number(b.price)||0}`;
-  $("mpAmount").value=Number(b.price)>0?Number(b.price):350;
+  $("mpAmount").value=Number(b.price)>0?Number(b.price):Math.round(calcBookingDuration(b)*bookingHourlyRate(b));
   $("mpMethod").value="cash";
   $("mpNote").value="";
   $("mpConfirmBtn").disabled=false;
@@ -3744,7 +3813,7 @@ function syncAcctModal(){
     $("acctPrice").value=Math.round(dur*295);
   }else if(type==="influencer_free"){
     priceField.style.display="none";infField.style.display="";
-    if(!$("acctInfluencerAmt").value) $("acctInfluencerAmt").value=Math.round(dur*350);
+    if(!$("acctInfluencerAmt").value) $("acctInfluencerAmt").value=Math.round(dur*bookingHourlyRate(acctBooking));
   }else{
     priceField.style.display="none";infField.style.display="none";
   }
@@ -3766,7 +3835,7 @@ function buildAcctPreview(type,dur){
     case "rejected":         return `→ paymentStatus: rejected · bookingStatus: cancelled (forced)`;
     case "ultra_pass_1":     return `→ package · Ultra Pass 1 · usageValue: ฿${Math.round(dur*310)} (${dur}hr × ฿310)`;
     case "ultra_pass_2":     return `→ package · Ultra Pass 2 · usageValue: ฿${Math.round(dur*295)} (${dur}hr × ฿295)`;
-    case "influencer_free":  return `→ package · Influencer Free · Marketing expense: ฿${$("acctInfluencerAmt").value||Math.round(dur*350)}`;
+    case "influencer_free":  return `→ package · Influencer Free · Marketing expense: ฿${$("acctInfluencerAmt").value||Math.round(dur*bookingHourlyRate(acctBooking))}`;
     default: return "";
   }
 }
@@ -3778,8 +3847,8 @@ function openAcctModal(b){
   $("acctCurrentState").textContent=`Current: bookingStatus=${b.bookingStatus||"—"} · paymentStatus=${b.paymentStatus||"—"} · type=${b.bookingType||"—"} · ฿${Number(b.price)||0}`;
   $("acctBookingStatus").value=b.bookingStatus||"confirmed";
   $("acctType").value=inferAccountingType(b);
-  $("acctPrice").value=Number(b.price)||350;
-  $("acctInfluencerAmt").value=Number(b.influencerExpenseAmount)||Math.round(calcBookingDuration(b)*350);
+  $("acctPrice").value=Number(b.price)||Math.round(calcBookingDuration(b)*bookingHourlyRate(b));
+  $("acctInfluencerAmt").value=Number(b.influencerExpenseAmount)||Math.round(calcBookingDuration(b)*bookingHourlyRate(b));
   $("acctReason").value="";
   $("acctPreview").textContent="";
   $("acctConfirm").disabled=false;
