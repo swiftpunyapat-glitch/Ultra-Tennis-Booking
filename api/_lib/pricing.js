@@ -86,7 +86,11 @@ export function computeQuote(input) {
   const advanceHoursRaw = Number.isFinite(startMs) ? Math.max(0, (startMs - nowMs) / 3_600_000) : 0;
   const advanceHours = Math.round(advanceHoursRaw * 10) / 10;
 
-  const morningEligible = isWeekday && startHour >= 6 && startHour <= 11 && !isHoliday;
+  // Morning promo kill-switch — admin-controlled via system_settings/pricing
+  // .morningPromoActive. Absent/undefined = ON (preserves live behaviour);
+  // only an explicit false disables the 330/320 morning rates.
+  const morningEnabled  = !promoConfig || promoConfig.morningPromoActive !== false;
+  const morningEligible = morningEnabled && isWeekday && startHour >= 6 && startHour <= 11 && !isHoliday;
 
   // Passes (ultra/offpeak/event) are price 0, no QR, no payment — informational.
   if (payType && payType !== 'single') {
