@@ -372,8 +372,14 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
   } = body;
 
   const dur           = calcDurationHours(booking);
-  const price         = (rawPrice != null) ? Math.max(0, Number(rawPrice)) : 350;
-  const influencerAmt = (rawInfluencerAmt != null) ? Math.max(1, Number(rawInfluencerAmt)) : Math.ceil(dur * 350);
+  // Pricing v2: when the client omits a value, fall back to what the booking
+  // was actually priced at (mornings 330/320, late night 450) before the flat
+  // 350 legacy default.
+  const storedValue   = [booking.basePrice, booking.originalPrice, booking.price]
+                          .map(Number).find(n => Number.isFinite(n) && n > 0) || null;
+  const price         = (rawPrice != null) ? Math.max(0, Number(rawPrice)) : (storedValue ?? 350);
+  const influencerAmt = (rawInfluencerAmt != null) ? Math.max(1, Number(rawInfluencerAmt))
+                                                   : Math.max(1, Math.ceil(storedValue ?? dur * 350));
 
   // ── Build accounting fields per type ──────────────────────────────
   let accountingFields = {};
