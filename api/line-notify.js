@@ -26,7 +26,7 @@
 // Auth — TODO(auth-step-2): replace with Firebase ID token verification.
 // ════════════════════════════════════════════════════════════════════
 
-import { checkInternalSecret, sendAndLog, loadActiveAdmins, VALID_TYPES } from "./_lib/notify.js";
+import { checkInternalSecret, sendAndLog, loadActiveAdmins, loadNotificationFlags, VALID_TYPES } from "./_lib/notify.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -103,6 +103,23 @@ async function notifyAdmins(res, body) {
       ok: false,
       error: `Type "${type}" is not an *_admin notification. Use audience:"user" for customer notifications.`,
     });
+  }
+
+  // Feature flag (Phase 1A notification reduction): suppress the per-booking
+  // "new booking created" broadcast when system_settings/notification_flags
+  // sets suppressNewBookingAdmin:true. Fail-open — any read error sends as
+  // before. Only this one type is gated; slip/reschedule/refund are untouched.
+  if (type === "new_booking_admin") {
+    const flags = await loadNotificationFlags();
+    if (flags.suppressNewBookingAdmin === true) {
+      return res.status(200).json({
+        ok: true,
+        status: "skipped",
+        reason: "flag_suppressed",
+        summary: { total: 0, successes: 0, skipped: 0, failed: 0 },
+        results: [],
+      });
+    }
   }
 
   let admins;
