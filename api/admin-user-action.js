@@ -242,7 +242,7 @@ export default async function handler(req, res) {
 // (moved verbatim from the former /api/admin-pricing-action route)
 // ════════════════════════════════════════════════════════════════════
 async function handlePricingAction({ req, res, adminName, session, action }) {
-  const { promoActive, promoName, promoPrice, promoLabel, startsAt, endsAt } = req.body || {};
+  const { promoActive, promoName, promoPrice, promoLabel, startsAt, endsAt, morningPromoActive } = req.body || {};
 
   try {
     const db = getAdminDb();
@@ -309,6 +309,9 @@ async function handlePricingAction({ req, res, adminName, session, action }) {
 
     await docRef.set({
       normalSingleUsePrice: 350,
+      // Morning 330/320 kill-switch. Written only when the client sends it, so
+      // an older admin.html can't silently flip the promo off.
+      ...(typeof morningPromoActive === 'boolean' ? { morningPromoActive } : {}),
       specialPromoActive: Boolean(promoActive),
       specialPromoName: String(promoName || "").trim(),
       specialPromoPrice: price,
