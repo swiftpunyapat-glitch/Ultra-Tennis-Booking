@@ -7,6 +7,7 @@
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
+import { getStorage } from 'firebase-admin/storage';
 
 export function getAdminDb() {
   if (!getApps().length) {
@@ -18,6 +19,14 @@ export function getAdminDb() {
     initializeApp({ credential: cert(sa) });
   }
   return getFirestore();
+}
+
+// Cloud Storage bucket handle (firebase-admin bundles @google-cloud/storage —
+// no new dependency). Caller passes the bucket name explicitly because slip
+// URLs may reference either the .firebasestorage.app or .appspot.com alias.
+export function getAdminBucket(bucketName) {
+  getAdminDb(); // ensure app init
+  return getStorage().bucket(bucketName);
 }
 
 // Firebase Auth admin instance. getAdminDb() ensures the app is initialized.

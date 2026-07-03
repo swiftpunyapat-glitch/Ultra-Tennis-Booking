@@ -175,6 +175,43 @@ Ultra Tennis
 กรุณาตรวจสอบสลิปในหน้า Admin`,
   }],
 
+  // Phase 1A slip pre-check (server-side, /api/slip-verify). pre_verified
+  // means LOCAL checks passed only — NOT bank-verified, NOT paid. Admin
+  // still confirms via Mark as Paid.
+  slip_precheck_admin: (p) => [{
+    type: "text",
+    text:
+`📩 สลิปใหม่ · ตรวจเบื้องต้นผ่าน ✓
+
+รหัสจอง: ${p.bookingCode}
+ลูกค้า: ${p.customerName || "—"}
+เบอร์โทร: ${p.customerPhone || "—"}
+วันที่: ${p.date || "—"}
+เวลา: ${p.startTime || "—"}–${p.endTime || "—"}
+ยอดที่ต้องได้รับ: ฿${p.expectedAmount ?? "—"}
+
+ไม่พบสลิปซ้ำในระบบ (ตรวจเบื้องต้นเท่านั้น ยังไม่ยืนยันยอดกับธนาคาร)
+กรุณาตรวจสลิปและกด Mark as Paid ในหน้า Admin`,
+  }],
+
+  slip_review_admin: (p) => [{
+    type: "text",
+    text:
+`🚨 สลิปต้องตรวจสอบเป็นพิเศษ
+
+รหัสจอง: ${p.bookingCode}
+ลูกค้า: ${p.customerName || "—"}
+เบอร์โทร: ${p.customerPhone || "—"}
+วันที่: ${p.date || "—"}
+เวลา: ${p.startTime || "—"}–${p.endTime || "—"}
+ยอดที่ต้องได้รับ: ฿${p.expectedAmount ?? "—"}
+
+เหตุผล: ${p.reasonText || "ต้องตรวจสอบด้วยตนเอง"}${p.dupOfBookingCode ? `
+อาจซ้ำกับรหัสจอง: ${p.dupOfBookingCode}` : ""}
+
+โปรดตรวจสอบให้แน่ใจก่อนกด Mark as Paid`,
+  }],
+
   pass_activated_customer: (p) => [{
     type: "text",
     text:
@@ -368,6 +405,23 @@ export async function sendAndLog({
   return result.ok
     ? { ok: true, status: "success" }
     : { ok: false, status: "failed", error: result.error };
+}
+
+// ─── Notification feature flags ─────────────────────────────────────
+// system_settings/notification_flags — additive, default-safe: a missing
+// doc, missing field, or read error always means "current behavior".
+// Known flags:
+//   suppressNewBookingAdmin: true → skip new_booking_admin broadcasts
+//   slipVerifyNotifications: false → /api/slip-verify sends no admin push
+export async function loadNotificationFlags() {
+  try {
+    const snap = await getDb()
+      .collection("system_settings").doc("notification_flags").get();
+    return snap.exists ? (snap.data() || {}) : {};
+  } catch (e) {
+    console.error("[notify] flags read failed (fail-open):", e.message);
+    return {};
+  }
 }
 
 // ─── Load registered admin notify recipients ────────────────────────
