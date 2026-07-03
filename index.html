@@ -482,7 +482,7 @@
         <div class="hcard-icon" style="font-size:2rem">🎾</div>
         <div>
           <div class="hcard-label" style="font-size:1rem" data-i18n="bookSingle">Book Single Use</div>
-          <div class="hcard-sub" id="homeSingleSub" style="font-size:.8rem;margin-top:3px" data-i18n="singleSub">฿350 / hour · Pay by QR slip</div>
+          <div class="hcard-sub" id="homeSingleSub" style="font-size:.8rem;margin-top:3px" data-i18n="singleSub">฿350 / hour · Weekday mornings ฿330/320 · Pay by QR slip</div>
         </div>
       </button>
       <button class="hcard" id="btnRegister" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
@@ -851,6 +851,26 @@ const LN_START    = 0, LN_END = 6;
 const LATE_NIGHT_PRICE = 450;
 const LATE_NIGHT_QR_URL = ""; // TODO: set to "/late-night-qr.png" (or full URL) when QR is ready
 function isLateNightHour(h){ return h >= LN_START && h < LN_END; }
+// Legacy-fallback mirror of api/_lib/pricing.js morning rules (Pricing v2).
+// Used ONLY when server-create fails and the client must price the booking
+// itself; keep in sync with MORNING_* constants in api/_lib/pricing.js.
+// Holiday flag comes from state.currentDateIsHoliday, loaded from the same
+// holidays/{date} doc the server reads when the day's grid was rendered.
+const MORNING_FALLBACK = { startHour:6, endHourIncl:11, price:330, advancePrice:320, advanceHours:48 };
+function morningFallbackQuote(dateISO, startTime){
+  // Same admin kill-switch the server engine honours (system_settings/pricing).
+  if(state.pricing && state.pricing.morningPromoActive === false) return null;
+  const h = parseInt(startTime,10);
+  if(h < MORNING_FALLBACK.startHour || h > MORNING_FALLBACK.endHourIncl) return null;
+  const [y,m,d] = String(dateISO).split("-").map(Number);
+  const dow = new Date(Date.UTC(y,m-1,d)).getUTCDay();
+  if(dow===0 || dow===6 || state.currentDateIsHoliday) return null;
+  const startMs = Date.parse(`${dateISO}T${startTime}:00+07:00`);
+  const advanceHours = Number.isFinite(startMs) ? (startMs - Date.now())/3_600_000 : 0;
+  return advanceHours >= MORNING_FALLBACK.advanceHours
+    ? { price: MORNING_FALLBACK.advancePrice, mode:"morning_weekday_advance" }
+    : { price: MORNING_FALLBACK.price,        mode:"morning_weekday" };
+}
 
 const PACKAGES = {
   ultra_starter_3: { packageType:"ultra_starter_3", packageName:"Ultra Starter", price:999, totalMinutes:180, validityDays:30, weeklyLimitHours:null, monthlyLimitHours:null, desc:"180 minutes · Valid 30 days · avg ฿333/hr" },
@@ -902,7 +922,7 @@ const I18N = {
     loadingPass:"กำลังโหลดข้อมูลแพ็กเกจ...",
     homeHours:"เปิดทุกวัน 06:00–00:00 · ชั้น G, Omni Business Mall",
     bookSingle:"จองใช้บริการรายครั้ง",
-    singleSub:"350 บาท / ชั่วโมง · ชำระผ่าน QR และอัปโหลดสลิป",
+    singleSub:"350 บาท / ชั่วโมง · เช้า จ.–ศ. เหลือ 330/320 · ชำระผ่าน QR และอัปโหลดสลิป",
     myBookingPass:"การจองและแพ็กเกจของฉัน",
     myBookingSub:"ดูการจอง · เช็กชั่วโมงคงเหลือ",
     back:"กลับ",
@@ -1037,7 +1057,7 @@ const I18N = {
     loadingPass:"Loading your pass info...",
     homeHours:"Open daily 06:00–00:00 · Floor G, Omni Business Mall",
     bookSingle:"Book Single Use",
-    singleSub:"฿350 / hour · Pay by QR slip",
+    singleSub:"฿350 / hour · Weekday mornings ฿330/320 · Pay by QR slip",
     myBookingPass:"My Booking & My Pass",
     myBookingSub:"View bookings · Check pass balance",
     back:"Back",
@@ -1252,6 +1272,28 @@ function getMonthKey(date) {
 }
 
 // ── LIFF RECOVERY UI ────────────────────────────────────────────
+// Reloading with the same URL hangs again on Android LINE: the URL still
+// carries spent login params (code / liff.state). Every retry path must
+// navigate to a CLEAN URL — same behaviour as tapping Book Now afresh.
+function cleanReload(){ location.replace(location.pathname); }
+window.utCleanReload = cleanReload; // used by inline onclick in recovery UI
+
+const BOOT_RETRY_KEY = "ut_boot_retry";
+// First hang: silently retry once with a clean URL (customer-confirmed fix —
+// a fresh navigation succeeds where a plain reload does not). Only if the
+// retry ALSO hangs do we show the manual recovery UI.
+function bootRecover(){
+  try{
+    if(!sessionStorage.getItem(BOOT_RETRY_KEY)){
+      sessionStorage.setItem(BOOT_RETRY_KEY,"1");
+      console.warn("[watchdog] Boot hung – auto-retrying once with clean URL");
+      cleanReload();
+      return;
+    }
+  }catch(_){ /* sessionStorage blocked — fall through to manual UI */ }
+  showLiffRecoveryUI();
+}
+
 function showLiffRecoveryUI() {
   const lt=$("ltext");
   if(lt){
@@ -1260,15 +1302,14 @@ function showLiffRecoveryUI() {
     lt.style.textAlign="center";
     lt.style.lineHeight="1.7";
     lt.innerHTML=
-      '<span style="color:var(--danger,#d94b4b);font-weight:800;font-size:.95rem">ระบบเชื่อมต่อ LINE นานผิดปกติ</span><br>' +
-      '<span style="font-size:.85rem">กรุณากดโหลดใหม่ หรือกลับไปที่หน้า LINE แล้วกด Book Now ใหม่อีกครั้ง</span><br><br>' +
-      '<button type="button" onclick="location.reload()" ' +
-        'style="display:inline-block;padding:12px 24px;border-radius:8px;border:none;cursor:pointer;background:linear-gradient(135deg,#0b2742,#163d63);color:#fff;font-weight:900;font-size:.95rem;box-shadow:0 8px 20px rgba(11,39,66,.30)">' +
-        '🔄 โหลดใหม่ (Reload)</button><br><br>' +
+      '<span style="color:var(--danger,#d94b4b);font-weight:800;font-size:.95rem">การเชื่อมต่อใช้เวลานานเกินไป</span><br>' +
+      '<span style="font-size:.85rem">กดปุ่มสีเขียวด้านล่าง เพื่อกลับไปหน้าแชท LINE<br>แล้วกดปุ่ม <b>Book Now</b> อีกครั้ง</span><br><br>' +
       '<a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener" ' +
-        'style="display:inline-block;padding:12px 24px;border-radius:8px;background:linear-gradient(135deg,#06c755,#00a041);color:#fff;font-weight:900;font-size:.95rem;text-decoration:none;box-shadow:0 8px 20px rgba(6,199,85,.30)">' +
-        '💬 กรุณากด Book Now ใหม่อีกครั้ง</a><br><br>' +
-      '<span style="font-size:.75rem;color:var(--ut-muted,#64758a)">หลังกลับไปหน้าแชท Ultra Tennis ให้กดปุ่ม Book Now อีกครั้งค่ะ</span>';
+        'style="display:inline-block;padding:14px 28px;border-radius:8px;background:linear-gradient(135deg,#06c755,#00a041);color:#fff;font-weight:900;font-size:1rem;text-decoration:none;box-shadow:0 8px 20px rgba(6,199,85,.30)">' +
+        '💬 กลับไปหน้าแชท LINE</a><br><br>' +
+      '<button type="button" onclick="utCleanReload()" ' +
+        'style="display:inline-block;padding:10px 20px;border-radius:8px;border:1px solid var(--ut-border,#d8e8f5);cursor:pointer;background:#fff;color:var(--ut-navy,#0b2742);font-weight:700;font-size:.85rem">' +
+        '🔄 หรือลองโหลดหน้านี้ใหม่</button>';
   }
   const sp=document.querySelector(".loverlay .spinner");
   if(sp) sp.style.display="none";
@@ -1285,7 +1326,9 @@ async function initLiff() {
       new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF init timeout after 10s")),10000))
     ]);
     liffInitOk = true;
-    if(!liff.isLoggedIn()){ liff.login({ redirectUri: window.location.href }); return; }
+    // redirectUri must be clean: window.location.href can still carry spent
+    // code/liff.state params which make the Android login redirect hang.
+    if(!liff.isLoggedIn()){ liff.login({ redirectUri: location.origin + location.pathname }); return; }
     state.lineProfile = await Promise.race([
       liff.getProfile(),
       new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF getProfile timeout after 5s")),5000))
@@ -1293,8 +1336,8 @@ async function initLiff() {
   } catch(e) {
     console.warn("LIFF init/profile failed:", e);
     if (_isLineApp) {
-      // Inside LINE's browser — show recovery UI; do not silently fall to Guest.
-      showLiffRecoveryUI();
+      // Inside LINE's browser — auto-retry once, then recovery UI; never fall to Guest.
+      bootRecover();
       return;
     }
     // External browser — continue as Guest for Single Use browsing.
@@ -1315,6 +1358,8 @@ async function initLiff() {
   updateHomeSingleUsePricing();
   $("loverlay").style.display="none";
   $("shell").style.display="block";
+  // Boot succeeded — allow a future hang (same tab) to auto-retry again.
+  try{ sessionStorage.removeItem(BOOT_RETRY_KEY); }catch(_){}
   setupNav(); // bind nav immediately so buttons work during pending-booking restore
 
   // Fetch pricing config asynchronously in the background
@@ -1741,6 +1786,11 @@ function updateHomeSingleUsePricing() {
     } else {
       subEl.textContent = `฿${promo.price} / hour · Pay by QR slip`;
     }
+  } else if (state.pricing && state.pricing.morningPromoActive === false) {
+    // Morning promo paused by admin — don't advertise 330/320 on the card.
+    subEl.textContent = currentLang === "th"
+      ? "350 บาท / ชั่วโมง · ชำระผ่าน QR และอัปโหลดสลิป"
+      : "฿350 / hour · Pay by QR slip";
   } else {
     subEl.textContent = t("singleSub");
   }
@@ -2166,6 +2216,15 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       const r = await tryServerCreate({ dateISO:getSelectedDateISO(), name, phone, note:$("bkNote").value.trim(), voucherCode:($("bkVoucher")?.value||"").trim().toUpperCase() });
       if (r === true) { if($("bkVoucher")) $("bkVoucher").value=""; return; }   // success (finally resets btn)
       if (r === "handled") return;                                              // legit rejection already shown
+      // Voucher redemption is transactional on the server — never fall back to
+      // client-create with a voucher (it would book at full price and skip the
+      // usedCount bookkeeping).
+      if (($("bkVoucher")?.value||"").trim()){
+        showToast(currentLang==="th"
+          ? "ระบบส่วนลดขัดข้องชั่วคราว กรุณาลองใหม่ หรือลบโค้ดส่วนลดแล้วจองอีกครั้ง"
+          : "Voucher service is temporarily unavailable. Please retry, or remove the code and book again.", true);
+        return;
+      }
       if (!ALLOW_LEGACY_FALLBACK) { showToast(t("bookingFailed"),true); return; }
       // else: fall through to legacy client-create as a fallback ↓
     }
@@ -2176,7 +2235,8 @@ $("confirmBkBtn").addEventListener("click", async()=>{
     const isSingle  = payType==="single";
     const isLN      = isSingle && isLateNightHour(parseInt(state.time,10));
     const promo     = isSingle && !isLN ? getPromoState() : { active: false };
-    const singlePrice = isLN ? LATE_NIGHT_PRICE : (promo.active ? promo.price : 350);
+    const morning   = isSingle && !isLN && !promo.active ? morningFallbackQuote(dateISO, state.time) : null;
+    const singlePrice = isLN ? LATE_NIGHT_PRICE : promo.active ? promo.price : morning ? morning.price : 350;
     const singleType  = isLN ? "Late Night Session" : "Single Use";
     const expiresAt = isSingle ? new Date(Date.now()+PAY_MINS*60*1000) : null;
     const expiresTS = isSingle ? Timestamp.fromDate(expiresAt) : null;
@@ -2225,9 +2285,9 @@ $("confirmBkBtn").addEventListener("click", async()=>{
         bookingPayload.promoSnapshotAt = serverTimestamp();
         bookingPayload.paymentQrType = "special";
       } else {
-        bookingPayload.basePrice = 350;
-        bookingPayload.effectivePrice = 350;
-        bookingPayload.pricingMode = "normal_single_use";
+        bookingPayload.basePrice = morning ? morning.price : 350;
+        bookingPayload.effectivePrice = morning ? morning.price : 350;
+        bookingPayload.pricingMode = morning ? morning.mode : "normal_single_use";
         bookingPayload.promoApplied = false;
         bookingPayload.paymentQrType = "normal";
       }
@@ -3023,16 +3083,17 @@ function displayStatus(status){
 setupLanguageToggle();
 
 // Watchdog: if the loading overlay is still visible after 12 s (LIFF / network hung),
-// show a Thai reload prompt so the customer is never stuck forever.
+// auto-retry once with a clean URL, then show a Thai recovery prompt so the
+// customer is never stuck forever.
 setTimeout(()=>{
   if($("loverlay").style.display==="none") return; // boot succeeded in time — nothing to do
-  showLiffRecoveryUI();
-  console.warn("[watchdog] Boot took >12 s – showing reload prompt");
+  console.warn("[watchdog] Boot took >12 s – recovering");
+  bootRecover();
 },12000);
 
 initLiff().catch(err=>{
   console.error("App boot failed:", err);
-  showLiffRecoveryUI();
+  bootRecover();
 });
 </script>
 </body>
