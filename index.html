@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Ultra Tennis Booking</title>
   <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <!-- QR encoder (deferred, non-blocking) for dynamic PromptPay payment QRs.
+       If it fails to load, the app falls back to the static QR images. -->
+  <script defer src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
   <style>
     :root{
       --ut-navy:#0b2742;
@@ -2573,10 +2576,53 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
     } else {
       const paymentQrType = (state.paymentMode === "booking" && bData) ? (bData.paymentQrType || "normal") : "normal";
       const price = (state.paymentMode === "booking" && bData) ? (bData.price || "") : amount;
-      const qrSrc = `${qrUrl}?v=${paymentQrType}-${price}`;
-      renderPaymentQr(qrWrap, qrSrc, bData);
+      const staticSrc = `${qrUrl}?v=${paymentQrType}-${price}`;
+      // Dynamic PromptPay QR with the exact amount — covers bookings AND pass
+      // purchases (static images only exist for a handful of amounts).
+      const dynAmount = (state.paymentMode === "booking" && bData)
+        ? Number(bData.qrAmount ?? bData.price ?? 0)
+        : Number(amount) || 0;
+      renderDynamicOrStaticQr(qrWrap, bData, paymentQrType, dynAmount, staticSrc);
     }
   }
+}
+
+// ── DYNAMIC PROMPTPAY QR ────────────────────────────────────────────
+// Generates the payment QR in-browser with the exact amount embedded
+// (bank apps prefill AND lock the amount, so wrong-amount transfers stop).
+// Account routing mirrors the static images this supersedes — verified by
+// decoding them:
+//   standard / morning / voucher → phone PromptPay      (payment-qr*.png)
+//   special promotion            → national-ID account  (payment-qr-special.png)
+// Late Night keeps its admin-configured QR flow untouched. Static images
+// remain the fallback whenever the deferred QR lib is missing or generation
+// fails, so this path can never break payments.
+const PROMPTPAY_MAIN = { tag:"01", id:"0066815139905" };
+const PROMPTPAY_ALT  = { tag:"02", id:"1729900373121" };
+function ppCrc16(payload){
+  let crc = 0xFFFF;
+  for(let i=0;i<payload.length;i++){
+    crc ^= payload.charCodeAt(i) << 8;
+    for(let b=0;b<8;b++){ crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1); crc &= 0xFFFF; }
+  }
+  return crc.toString(16).toUpperCase().padStart(4,"0");
+}
+function ppTlv(tag,val){ return tag + String(val.length).padStart(2,"0") + val; }
+function promptpayPayload(proxy, amount){
+  const amt = Number(amount).toFixed(2);
+  if(!(Number(amount) > 0) || amt.length > 13) return null;
+  const account = ppTlv("00","A000000677010111") + ppTlv(proxy.tag, proxy.id);
+  const body = ppTlv("00","01") + ppTlv("01","12") + ppTlv("29",account) +
+               ppTlv("53","764") + ppTlv("54",amt) + ppTlv("58","TH") + "6304";
+  return body + ppCrc16(body);
+}
+function renderDynamicOrStaticQr(qrWrap, booking, qrType, amount, staticSrc){
+  const proxy = qrType === "special" ? PROMPTPAY_ALT : PROMPTPAY_MAIN;
+  const payload = window.QRCode ? promptpayPayload(proxy, amount) : null;
+  if(!payload){ renderPaymentQr(qrWrap, staticSrc, booking); return; }
+  window.QRCode.toDataURL(payload, { width:640, margin:2 })
+    .then(dataUrl => renderPaymentQr(qrWrap, dataUrl, booking))
+    .catch(() => renderPaymentQr(qrWrap, staticSrc, booking));
 }
 
 function renderPaymentQr(qrWrap, qrSrc, booking) {
