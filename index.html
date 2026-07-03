@@ -8,6 +8,10 @@
   <!-- QR encoder (deferred, non-blocking) for dynamic PromptPay payment QRs.
        If it fails to load, the app falls back to the static QR images. -->
   <script defer src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+  <!-- QR decoder (deferred, non-blocking) — best-effort read of the mini-QR on
+       uploaded payment slips. HINT ONLY for /api/slip-verify; if it fails to
+       load or decode, slip upload behaves exactly as before. -->
+  <script defer src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <style>
     :root{
       --ut-navy:#0b2742;
@@ -2672,6 +2676,65 @@ $("slipIn").addEventListener("change",()=>{
   $("submitSlipBtn").disabled=false;
 });
 
+// ── SLIP PRE-CHECK (Phase 1A — Auto Verify Slip) ────────────────
+// After the slip-upload transaction succeeds, /api/slip-verify pre-checks the
+// slip server-side (re-hashes the file itself, duplicate checks) and sends the
+// admin notification. Everything computed here (hash, decoded mini-QR) is an
+// UNTRUSTED HINT — the server never marks anything paid from it, and admin
+// Mark as Paid remains the sole authority. If the pre-check call fails for
+// any reason, we fall back to the legacy direct admin notify so no slip ever
+// goes silent. All of this is fire-and-forget: the success screen never waits.
+async function hashFileSha256(file){
+  try{
+    const buf=await file.arrayBuffer();
+    const dig=await crypto.subtle.digest("SHA-256",buf);
+    return Array.from(new Uint8Array(dig)).map(b=>b.toString(16).padStart(2,"0")).join("");
+  }catch(_){ return null; }
+}
+async function decodeSlipQr(file){
+  try{
+    if(!window.jsQR) return null;
+    const bmp=await createImageBitmap(file);
+    const maxDim=2000;
+    const scale=Math.min(1,maxDim/Math.max(bmp.width,bmp.height));
+    const w=Math.max(1,Math.round(bmp.width*scale)),h=Math.max(1,Math.round(bmp.height*scale));
+    const canvas=document.createElement("canvas");
+    canvas.width=w;canvas.height=h;
+    const ctx=canvas.getContext("2d");
+    ctx.drawImage(bmp,0,0,w,h);
+    const img=ctx.getImageData(0,0,w,h);
+    const qr=window.jsQR(img.data,w,h);
+    return (qr&&typeof qr.data==="string")?qr.data.slice(0,512):null;
+  }catch(_){ return null; }
+}
+function legacySlipNotify(bd){
+  if(!window.notifyAdmins||!bd) return;
+  window.notifyAdmins({
+    type: "slip_uploaded_admin",
+    bookingCode: bd.bookingCode,
+    customerName: bd.customerName,
+    customerPhone: bd.customerPhone,
+    date: bd.date,
+    startTime: bd.startTime,
+    endTime: bd.endTime
+  });
+}
+async function runSlipPrecheck(file,bookingDocId,bookingCode,bd){
+  try{
+    const [clientSlipHash,clientQrPayload]=await Promise.all([hashFileSha256(file),decodeSlipQr(file)]);
+    const res=await fetch("/api/slip-verify",{
+      method:"POST",headers:{"Content-Type":"application/json"},keepalive:true,
+      body:JSON.stringify({bookingId:bookingDocId,bookingCode,clientSlipHash,clientQrPayload})
+    });
+    const d=await res.json().catch(()=>null);
+    if(!res.ok||!d||!d.ok) throw new Error((d&&d.error)||`HTTP ${res.status}`);
+    console.log("[slip-precheck]",d.verification);
+  }catch(e){
+    console.warn("[slip-precheck] failed — falling back to legacy admin notify:",e);
+    legacySlipNotify(bd);
+  }
+}
+
 // Submit slip
 $("submitSlipBtn").addEventListener("click", async()=>{
   const file=$("slipIn").files[0];
@@ -2740,19 +2803,10 @@ $("submitSlipBtn").addEventListener("click", async()=>{
       localStorage.removeItem("ut_pending_booking");
       console.log("[perf] Cleared pending booking cache from localStorage");
 
-      // Fire-and-forget: notify admins a slip was uploaded. Must not block the
-      // success screen — no await, no error surfaced.
-      if (window.notifyAdmins) {
-        window.notifyAdmins({
-          type: "slip_uploaded_admin",
-          bookingCode: state.currentBookingData.bookingCode,
-          customerName: state.currentBookingData.customerName,
-          customerPhone: state.currentBookingData.customerPhone,
-          date: state.currentBookingData.date,
-          startTime: state.currentBookingData.startTime,
-          endTime: state.currentBookingData.endTime
-        });
-      }
+      // Fire-and-forget slip pre-check (Phase 1A): the server verifies the
+      // slip and notifies admins itself; falls back to the legacy direct
+      // notify on any failure. Must not block the success screen — no await.
+      runSlipPrecheck(file, state.currentBookingDocId, state.currentBookingCode, state.currentBookingData);
       showSuccess("✅",t("slipReceived"),code,`${state.currentBookingData.customerName} · ${state.currentBookingData.date} · ${state.currentBookingData.startTime}–${state.currentBookingData.endTime} · ${t("pendingReview")}.`);
     }
     showView("viewSuccess");

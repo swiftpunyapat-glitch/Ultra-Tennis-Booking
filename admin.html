@@ -1547,6 +1547,33 @@ function renderPendingTab(){
   });
 }
 
+// ── Slip pre-check badge (Phase 1A — Auto Verify Slip) ─────────────
+// Renders booking.paymentVerification written by /api/slip-verify.
+// Display-only: "pre_verified" means local pre-checks passed (server hash,
+// no duplicates) — NOT bank-verified, NOT paid. Admin still Marks as Paid.
+const PV_REASON_LABEL={
+  duplicate_slip_hash:"duplicate slip file",
+  suspected_duplicate_ref:"duplicate transfer ref (unconfirmed)",
+  server_fetch_failed:"pre-check unavailable",
+};
+function pvBadgeHTML(b){
+  const pv=b.paymentVerification;
+  if(!pv||!pv.status) return "";
+  const map={
+    pre_verified: ["✓ Pre-checked","#0a2d1a","var(--g)"],
+    verified:     ["✓✓ Verified","#0a2d1a","var(--g)"],
+    manual_review:["⚠ Needs Review","#2d230a","var(--warn)"],
+    rejected:     ["✗ Verify Rejected","#2d0a0a","var(--dan)"],
+    checking:     ["… Checking","#1a1a2d","var(--m)"],
+    not_checked:  ["– Not Pre-checked","#1a1a2d","var(--m)"],
+  };
+  const cfg=map[pv.status];
+  if(!cfg) return "";
+  const [label,bg,color]=cfg;
+  const reason=pv.reason?` · ${esc(PV_REASON_LABEL[pv.reason]||String(pv.reason))}`:"";
+  return `<span class="sp" style="background:${bg};color:${color};margin-left:6px" title="Slip pre-check (Phase 1A) — informational only, does not replace Mark as Paid">${label}${reason}</span>`;
+}
+
 function cardHTML(b){
   const tc=b.bookingType?.includes("Ultra")?"tu":b.bookingType?.includes("Off")?"to":"ts";
   const statusText=bookingStatusDisplay(b);
@@ -1575,7 +1602,7 @@ function cardHTML(b){
   const hasPaymentProof=!!safeSlip||!!b.paymentProofUrl||!!b.proofUrl||!!b.paymentSlipUrl;
   const canConfirmNoSlip=!canMarkPaid&&!isConfirmed&&!isTerminal&&!isPaid&&!hasPaymentProof;
   const slip=safeSlip
-    ?`<div class="slip-sec" style="margin-top:10px"><div class="slbl">Payment Slip</div><a href="${esc(safeSlip)}" target="_blank" rel="noopener noreferrer"><img class="simg" src="${esc(safeSlip)}" alt="Slip"/></a></div>`
+    ?`<div class="slip-sec" style="margin-top:10px"><div class="slbl">Payment Slip${pvBadgeHTML(b)}</div><a href="${esc(safeSlip)}" target="_blank" rel="noopener noreferrer"><img class="simg" src="${esc(safeSlip)}" alt="Slip"/></a></div>`
     :`<div class="slip-sec" style="margin-top:10px"><div class="slbl">Payment Slip</div><p class="noslip">No slip yet</p></div>`;
 
   // Show paid badge separately + reschedule button even when paid
@@ -3760,7 +3787,7 @@ function renderSlipItem(b){
     `<div><div class="fl">Code</div><div class="fv" style="color:var(--ac)">${esc(b.bookingCode||"—")}</div></div>`+
     `<div><div class="fl">Type</div><div class="fv">${esc(b.bookingType||"—")}</div></div>`+
     `<div><div class="fl">Price</div><div class="fv">฿${Number(b.price)||0}</div></div>`+
-    `<div><div class="fl" style="${pStatusColor}">Pay Status</div><div class="fv"><span class="sp s-${esc(b.paymentStatus)}">${esc(b.paymentStatus||"—")}</span></div></div>`+
+    `<div><div class="fl" style="${pStatusColor}">Pay Status</div><div class="fv"><span class="sp s-${esc(b.paymentStatus)}">${esc(b.paymentStatus||"—")}</span>${pvBadgeHTML(b)}</div></div>`+
     `<div><div class="fl">Booking Status</div><div class="fv"><span class="sp s-${esc(b.bookingStatus)}">${esc(b.bookingStatus||"—")}</span></div></div>`+
     `<div><div class="fl" style="color:var(--ac)">🎾 Play Date</div><div class="fv">${playStr}</div></div>`+
     `<div><div class="fl" style="${isPaid?"color:var(--g)":""}">💳 Paid / Confirmed</div><div class="fv">${esc(paidStr)}${paidByStr}</div></div>`+
