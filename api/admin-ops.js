@@ -44,6 +44,7 @@ const VALID_ACTIONS = [
   'coach_create', 'coach_list', 'coach_set_active', 'coach_my_bookings',
   'coach_reset_code', 'coach_set_pin',
   'coach_availability_get', 'coach_availability_set', 'coach_update_rates',
+  'shop_open_days', 'coach_delete',
 ];
 
 // Coach login name = coaches doc id = booking.coachName. Keep it Firestore-id
@@ -235,6 +236,8 @@ export default async function handler(req, res) {
     case 'coach_availability_get': return handleCoachAvailabilityGet(res, session, body);
     case 'coach_availability_set': return handleCoachAvailabilitySet(res, session, body);
     case 'coach_update_rates':     return handleCoachUpdateRates(res, session, body);
+    case 'shop_open_days':         return handleShopOpenDays(res, session, body);
+    case 'coach_delete':           return handleCoachDelete(res, session, body);
     default:
       // Unreachable (VALID_ACTIONS gate above) — defensive.
       return res.status(400).json({ ok: false, error: `Unknown action "${action}"` });
@@ -1453,6 +1456,81 @@ async function handleCoachAvailabilitySet(res, session, body) {
     if (e.message === 'HAS_BOOKING') return res.status(409).json({ ok: false, error: 'มีการจอง/คาบสอนอยู่ในชั่วโมงนี้ ปิดไม่ได้' });
     console.error('[coach_availability_set]', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to update availability' });
+  }
+}
+
+// shop_open_days {month:"YYYY-MM"} — coach or any admin. Which days of the
+// month have at least one OPEN room slot ("ปฏิทินร้าน" for coach.html).
+// Single-field range query on available_slots.date — no composite index.
+async function handleShopOpenDays(res, session, body) {
+  const month = typeof body.month === 'string' ? body.month.trim() : '';
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ ok: false, error: 'month must be YYYY-MM' });
+  const isCoach = session.role === 'coach';
+  const isAdmin = requireRole(session, 'owner', 'ultra_admin', 'branch_manager', 'branch_staff');
+  if (!isCoach && !isAdmin) return res.status(403).json({ ok: false, error: 'Coach or admin only' });
+
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    const snap = await db.collection('available_slots')
+      .where('date', '>=', `${month}-01`)
+      .where('date', '<=', `${month}-31`)
+      .get();
+    const days = new Set();
+    snap.forEach(d => {
+      const s = d.data();
+      if (s.status === 'open' && (s.resourceId || SLOT_RESOURCE_ID) === SLOT_RESOURCE_ID) days.add(s.date);
+    });
+    return res.status(200).json({ ok: true, month, openDays: [...days].sort(), today: bangkokTodayISO() });
+  } catch (e) {
+    console.error('[shop_open_days]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to load open days' });
+  }
+}
+
+// coach_delete {coachId} — branch_manager+. SAFE delete only: refuses when ANY
+// booking references this coachId (history must never orphan). Cleans up the
+// coaches doc, coach_auth, and remaining coach_availability docs.
+async function handleCoachDelete(res, session, body) {
+  if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+  const coachId = typeof body.coachId === 'string' ? body.coachId.trim() : '';
+  if (!coachId) return res.status(400).json({ ok: false, error: 'Missing coachId' });
+
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    const ref  = db.collection('coaches').doc(coachId);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ ok: false, error: 'Coach not found' });
+    const coach = snap.data();
+    if (!hasBranchAccess(session, resolveBranchId(coach))) {
+      return res.status(403).json({ ok: false, error: 'No access to this branch' });
+    }
+    // History guard: any booking (any status) referencing this coach blocks
+    // the hard delete — use Deactivate instead so reports stay intact.
+    const bookedSnap = await db.collection('bookings').where('coachId', '==', coachId).limit(1).get();
+    if (!bookedSnap.empty) {
+      return res.status(409).json({ ok: false, error: 'โค้ชคนนี้มีประวัติการจอง/คาบสอนในระบบ ลบถาวรไม่ได้ — ใช้ Deactivate แทน' });
+    }
+    // Clean availability docs (bounded: coach availability is short-horizon).
+    const availSnap = await db.collection('coach_availability').where('coachId', '==', coachId).limit(500).get();
+    const batch = db.batch();
+    availSnap.forEach(d => batch.delete(d.ref));
+    batch.delete(db.collection('coach_auth').doc(coachId));
+    batch.delete(ref);
+    await batch.commit();
+
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: resolveBranchId(coach),
+      action: 'coach_delete', targetId: `coaches/${coachId}`,
+      before: { name: coach.name, active: coach.active !== false },
+      after: null,
+      note: `ลบ Coach ID ${coachId} (ไม่มีประวัติการจอง) + availability ${availSnap.size} รายการ`,
+    });
+    return res.status(200).json({ ok: true, deletedAvailability: availSnap.size });
+  } catch (e) {
+    console.error('[coach_delete]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to delete coach' });
   }
 }
 

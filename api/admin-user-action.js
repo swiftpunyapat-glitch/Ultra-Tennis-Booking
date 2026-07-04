@@ -13,6 +13,7 @@
 
 import { verifySession, requireRole, DEFAULT_BRANCH_ID } from './_lib/admin-auth.js';
 import { getAdminDb, writeAuditLog } from './_lib/firebase-admin.js';
+import { sendAndLog, loadActiveAdmins } from './_lib/notify.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 
 const ACTIVE_PACKAGES = {
@@ -43,11 +44,24 @@ const ACTIVE_PACKAGES = {
   beginner_coaching_5: {
     packageType: "beginner_coaching_5",
     packageName: "Beginner Coaching",
-    price: 3500,
+    price: 4000,               // "เริ่มต้น 4,000" — actual price may vary per coach
     totalMinutes: 300,
     validityDays: 60,
     ownerRole: "customer",
     requiresCoachOrAdminBooking: true
+  },
+  // Off-Peak Pass (Stage C, 2026-07 rules): ฿3,600 · 16 hours total within 30
+  // days of purchase · max 4 hrs per ISO week (Mon–Sun) · Mon–Fri 09:00–15:00
+  // excl. holidays. Unused hours expire with the pass — no carry-over/refund.
+  offpeak: {
+    packageType: "offpeak",
+    packageName: "Off-Peak Pass",
+    price: 3600,
+    totalMinutes: 960,          // 16 hours hard total (deducted per booking)
+    validityDays: 30,
+    ownerRole: "customer",
+    weeklyLimitHours: 4,
+    monthlyLimitHours: 16       // safety net; real total cap = remainingMinutes
   },
   coach_at_ultra_10: {
     packageType: "coach_at_ultra_10",
@@ -101,6 +115,17 @@ export default async function handler(req, res) {
     return handleDeactivatePass({ req, res, adminName, session });
   }
 
+  // ── Pass self-purchase approval (Stage D — any valid admin) ──────
+  if (action === 'list_pending_pass_purchases') {
+    return handleListPendingPassPurchases({ res });
+  }
+  if (action === 'approve_pass_purchase') {
+    return handleApprovePassPurchase({ req, res, adminName, session });
+  }
+  if (action === 'reject_pass_purchase') {
+    return handleRejectPassPurchase({ req, res, adminName, session });
+  }
+
   if (action !== 'add_pass_to_registered_user') {
     return res.status(400).json({ ok: false, error: `Unsupported action: ${action}` });
   }
@@ -117,7 +142,7 @@ export default async function handler(req, res) {
   if (!pkg) {
     return res.status(400).json({
       ok: false,
-      error: `Invalid or deprecated packageType: ${packageType}. New flow only issues: ultra_starter_3, ultra_pass_10, ultra_pass_20, beginner_coaching_5, coach_at_ultra_10.`
+      error: `Invalid or deprecated packageType: ${packageType}. New flow only issues: ultra_starter_3, ultra_pass_10, ultra_pass_20, beginner_coaching_5, coach_at_ultra_10, offpeak.`
     });
   }
 
@@ -185,8 +210,8 @@ export default async function handler(req, res) {
       createdAt: FieldValue.serverTimestamp(),
       source: "admin_registered_user_add_pass",
       note: note || "",
-      weeklyLimitHours: null,
-      monthlyLimitHours: null,
+      weeklyLimitHours: pkg.weeklyLimitHours ?? null,
+      monthlyLimitHours: pkg.monthlyLimitHours ?? null,
       weeklyUsage: {},
       monthlyUsage: {}
     };
@@ -336,6 +361,219 @@ async function handlePricingAction({ req, res, adminName, session, action }) {
     console.error('[admin-user-action] pricing error:', err);
     return res.status(500).json({ ok: false, error: err.message || 'Internal Server Error' });
   }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Pass self-purchase approval (Stage D)
+// ════════════════════════════════════════════════════════════════════
+// GUARDRAIL: a package is issued ONLY here, after an admin explicitly
+// approves — never from a slip upload. Idempotency: issuedPackageId on the
+// purchase doc is set inside the same transaction that creates the package,
+// so double-clicks / duplicate slips / retries can never issue twice.
+
+async function handleListPendingPassPurchases({ res }) {
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[list_pending_pass_purchases] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
+  try {
+    const snap = await db.collection('pass_purchases')
+      .where('paymentStatus', '==', 'pending_review').get();
+    const items = snap.docs.map(d => {
+      const p = d.data();
+      return {
+        id: d.id,
+        purchaseCode: p.purchaseCode ?? null,
+        packageType: p.packageType ?? null,
+        packageName: p.packageName ?? null,
+        price: p.price ?? null,
+        customerName: p.customerName ?? '',
+        customerPhone: p.customerPhone ?? '',
+        lineUserId: p.lineUserId ?? null,
+        slipUrl: (typeof p.slipUrl === 'string' && /^https?:\/\//.test(p.slipUrl)) ? p.slipUrl : null,
+        slipUploadedAt: p.slipUploadedAt?.toMillis?.() ?? null,
+        createdAt: p.createdAt?.toMillis?.() ?? null,
+        paymentVerification: p.paymentVerification
+          ? { status: p.paymentVerification.status ?? null, reason: p.paymentVerification.reason ?? null }
+          : null,
+      };
+    }).sort((a, b) => (a.slipUploadedAt || 0) - (b.slipUploadedAt || 0));
+    return res.status(200).json({ ok: true, purchases: items });
+  } catch (e) {
+    console.error('[list_pending_pass_purchases]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to load pending purchases' });
+  }
+}
+
+async function handleApprovePassPurchase({ req, res, adminName, session }) {
+  const { purchaseId } = req.body || {};
+  if (!purchaseId || typeof purchaseId !== 'string' || !purchaseId.trim()) {
+    return res.status(400).json({ ok: false, error: 'purchaseId is required' });
+  }
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[approve_pass_purchase] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
+
+  const purchaseRef = db.collection('pass_purchases').doc(purchaseId.trim());
+  let issued;
+  try {
+    issued = await db.runTransaction(async (t) => {
+      const snap = await t.get(purchaseRef);
+      if (!snap.exists) throw new Error('NOT_FOUND');
+      const p = snap.data();
+      if (p.issuedPackageId) throw new Error('ALREADY_ISSUED');
+      if (p.status === 'rejected' || p.paymentStatus === 'rejected') throw new Error('REJECTED');
+      if (p.paymentStatus !== 'pending_review') throw new Error('BAD_STATE');
+      const pkg = ACTIVE_PACKAGES[p.packageType];
+      if (!pkg) throw new Error('UNSUPPORTED_TYPE');
+
+      const vFrom = new Date();
+      const vUntil = new Date(vFrom.getTime() + pkg.validityDays * 24 * 60 * 60 * 1000);
+      const pkgRef = db.collection('customer_packages').doc();
+      t.set(pkgRef, {
+        lineUserId: p.lineUserId,
+        customerName: p.customerName || '',
+        customerPhone: p.customerPhone || '',
+        customerPhoneNormalized: p.customerPhoneNormalized || normalizePhone(p.customerPhone),
+        lineDisplayName: p.lineDisplayName || '',
+        packageType: pkg.packageType,
+        packageName: pkg.packageName,
+        price: Number(p.price) || pkg.price,      // purchase-time snapshot wins
+        ownerRole: pkg.ownerRole,
+        totalMinutes: pkg.totalMinutes,
+        remainingMinutes: pkg.totalMinutes,
+        validityDays: pkg.validityDays,
+        validFrom: Timestamp.fromDate(vFrom),
+        validUntil: Timestamp.fromDate(vUntil),
+        status: 'active',
+        addedByAdmin: adminName,
+        createdFromPurchaseCode: p.purchaseCode || null,
+        createdAt: FieldValue.serverTimestamp(),
+        source: 'self_purchase_approved',
+        note: '',
+        weeklyLimitHours: pkg.weeklyLimitHours ?? null,
+        monthlyLimitHours: pkg.monthlyLimitHours ?? null,
+        weeklyUsage: {},
+        monthlyUsage: {},
+      });
+      t.update(purchaseRef, {
+        status: 'completed',
+        paymentStatus: 'paid',
+        issuedPackageId: pkgRef.id,
+        approvedBy: adminName,
+        approvedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return { packageId: pkgRef.id, purchase: p, pkg, vUntil };
+    });
+  } catch (e) {
+    const map = {
+      NOT_FOUND:        [404, 'Purchase not found'],
+      ALREADY_ISSUED:   [409, 'Pass already issued for this purchase'],
+      REJECTED:         [409, 'Purchase was rejected'],
+      BAD_STATE:        [409, 'Purchase is not awaiting review'],
+      UNSUPPORTED_TYPE: [409, 'Unsupported packageType on this purchase'],
+    };
+    const [code, msg] = map[e.message] || [500, 'Failed to approve purchase'];
+    if (code === 500) console.error('[approve_pass_purchase] tx:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+
+  const p = issued.purchase;
+  console.log(`[approve_pass_purchase] ${p.purchaseCode} → package ${issued.packageId} by ${adminName}`);
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+    action: 'approve_pass_purchase', targetId: purchaseId.trim(),
+    before: { paymentStatus: 'pending_review' },
+    after:  { paymentStatus: 'paid', issuedPackageId: issued.packageId },
+    note: `อนุมัติซื้อ ${p.packageName} ของ ${p.customerName || p.lineUserId}`,
+  });
+
+  // Notify customer + all admins — never fails the request.
+  try {
+    const validUntilStr = issued.vUntil.toLocaleDateString('en-GB', { timeZone: 'Asia/Bangkok' });
+    const sends = [];
+    sends.push(sendAndLog({
+      eventId: `${p.purchaseCode}_pass_activated_customer`,
+      type: 'pass_activated_customer', targetType: 'customer',
+      lineUserId: p.lineUserId, bookingCode: p.purchaseCode,
+      payload: { packageName: p.packageName, remainingMinutes: issued.pkg.totalMinutes, validUntil: validUntilStr },
+    }).catch(e => ({ ok: false, error: e.message })));
+    const admins = await loadActiveAdmins();
+    admins.forEach(a => sends.push(sendAndLog({
+      eventId: `${p.purchaseCode}_pass_issued_${a.lineUserId}`,
+      type: 'pass_issued_admin', targetType: 'admin',
+      lineUserId: a.lineUserId, bookingCode: p.purchaseCode,
+      payload: {
+        purchaseCode: p.purchaseCode, customerName: p.customerName, customerPhone: p.customerPhone,
+        packageName: p.packageName, price: p.price, actionBy: adminName,
+      },
+    }).catch(e => ({ ok: false, error: e.message }))));
+    await Promise.all(sends);
+  } catch (e) {
+    console.error('[approve_pass_purchase] notify (non-fatal):', e.message);
+  }
+
+  return res.status(200).json({ ok: true, packageId: issued.packageId });
+}
+
+async function handleRejectPassPurchase({ req, res, adminName, session }) {
+  const { purchaseId, reason = '' } = req.body || {};
+  if (!purchaseId || typeof purchaseId !== 'string' || !purchaseId.trim()) {
+    return res.status(400).json({ ok: false, error: 'purchaseId is required' });
+  }
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[reject_pass_purchase] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
+
+  const purchaseRef = db.collection('pass_purchases').doc(purchaseId.trim());
+  let p;
+  try {
+    p = await db.runTransaction(async (t) => {
+      const snap = await t.get(purchaseRef);
+      if (!snap.exists) throw new Error('NOT_FOUND');
+      const cur = snap.data();
+      if (cur.issuedPackageId) throw new Error('ALREADY_ISSUED');
+      if (cur.paymentStatus !== 'pending_review') throw new Error('BAD_STATE');
+      t.update(purchaseRef, {
+        status: 'rejected',
+        paymentStatus: 'rejected',
+        rejectReason: String(reason || '').slice(0, 400),
+        rejectedBy: adminName,
+        rejectedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return cur;
+    });
+  } catch (e) {
+    const map = {
+      NOT_FOUND:      [404, 'Purchase not found'],
+      ALREADY_ISSUED: [409, 'Pass already issued — cannot reject (use pass controls instead)'],
+      BAD_STATE:      [409, 'Purchase is not awaiting review'],
+    };
+    const [code, msg] = map[e.message] || [500, 'Failed to reject purchase'];
+    if (code === 500) console.error('[reject_pass_purchase] tx:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+
+  console.log(`[reject_pass_purchase] ${p.purchaseCode} by ${adminName}`);
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+    action: 'reject_pass_purchase', targetId: purchaseId.trim(),
+    before: { paymentStatus: 'pending_review' },
+    after:  { paymentStatus: 'rejected' },
+    note: `ปฏิเสธการซื้อ ${p.packageName} ของ ${p.customerName || p.lineUserId}${reason ? ` · ${reason}` : ''}`,
+  });
+  try {
+    await sendAndLog({
+      eventId: `${p.purchaseCode}_pass_purchase_rejected`,
+      type: 'pass_purchase_rejected_customer', targetType: 'customer',
+      lineUserId: p.lineUserId, bookingCode: p.purchaseCode,
+      payload: { purchaseCode: p.purchaseCode, packageName: p.packageName, reason: String(reason || '').slice(0, 200) },
+    });
+  } catch (e) {
+    console.error('[reject_pass_purchase] notify (non-fatal):', e.message);
+  }
+  return res.status(200).json({ ok: true });
 }
 
 // ════════════════════════════════════════════════════════════════════

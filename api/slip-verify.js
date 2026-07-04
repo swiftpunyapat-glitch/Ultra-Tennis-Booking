@@ -132,6 +132,10 @@ export default async function handler(req, res) {
   const body = parseBody(req);
   if (!body) return res.status(400).json({ ok: false, error: 'Invalid request body' });
 
+  // Stage D: pre-check for PASS PURCHASE slips (pass_purchases collection).
+  // Separate handler so the Phase 1A booking path below stays untouched.
+  if (body.targetType === 'pass_purchase') return handlePassSlipVerify(res, body);
+
   const bookingId   = typeof body.bookingId === 'string' ? body.bookingId.trim() : '';
   const bookingCode = typeof body.bookingCode === 'string' ? body.bookingCode.trim() : '';
   // Untrusted hints from the client — validated, stored as helper data only.
@@ -317,6 +321,196 @@ export default async function handler(req, res) {
   });
 
   console.log(`[slip-verify] ${bookingCode} → ${outcome.status}${outcome.reason ? ` (${outcome.reason})` : ''} hash:${serverHash ? 'server' : 'none'} ref:${transRef ? 'yes' : 'no'}`);
+  return res.status(200).json({
+    ok: true,
+    verification: { status: outcome.status, reason: outcome.reason ?? null },
+    notify,
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handlePassSlipVerify — Stage D pre-check for pass purchase slips.
+// Same trust model as bookings: server re-hashes the file, slip_registry is
+// shared with bookings (a slip reused across a booking AND a pass purchase is
+// caught), verification NEVER issues a pass — admin approval remains the
+// only path to package issuance.
+// ════════════════════════════════════════════════════════════════════
+async function handlePassSlipVerify(res, body) {
+  const purchaseId   = typeof body.purchaseId === 'string' ? body.purchaseId.trim() : '';
+  const purchaseCode = typeof body.purchaseCode === 'string' ? body.purchaseCode.trim() : '';
+  const clientSlipHash = (typeof body.clientSlipHash === 'string' && SHA256_RE.test(body.clientSlipHash.trim()))
+    ? body.clientSlipHash.trim().toLowerCase() : null;
+  const clientQrPayload = (typeof body.clientQrPayload === 'string' && body.clientQrPayload.trim())
+    ? body.clientQrPayload.trim().slice(0, 512) : null;
+
+  if (!purchaseId)   return res.status(400).json({ ok: false, error: 'Missing purchaseId' });
+  if (!purchaseCode) return res.status(400).json({ ok: false, error: 'Missing purchaseCode' });
+
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[slip-verify pass] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+
+  const purchaseRef = db.collection('pass_purchases').doc(purchaseId);
+  let purchase;
+  try {
+    const snap = await purchaseRef.get();
+    if (!snap.exists) return res.status(404).json({ ok: false, error: 'Purchase not found' });
+    purchase = snap.data();
+  } catch (e) { console.error('[slip-verify pass] read:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+
+  if (purchase.purchaseCode !== purchaseCode) {
+    return res.status(403).json({ ok: false, error: 'purchaseCode mismatch' });
+  }
+  if (purchase.status === 'rejected' || purchase.paymentStatus === 'rejected') {
+    return res.status(200).json({ ok: true, skipped: 'rejected' });
+  }
+  if (purchase.paymentStatus === 'paid' || purchase.issuedPackageId) {
+    return res.status(200).json({ ok: true, skipped: 'already_paid' });
+  }
+  if (purchase.paymentStatus !== 'pending_review') {
+    return res.status(409).json({ ok: false, error: `Slip not in review state (paymentStatus="${purchase.paymentStatus}")` });
+  }
+  const slipUrl = typeof purchase.slipUrl === 'string' ? purchase.slipUrl : '';
+  if (!slipUrl) return res.status(409).json({ ok: false, error: 'Purchase has no slipUrl' });
+
+  const prevPv = purchase.paymentVerification;
+  if (prevPv && prevPv.slipUrlChecked === slipUrl && prevPv.status && prevPv.status !== 'checking') {
+    return res.status(200).json({ ok: true, verification: { status: prevPv.status, reason: prevPv.reason ?? null }, cached: true });
+  }
+
+  const hashResult = await computeServerSlipHash(slipUrl);
+  const serverHash = hashResult.hash || null;
+  if (!serverHash) console.warn(`[slip-verify pass] ${purchaseCode} server hash unavailable: ${hashResult.error}`);
+
+  const transRef = extractTransRef(clientQrPayload);
+  let refDupCode = null;
+  if (transRef) {
+    try {
+      const [bDup, pDup] = await Promise.all([
+        db.collection('bookings').where('paymentVerification.transactionRef', '==', transRef).limit(3).get(),
+        db.collection('pass_purchases').where('paymentVerification.transactionRef', '==', transRef).limit(3).get(),
+      ]);
+      for (const d of bDup.docs) { refDupCode = d.data().bookingCode || d.id; break; }
+      if (!refDupCode) for (const d of pDup.docs) {
+        if (d.id !== purchaseId) { refDupCode = d.data().purchaseCode || d.id; break; }
+      }
+    } catch (e) { console.warn('[slip-verify pass] ref lookup failed (advisory only):', e.message); }
+  }
+
+  const expectedAmount = Number(purchase.price) > 0 ? Number(purchase.price) : null;
+  const hashRegRef = serverHash ? db.collection('slip_registry').doc(`hash_${serverHash}`) : null;
+  let outcome;
+  try {
+    outcome = await db.runTransaction(async (t) => {
+      const pSnap = await t.get(purchaseRef);
+      const hSnap = hashRegRef ? await t.get(hashRegRef) : null;
+      if (!pSnap.exists) throw new Error('GONE');
+      const pNow = pSnap.data();
+      if (pNow.paymentStatus !== 'pending_review' || pNow.issuedPackageId) throw new Error('BAD_STATE');
+
+      let status = 'not_checked', reason = 'server_fetch_failed', dupOfCode = null;
+      if (serverHash && hSnap && hSnap.exists) {
+        const owner = hSnap.data();
+        const ownerId = owner.purchaseId || owner.bookingId || null;
+        if (ownerId !== purchaseId) {
+          status = 'manual_review'; reason = 'duplicate_slip_hash';
+          dupOfCode = owner.purchaseCode || owner.bookingCode || ownerId;
+        } else if (serverHash) {
+          status = 'pre_verified'; reason = null;
+        }
+      } else if (refDupCode) {
+        status = 'manual_review'; reason = 'suspected_duplicate_ref'; dupOfCode = refDupCode;
+      } else if (serverHash) {
+        status = 'pre_verified'; reason = null;
+      }
+
+      if (serverHash && !(hSnap && hSnap.exists)) {
+        t.set(hashRegRef, {
+          purchaseId, purchaseCode, kind: 'pass_purchase',
+          source: 'server_sha256',
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      }
+      t.update(purchaseRef, {
+        paymentVerification: {
+          status,
+          method: clientQrPayload ? 'slip_qr_decode' : 'none',
+          expectedAmount,
+          actualAmount: null,
+          expectedReceiver: RECEIVER_MAIN,   // pass QR always uses the main route
+          actualReceiver: null,
+          transactionRef: transRef,
+          refSource: transRef ? 'client_qr_decode_untrusted' : null,
+          paidAt: null,
+          checkedAt: FieldValue.serverTimestamp(),
+          reason,
+          slipHash: serverHash,
+          slipHashSource: serverHash ? 'server' : null,
+          clientSlipHash,
+          slipUrlChecked: slipUrl,
+          engine: 'slip-verify-1a-pass',
+        },
+      });
+      return { status, reason, dupOfCode };
+    });
+  } catch (e) {
+    if (e.message === 'GONE' || e.message === 'BAD_STATE') {
+      return res.status(409).json({ ok: false, error: 'Purchase state changed — verification not recorded' });
+    }
+    console.error('[slip-verify pass] tx:', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to record verification' });
+  }
+
+  // One admin push per pass slip (admin still approves manually in Stage D).
+  let notify = { sent: 0, failed: 0, skipped: 0 };
+  try {
+    const flags = await loadNotificationFlags();
+    if (flags.slipVerifyNotifications !== false) {
+      const isReview = outcome.status === 'manual_review';
+      const type = isReview ? 'slip_review_admin' : 'pass_purchase_admin';
+      const hash8 = (serverHash || clientSlipHash || 'nohash').slice(0, 8);
+      const payload = isReview
+        ? {
+            bookingCode: purchaseCode,
+            customerName: purchase.customerName, customerPhone: purchase.customerPhone,
+            date: null, startTime: null, endTime: null,
+            expectedAmount,
+            reasonText: `${REASON_TH[outcome.reason] || 'ต้องตรวจสอบด้วยตนเอง'} (การซื้อแพ็กเกจ ${purchase.packageName || ''})`,
+            dupOfBookingCode: outcome.dupOfCode || null,
+          }
+        : {
+            bookingCode: purchaseCode, purchaseCode,
+            customerName: purchase.customerName, customerPhone: purchase.customerPhone,
+            packageName: purchase.packageName, price: purchase.price,
+            precheckNote: outcome.status === 'pre_verified' ? 'ตรวจสลิปเบื้องต้นผ่าน ✓ (ไม่พบสลิปซ้ำ)' : null,
+          };
+      const admins = await loadActiveAdmins();
+      const results = await Promise.all(admins.map(a =>
+        sendAndLog({
+          eventId: `${purchaseCode}_slipverify_${hash8}_${a.lineUserId}`,
+          type, targetType: 'admin', lineUserId: a.lineUserId, bookingCode: purchaseCode, payload,
+        }).catch(e => ({ ok: false, status: 'failed', error: e.message }))
+      ));
+      notify.sent    = results.filter(r => r.ok && r.status === 'success').length;
+      notify.skipped = results.filter(r => r.ok && r.status === 'skipped').length;
+      notify.failed  = results.filter(r => !r.ok).length;
+    } else {
+      notify.skipped = -1;
+    }
+  } catch (e) {
+    console.error('[slip-verify pass] notify:', e.message);
+  }
+
+  await writeAuditLog(db, {
+    actor: 'system', actorRole: 'slip_verify',
+    branchId: 'ladprao1',
+    action: 'slip_verify_pass', targetId: purchaseId,
+    before: { paymentStatus: 'pending_review' },
+    after:  { verificationStatus: outcome.status, reason: outcome.reason ?? null },
+    note: purchaseCode,
+  });
+
+  console.log(`[slip-verify pass] ${purchaseCode} → ${outcome.status}${outcome.reason ? ` (${outcome.reason})` : ''} hash:${serverHash ? 'server' : 'none'}`);
   return res.status(200).json({
     ok: true,
     verification: { status: outcome.status, reason: outcome.reason ?? null },

@@ -62,7 +62,35 @@ export default async function handler(req, res) {
   if (body.action === 'coach_options')       return handleCoachOptions(res);
   if (body.action === 'coach_slots')         return handleCoachSlots(res, body);
   if (body.action === 'create_coach_lesson') return handleCreateCoachLesson(res, body);
+  // Pass self-purchase (Stage D) — flag enablePassSelfPurchase, OFF by default.
+  if (body.action === 'pass_catalog')         return handlePassCatalog(res);
+  if (body.action === 'create_pass_purchase') return handleCreatePassPurchase(res, body);
   return res.status(400).json({ ok: false, error: `Unknown action "${body.action}"` });
+}
+
+// ── Pass self-purchase catalog — SERVER-AUTHORITATIVE prices. Only clearly
+// systematized passes are sellable online; Beginner Coaching ("from ฿4,000",
+// varies by coach) stays contact-admin by business decision.
+const PASS_CATALOG = {
+  ultra_pass_10: { packageName: 'Ultra Pass 10 Hours', price: 3100 },
+  ultra_pass_20: { packageName: 'Ultra Pass 20 Hours', price: 5900 },
+  offpeak:       { packageName: 'Off-Peak Pass',       price: 3600 },
+};
+
+async function passSelfPurchaseEnabled(db) {
+  try {
+    const snap = await db.collection('system_settings').doc('features').get();
+    return snap.exists && snap.data().enablePassSelfPurchase === true;
+  } catch (e) {
+    console.warn('[pass flag] read failed → OFF:', e.message);
+    return false;
+  }
+}
+
+function genPurchaseCode() {
+  const t = Date.now().toString(36).toUpperCase().slice(-5);
+  const r = Math.random().toString(36).toUpperCase().slice(2, 4);
+  return `PP${t}${r}`;
 }
 
 // ── Coach booking feature flag — missing doc/field = OFF (safe default) ──
@@ -424,6 +452,86 @@ async function handleCancelPending(res, body) {
   }
 
   return res.status(200).json({ ok: true });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Pass self-purchase — Stage D (feature-flagged, OFF by default)
+// ════════════════════════════════════════════════════════════════════
+// Flow: create purchase (here) → customer pays Dynamic QR → uploads slip
+// (existing pass branch: pass_purchases → pending_review) → slip pre-check →
+// ADMIN approves (/api/admin-user-action approve_pass_purchase) → package
+// issued. A pass is NEVER issued from a slip upload alone.
+
+// pass_catalog — PUBLIC read; enabled:false + empty list while the flag is off.
+async function handlePassCatalog(res) {
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[pass_catalog] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+  try {
+    if (!(await passSelfPurchaseEnabled(db))) {
+      return res.status(200).json({ ok: true, enabled: false, passes: [] });
+    }
+    const passes = Object.entries(PASS_CATALOG)
+      .map(([type, p]) => ({ packageType: type, packageName: p.packageName, price: p.price }));
+    return res.status(200).json({ ok: true, enabled: true, passes });
+  } catch (e) {
+    console.error('[pass_catalog]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to load catalog' });
+  }
+}
+
+// create_pass_purchase — creates the pending pass_purchases doc with the
+// SERVER price (client price is never trusted). No slot is held and there is
+// no expiry; the purchase just waits for payment + slip + admin approval.
+async function handleCreatePassPurchase(res, body) {
+  const packageType  = typeof body.packageType === 'string' ? body.packageType.trim() : '';
+  const customerName = typeof body.customerName === 'string' ? body.customerName.trim() : '';
+  const customerPhone= typeof body.customerPhone === 'string' ? body.customerPhone.trim() : '';
+  const lineUserId   = typeof body.lineUserId === 'string' && body.lineUserId ? body.lineUserId : 'guest';
+  const lineDisplayName = typeof body.lineDisplayName === 'string' ? body.lineDisplayName : '';
+
+  if (!PASS_CATALOG[packageType]) return res.status(400).json({ ok: false, error: 'Unknown packageType' });
+  if (!customerName)  return res.status(400).json({ ok: false, error: 'customerName is required' });
+  if (!customerPhone) return res.status(400).json({ ok: false, error: 'customerPhone is required' });
+  // Pass approval adds the package to this LINE account — guests can't buy.
+  if (lineUserId === 'guest') return res.status(403).json({ ok: false, error: 'กรุณาเปิดผ่าน LINE เพื่อซื้อแพ็กเกจ' });
+
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[create_pass_purchase] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+
+  if (!(await passSelfPurchaseEnabled(db))) {
+    return res.status(403).json({ ok: false, error: 'การซื้อแพ็กเกจออนไลน์ยังไม่เปิดให้บริการ' });
+  }
+
+  const cat = PASS_CATALOG[packageType];
+  const purchaseCode = genPurchaseCode();
+  const ref = db.collection('pass_purchases').doc();
+  try {
+    await ref.set({
+      purchaseCode,
+      packageType,
+      packageName: cat.packageName,
+      price: cat.price,                       // server-authoritative snapshot
+      customerName, customerPhone,
+      customerPhoneNormalized: normalizePhone(customerPhone),
+      lineUserId, lineDisplayName,
+      status: 'pending_payment', paymentStatus: 'unpaid',
+      slipUrl: null, slipUploadedAt: null,
+      issuedPackageId: null,                  // idempotency anchor for approval
+      createdVia: 'self_service',
+      createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+    });
+  } catch (e) {
+    console.error('[create_pass_purchase] write:', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to create purchase' });
+  }
+
+  console.log(`[create_pass_purchase] ${purchaseCode} ${packageType} ฿${cat.price} ${lineUserId}`);
+  return res.status(200).json({
+    ok: true,
+    purchase: { id: ref.id, purchaseCode, packageType, packageName: cat.packageName, price: cat.price, customerName },
+  });
 }
 
 // ════════════════════════════════════════════════════════════════════
