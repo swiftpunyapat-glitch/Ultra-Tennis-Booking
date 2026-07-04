@@ -526,7 +526,8 @@
                 <option value="ultra_starter_3">⚡ Ultra Starter (3 Hours · ฿999)</option>
                 <option value="ultra_pass_10">⚡ Ultra Pass 10 Hours (10 Hours · ฿3,100)</option>
                 <option value="ultra_pass_20">⚡ Ultra Pass 20 Hours (20 Hours · ฿5,900)</option>
-                <option value="beginner_coaching_5">🎓 Beginner Coaching (5 Hours · ฿3,500)</option>
+                <option value="beginner_coaching_5">🎓 Beginner Coaching (5 Hours · เริ่มต้น ฿4,000)</option>
+                <option value="offpeak">🕐 Off-Peak Pass (16 Hours · ฿3,600 · ≤4 ชม./สัปดาห์ · 30 วัน)</option>
                 <option value="coach_at_ultra_10">🎾 Coaching at Ultra (10 Hours · ฿3,000)</option>
                 <option value="monstr_event_pass">🎟️ MONSTR Event Pass (1 Hour · single-use · Mon–Fri)</option>
               </select>
@@ -542,6 +543,14 @@
           </div>
           <button class="smbtn smg" id="addPassBtn" style="width:100%;padding:12px;font-size:.88rem" disabled>✓ Add Pass for User</button>
         </div>
+      </div>
+
+      <!-- Pending Pass Purchases (Stage D — self-service purchases awaiting
+           approval). Approve = issues the package + notifies customer/admins;
+           issuance happens ONLY here, never from slip upload. -->
+      <div class="smcard">
+        <h2>🛒 Pending Pass Purchases <button class="rfbtn" id="refreshPassPurchasesBtn" style="margin-left:8px;font-size:.68rem">↻ Refresh</button></h2>
+        <div id="pendingPurchasesList"><div class="smempty">Click Refresh to load pending purchases.</div></div>
       </div>
 
       <!-- Active Passes List -->
@@ -652,6 +661,19 @@
       <button class="smbtn smg" id="coachCreateBtn" style="width:100%;padding:10px;font-size:.85rem">+ Add Coach</button>
     </div>
     <div id="coachListBox" style="display:flex;flex-direction:column;gap:8px"></div>
+
+    <!-- Admin-managed coach availability (Stage A): open/close hours on a
+         coach's behalf (e.g. coach calls in). Same server rules as coach.html:
+         open only shop-open hours, cannot close an hour with a live booking. -->
+    <div style="background:var(--s1);border:1px solid var(--bd);border-radius:10px;padding:14px;margin-top:12px">
+      <div style="font-weight:800;font-size:.95rem;margin-bottom:10px">🗓 วันว่างโค้ช (แอดมินจัดการแทนได้)</div>
+      <div class="smrow" style="margin-bottom:10px">
+        <div class="smf"><label>Coach</label><select id="cavCoachSel" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%"><option value="">Select coach...</option></select></div>
+        <div class="smf"><label>Date</label><input type="date" id="cavDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%"/></div>
+      </div>
+      <div id="cavGrid" style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px"><div class="smempty" style="grid-column:1/-1">เลือกโค้ชและวันที่</div></div>
+      <div style="font-size:.68rem;color:var(--m);margin-top:8px">🟢 เปิดรับสอน (กดเพื่อปิด) · ⚪ ยังไม่เปิด (กดเพื่อเปิด) · 🔴 มีจอง/คาบสอน ปิดไม่ได้ · เทา = ร้านไม่เปิดชั่วโมงนั้น</div>
+    </div>
   </div>
 
   <div id="tabActivity" style="display:none">
@@ -1357,6 +1379,7 @@ async function renderCoachTab(){
           <button class="smbtn" data-coach-rates="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#0f2d1e;color:#2fbf76;border:1px solid #2fbf76">💰 Rates</button>
           ${active?`<button class="smbtn" data-coach-reset="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#1e2f4d;color:#8fb8ff;border:1px solid #2d4a7a">🔑 Reset PIN</button>`:''}
           <button class="smbtn ${active?'':'smg'}" data-coach-toggle="${esc(c.id)}" data-coach-active="${active?'1':'0'}" style="padding:6px 12px;font-size:.75rem">${active?'Deactivate':'Activate'}</button>
+          ${!active?`<button class="smbtn" data-coach-del="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#5a0a0a;color:#ff9b9b;border:1px solid var(--dan)">🗑 Delete</button>`:''}
         </div>
       </div>`;
     }).join("");
@@ -1413,6 +1436,32 @@ async function renderCoachTab(){
         }catch(e){ console.error(e); showToast("Failed.",true); btn.disabled=false; }
       });
     });
+    // Safe hard-delete (Stage A): shown only for INACTIVE coaches; the server
+    // refuses when any booking references this coachId (history guard).
+    box.querySelectorAll("[data-coach-del]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        const coachId = btn.dataset.coachDel;
+        if(!confirm(`ลบ Coach ID "${coachId}" ถาวร?\n\nลบได้เฉพาะโค้ชที่ไม่มีประวัติการจอง/คาบสอน (เซิร์ฟเวอร์เช็คซ้ำ)\nถ้ามีประวัติ ให้ใช้ Deactivate แทน`)) return;
+        const typed=prompt(`พิมพ์ชื่อโค้ช "${coachId}" เพื่อยืนยันการลบถาวร:`);
+        if(typed!==coachId){ showToast("ยกเลิก — ชื่อไม่ตรง",true); return; }
+        btn.disabled=true;
+        try{
+          const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_delete",coachId})});
+          const data=await res.json().catch(()=>({}));
+          if(!res.ok||!data.ok){ showToast(data.error||"ลบไม่สำเร็จ",true); btn.disabled=false; return; }
+          showToast(`🗑 ลบ ${coachId} แล้ว`);
+          renderCoachTab();
+        }catch(e){ console.error(e); showToast("ลบไม่สำเร็จ",true); btn.disabled=false; }
+      });
+    });
+    // Populate the admin availability panel's coach selector.
+    const cavSel=$("cavCoachSel");
+    if(cavSel){
+      const prev=cavSel.value;
+      cavSel.innerHTML=`<option value="">Select coach...</option>`+coachCache.filter(c=>c.active!==false)
+        .map(c=>`<option value="${esc(c.id)}">${esc(c.displayName||c.name)}</option>`).join("");
+      if(prev&&coachCache.some(c=>c.id===prev&&c.active!==false)){ cavSel.value=prev; }
+    }
   }catch(e){ console.error(e); box.innerHTML = `<div class="smempty">❌ ${esc(e.message||"Failed")}</div>`; }
 }
 
@@ -1434,6 +1483,55 @@ $("coachCreateBtn").addEventListener("click", async ()=>{
   }catch(e){ console.error(e); showToast("Failed.",true); }
   finally{ btn.disabled=false; btn.textContent="+ Add Coach"; }
 });
+
+// ── Admin-managed coach availability (Stage A) ──────────────────────
+// Same server endpoints as coach.html; admins pass coachId explicitly.
+async function loadCavGrid(){
+  const coachId=$("cavCoachSel").value, date=$("cavDate").value;
+  const grid=$("cavGrid");
+  if(!coachId||!date){ grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">เลือกโค้ชและวันที่</div>`; return; }
+  grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">Loading...</div>`;
+  try{
+    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_availability_get",coachId,date})});
+    const d=await res.json().catch(()=>({}));
+    if(!res.ok||!d.ok){ grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">❌ ${esc(d.error||"Failed")}</div>`; return; }
+    renderCavGrid(d);
+  }catch(e){ console.error(e); grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">❌ Network error</div>`; }
+}
+function renderCavGrid(d){
+  const grid=$("cavGrid");
+  const roomOpen=new Set(d.roomOpen||[]), assigned=new Set(d.assignedHours||[]), coachOpen=d.coachOpen||{};
+  const hours=[...new Set([...roomOpen,...Object.keys(coachOpen)])].sort();
+  if(!hours.length){ grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">ร้านไม่ได้เปิดชั่วโมงให้จองในวันนี้</div>`; return; }
+  grid.innerHTML="";
+  hours.forEach(h=>{
+    const av=coachOpen[h];
+    const isBooked=(av&&av.status==="booked")||assigned.has(h);
+    const isOn=!!av&&!isBooked;
+    const btn=document.createElement("button");
+    btn.className="smbtn";
+    btn.style.cssText="padding:8px 4px;font-size:.75rem;font-weight:800";
+    if(isBooked){ btn.textContent=`${h} 🔴`; btn.title=`มีจอง/คาบสอน${av&&av.bookingCode?` · ${av.bookingCode}`:""} — ปิดไม่ได้`; btn.disabled=true; btn.style.background="#3d1010"; btn.style.color="var(--dan)"; }
+    else if(isOn){ btn.textContent=`${h} 🟢`; btn.title="เปิดรับสอนอยู่ — กดเพื่อปิด"; btn.style.background="#0f2d1e"; btn.style.color="#2fbf76"; btn.addEventListener("click",()=>cavToggle(h,false,btn)); }
+    else if(roomOpen.has(h)){ btn.textContent=h; btn.title="ยังไม่เปิดรับสอน — กดเพื่อเปิด"; btn.addEventListener("click",()=>cavToggle(h,true,btn)); }
+    else { btn.textContent=h; btn.title="ร้านไม่เปิดชั่วโมงนี้"; btn.disabled=true; btn.style.opacity=".4"; }
+    grid.appendChild(btn);
+  });
+}
+async function cavToggle(hour,open,btn){
+  const coachId=$("cavCoachSel").value, date=$("cavDate").value;
+  if(!open&&!confirm(`ปิดรับสอน ${hour} ของ ${coachId} วันที่ ${date}?`)) return;
+  btn.disabled=true;
+  try{
+    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_availability_set",coachId,date,hour,open})});
+    const d=await res.json().catch(()=>({}));
+    if(!res.ok||!d.ok) showToast(d.error||"บันทึกไม่สำเร็จ",true);
+    else showToast(open?`✓ เปิด ${hour} ให้ ${coachId}`:`✓ ปิด ${hour} ของ ${coachId}`);
+  }catch(e){ showToast("Network error",true); }
+  finally{ loadCavGrid(); }
+}
+$("cavCoachSel").addEventListener("change",loadCavGrid);
+$("cavDate").addEventListener("change",loadCavGrid);
 
 // ── Assign coach modal ──────────────────────────────────────────────
 let assignCoachBooking = null;
@@ -2481,7 +2579,7 @@ const PACKAGES = {
   // Legacy
   ultra_10:             { packageType: "ultra_10",             packageName: "Ultra Pass 10 Hours",  totalMinutes: 600,  validityDays: 90 },
   ultra_20:             { packageType: "ultra_20",             packageName: "Ultra Pass 20 Hours",  totalMinutes: 1200, validityDays: 180 },
-  offpeak:              { packageType: "offpeak",              packageName: "Off-Peak Pass",        totalMinutes: null, validityDays: 30 },
+  offpeak:              { packageType: "offpeak",              packageName: "Off-Peak Pass",        totalMinutes: 960,  validityDays: 30 },   // 2026-07: 16h total · ≤4h/ISO week
   monstr_event_pass:    { packageType: "monstr_event_pass",    packageName: "MONSTR Event Pass",    totalMinutes: 60,   validityDays: 30 }
 };
 
@@ -2634,6 +2732,70 @@ $("addPassBtn").addEventListener("click", async()=>{
   }
 });
 
+
+// ── Pending pass purchases (Stage D) ────────────────────────────────
+async function loadPendingPurchases(){
+  const box=$("pendingPurchasesList");
+  box.innerHTML=`<div class="smload"><div class="spinner"></div><p>Loading...</p></div>`;
+  try{
+    const res=await fetch("/api/admin-user-action",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"list_pending_pass_purchases"})});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok){ box.innerHTML=`<div class="smempty">❌ ${esc(data.error||"Failed")}</div>`; return; }
+    const items=data.purchases||[];
+    if(!items.length){ box.innerHTML=`<div class="smempty">ไม่มีรายการซื้อรอตรวจสอบ</div>`; return; }
+    box.innerHTML=items.map(p=>{
+      const pv=p.paymentVerification;
+      const pvBadge=pvBadgeHTML({paymentVerification:pv});
+      const slip=p.slipUrl
+        ?`<a href="${esc(p.slipUrl)}" target="_blank" rel="noopener noreferrer"><img src="${esc(p.slipUrl)}" alt="Slip" style="width:64px;height:64px;object-fit:cover;border-radius:7px;border:1px solid var(--bd)" loading="lazy"/></a>`
+        :`<span style="font-size:.7rem;color:var(--m)">no slip</span>`;
+      return `<div style="display:flex;align-items:center;gap:12px;background:var(--s1);border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:6px">
+        ${slip}
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:800;font-size:.85rem">${esc(p.packageName||"—")} · ฿${Number(p.price)||0} ${pvBadge}</div>
+          <div style="font-size:.72rem;color:var(--m)">${esc(p.customerName||"—")} · ${esc(p.customerPhone||"—")} · <span style="color:var(--ac)">${esc(p.purchaseCode||"—")}</span></div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="smbtn smg" data-pp-approve="${esc(p.id)}" style="padding:7px 12px;font-size:.75rem">✓ Approve + Add Pass</button>
+          <button class="smbtn" data-pp-reject="${esc(p.id)}" style="padding:7px 10px;font-size:.75rem;background:#3d1010;border-color:var(--dan);color:var(--dan)">✗ Reject</button>
+        </div>
+      </div>`;
+    }).join("");
+    box.querySelectorAll("[data-pp-approve]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        const item=items.find(x=>x.id===btn.dataset.ppApprove); if(!item) return;
+        if(!confirm(`อนุมัติการซื้อ ${item.packageName} ฿${item.price}\nลูกค้า: ${item.customerName}\n\nระบบจะ Add Pass เข้าบัญชี LINE ลูกค้าและแจ้งลูกค้า+แอดมินอัตโนมัติ`)) return;
+        btn.disabled=true; btn.textContent="Approving...";
+        try{
+          const res=await fetch("/api/admin-user-action",{method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({action:"approve_pass_purchase",purchaseId:item.id})});
+          const data=await res.json().catch(()=>({}));
+          if(!res.ok||!data.ok){ showToast(data.error||"อนุมัติไม่สำเร็จ",true); btn.disabled=false; btn.textContent="✓ Approve + Add Pass"; return; }
+          showToast(`✓ เปิดใช้งาน ${item.packageName} ให้ ${item.customerName} แล้ว`);
+          loadPendingPurchases(); loadActivePasses();
+        }catch(e){ console.error(e); showToast("อนุมัติไม่สำเร็จ",true); btn.disabled=false; btn.textContent="✓ Approve + Add Pass"; }
+      });
+    });
+    box.querySelectorAll("[data-pp-reject]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        const item=items.find(x=>x.id===btn.dataset.ppReject); if(!item) return;
+        const reason=prompt(`เหตุผลที่ปฏิเสธการซื้อ ${item.purchaseCode} (ส่งให้ลูกค้าทาง LINE):`,"สลิปไม่ถูกต้องหรือไม่พบยอดโอน");
+        if(reason===null) return;
+        btn.disabled=true;
+        try{
+          const res=await fetch("/api/admin-user-action",{method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({action:"reject_pass_purchase",purchaseId:item.id,reason})});
+          const data=await res.json().catch(()=>({}));
+          if(!res.ok||!data.ok){ showToast(data.error||"ปฏิเสธไม่สำเร็จ",true); btn.disabled=false; return; }
+          showToast(`✗ ปฏิเสธ ${item.purchaseCode} แล้ว`);
+          loadPendingPurchases();
+        }catch(e){ console.error(e); showToast("ปฏิเสธไม่สำเร็จ",true); btn.disabled=false; }
+      });
+    });
+  }catch(e){ console.error(e); box.innerHTML=`<div class="smempty">❌ Network error</div>`; }
+}
+$("refreshPassPurchasesBtn").addEventListener("click",loadPendingPurchases);
 
 async function loadActivePasses(){
   $("activePassesList").innerHTML=`<div class="smload"><div class="spinner"></div><p>Loading...</p></div>`;

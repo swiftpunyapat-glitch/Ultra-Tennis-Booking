@@ -763,6 +763,25 @@
         </p>
       </div>
 
+      <!-- Pass self-purchase (Stage D) — hidden until the enablePassSelfPurchase
+           flag is on. Purchase doc + price are created server-side; slip upload
+           and admin approval reuse the existing pass_purchases machinery. -->
+      <div class="card" id="passBuyWrap" style="display:none;margin-bottom:14px">
+        <div class="slabel">🛒 ซื้อแพ็กเกจออนไลน์ · จ่ายด้วย QR + แนบสลิป</div>
+        <div id="passBuyList" style="display:flex;flex-direction:column;gap:8px"></div>
+        <div id="passBuyForm" style="display:none;margin-top:12px">
+          <div class="fgrid">
+            <label><span data-i18n="name">Name</span><input type="text" id="pbName" autocomplete="name"/></label>
+            <label><span data-i18n="phone">Phone</span><input type="tel" id="pbPhone" autocomplete="tel"/></label>
+          </div>
+          <button class="btn-go" id="pbConfirmBtn" style="width:100%;margin-top:10px">ยืนยันซื้อ</button>
+          <p style="font-size:.68rem;color:var(--muted);line-height:1.7;margin-top:8px">
+            หลังโอนเงินและแนบสลิป แอดมินจะตรวจสอบและเปิดใช้งาน Pass ให้อัตโนมัติ
+            จากนั้นจะมีข้อความยืนยันทาง LINE · Pass จะยังไม่เปิดใช้งานจนกว่าแอดมินยืนยันการชำระเงิน
+          </p>
+        </div>
+      </div>
+
       <div class="pkggrid">
         <!-- Ultra Starter -->
         <div class="pkgcard">
@@ -793,9 +812,9 @@
         <div class="pkgcard" style="margin-top: 10px;">
           <div class="pkgcard-top">
             <div class="pkg-name">Beginner Coaching</div>
-            <div class="pkg-price" style="white-space:nowrap">฿3,500</div>
+            <div class="pkg-price" style="white-space:nowrap">เริ่มต้น ฿4,000</div>
           </div>
-          <div class="pkg-desc" style="margin-top:5px;">5 Hours (300 mins) · Valid 60 days · Includes court and coach</div>
+          <div class="pkg-desc" style="margin-top:5px;">5 Hours (300 mins) · Valid 60 days · Includes court and coach · ราคาขึ้นกับโค้ช</div>
           <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
             <a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener noreferrer" class="btn-rpay" style="text-decoration:none; text-align:center;" data-i18n="contactToBuy">Contact admin to buy</a>
           </div>
@@ -945,11 +964,11 @@ const PACKAGES = {
   ultra_starter_3: { packageType:"ultra_starter_3", packageName:"Ultra Starter", price:999, totalMinutes:180, validityDays:30, weeklyLimitHours:null, monthlyLimitHours:null, desc:"180 minutes · Valid 30 days · avg ฿333/hr" },
   ultra_pass_10: { packageType:"ultra_pass_10", packageName:"Ultra Pass 10 Hours", price:3100, totalMinutes:600, validityDays:90, weeklyLimitHours:null, monthlyLimitHours:null, desc:"600 minutes · Valid 90 days · avg ฿310/hr · Save ฿40/hr" },
   ultra_pass_20: { packageType:"ultra_pass_20", packageName:"Ultra Pass 20 Hours", price:5900, totalMinutes:1200, validityDays:180, weeklyLimitHours:null, monthlyLimitHours:null, desc:"1,200 minutes · Valid 180 days · avg ฿295/hr · Save ฿55/hr" },
-  beginner_coaching_5: { packageType:"beginner_coaching_5", packageName:"Beginner Coaching", price:3500, totalMinutes:300, validityDays:60, weeklyLimitHours:null, monthlyLimitHours:null, desc:"300 minutes · Valid 60 days" },
+  beginner_coaching_5: { packageType:"beginner_coaching_5", packageName:"Beginner Coaching", price:4000, totalMinutes:300, validityDays:60, weeklyLimitHours:null, monthlyLimitHours:null, desc:"300 minutes · Valid 60 days · from ฿4,000 (varies by coach)" },
   coach_at_ultra_10: { packageType:"coach_at_ultra_10", packageName:"Coaching at Ultra", price:3000, totalMinutes:600, validityDays:60, weeklyLimitHours:null, monthlyLimitHours:null, desc:"600 minutes · Valid 60 days" },
   ultra_10:{ packageType:"ultra_10", packageName:"Ultra Pass 10 Hours",  price:3100, totalMinutes:600,  validityDays:90,  weeklyLimitHours:null, monthlyLimitHours:null, desc:"600 minutes · Valid 90 days · avg ฿310/hr · Save ฿40/hr" },
   ultra_20:{ packageType:"ultra_20", packageName:"Ultra Pass 20 Hours",  price:5900, totalMinutes:1200, validityDays:180, weeklyLimitHours:null, monthlyLimitHours:null, desc:"1,200 minutes · Valid 180 days · avg ฿295/hr · Save ฿55/hr" },
-  offpeak: { packageType:"offpeak",  packageName:"Off-Peak Pass",         price:3500, totalMinutes:null, validityDays:30,  weeklyLimitHours:5,    monthlyLimitHours:20,   desc:"Mon–Fri · 09:00–15:00 · Up to 20 hrs/month · Valid 30 days" },
+  offpeak: { packageType:"offpeak",  packageName:"Off-Peak Pass",         price:3600, totalMinutes:960,  validityDays:30,  weeklyLimitHours:4,    monthlyLimitHours:16,   desc:"Mon–Fri · 09:00–15:00 · 16 hrs total in 30 days · Max 4 hrs/week" },
 };
 
 // ── STATE ───────────────────────────────────────────────────────
@@ -1581,6 +1600,7 @@ function setupNav() {
   $("ckName").addEventListener("input", updateCkConfirm);
   $("ckPhone").addEventListener("input", updateCkConfirm);
   initCoachHome();
+  initPassSelfPurchase();
   $("btnMyBookings").addEventListener("click",()=>{ activeMyNav="bookings"; openMyBookings(); });
   $("btnRegister").addEventListener("click", ()=>{ openRegisterView(); });
   $("btnPromotions").addEventListener("click", ()=>{ showView("viewPromotions"); });
@@ -2503,7 +2523,18 @@ $("confirmBkBtn").addEventListener("click", async()=>{
         if(wkUsed+60>wkLimitMin) throw new Error(`Off-Peak weekly limit reached (${wkLimitMin/60} hrs).`);
         if(moUsed+60>moLimitMin) throw new Error(`Off-Peak monthly limit reached (${moLimitMin/60} hrs).`);
 
+        // 2026-07 Off-Peak rules: hard TOTAL cap (16 hrs = totalMinutes 960)
+        // tracked via remainingMinutes — same mechanism as Ultra passes.
+        // Legacy passes without totalMinutes skip this (monthly cap governs).
+        const opHasTotal=Number(pd.totalMinutes)>0;
+        const opRemaining=Number(pd.remainingMinutes);
+        if(opHasTotal){
+          if(!Number.isFinite(opRemaining)) throw new Error("Off-Peak pass hours are not configured. Contact staff.");
+          if(opRemaining<60) throw new Error("Off-Peak Pass hours are used up.");
+        }
+
         t.update(pkgRef,{
+          ...(opHasTotal?{ remainingMinutes: opRemaining-60 }:{}),
           weeklyUsage:  { ...wkUsage,  [weekKey]:  wkUsed+60 },
           monthlyUsage: { ...moUsage,  [monthKey]: moUsed+60 },
           updatedAt:    serverTimestamp(),
@@ -2625,7 +2656,10 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
       if (bData.paymentQrType === "late_night" || bData.pricingMode === "late_night") {
         isLateNightBooking = true;
       } else if (bData.paymentQrType === "special" || bData.pricingMode === "special_promotion") {
-        qrUrl = "/payment-qr-special.png";
+        // Stage B guardrail: the static special PNG is amount-locked at ฿333.
+        // It is only a safe fallback when the promo price IS 333 — any other
+        // configured promo price must never fall back to a wrong-amount QR.
+        qrUrl = Number(bData.qrAmount ?? bData.price ?? 0) === 333 ? "/payment-qr-special.png" : null;
       } else {
         // Pricing v2: fixed-amount QR selected by the (server-computed) qrAmount.
         // Falls back to the booking price for legacy bookings (always 350 → normal).
@@ -2641,22 +2675,21 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
     }
 
     if (isLateNightBooking) {
+      // Stage B: Late Night now pays into the SAME PromptPay account as normal
+      // bookings via the dynamic amount-locked QR (qrType "normal" → main
+      // proxy). The admin-configured Late Night image is kept only as the
+      // fallback when the QR lib is unavailable; no image → safe message.
       const dbLateNightQr = (pricing?.lateNightQrUrl || "").trim();
       const localLateNightQr = (LATE_NIGHT_QR_URL || "").trim();
-      const finalLateNightQr = dbLateNightQr || localLateNightQr;
-      
-      if (!finalLateNightQr) {
-        qrWrap.innerHTML = `<div style="padding:18px 10px;text-align:center;font-size:.78rem;color:var(--muted);line-height:1.7">🌙 <strong>Late Night Session</strong><br>กรุณาติดต่อแอดมินเพื่อรับ QR โอนเงิน<br><span style="font-size:.7rem">Please contact staff for payment QR.</span></div>`;
-      } else {
-        const paymentQrType = (state.paymentMode === "booking" && bData) ? (bData.paymentQrType || "late_night") : "late_night";
-        const price = (state.paymentMode === "booking" && bData) ? (bData.price || "") : amount;
-        const qrSrc = `${finalLateNightQr}?v=${paymentQrType}-${price}`;
-        renderPaymentQr(qrWrap, qrSrc, bData);
-      }
+      const fallbackLN = dbLateNightQr || localLateNightQr || null;
+      const dynAmountLN = (state.paymentMode === "booking" && bData)
+        ? Number(bData.qrAmount ?? bData.price ?? 0)
+        : Number(amount) || 0;
+      renderDynamicOrStaticQr(qrWrap, bData, "normal", dynAmountLN, fallbackLN ? `${fallbackLN}?v=late_night-${dynAmountLN}` : null);
     } else {
       const paymentQrType = (state.paymentMode === "booking" && bData) ? (bData.paymentQrType || "normal") : "normal";
       const price = (state.paymentMode === "booking" && bData) ? (bData.price || "") : amount;
-      const staticSrc = `${qrUrl}?v=${paymentQrType}-${price}`;
+      const staticSrc = qrUrl ? `${qrUrl}?v=${paymentQrType}-${price}` : null;
       // Dynamic PromptPay QR with the exact amount — covers bookings AND pass
       // purchases (static images only exist for a handful of amounts).
       const dynAmount = (state.paymentMode === "booking" && bData)
@@ -2699,10 +2732,17 @@ function promptpayPayload(proxy, amount){
 function renderDynamicOrStaticQr(qrWrap, booking, qrType, amount, staticSrc){
   const proxy = qrType === "special" ? PROMPTPAY_ALT : PROMPTPAY_MAIN;
   const payload = window.QRCode ? promptpayPayload(proxy, amount) : null;
-  if(!payload){ renderPaymentQr(qrWrap, staticSrc, booking); return; }
+  if(!payload){ renderQrFallback(qrWrap, staticSrc, booking); return; }
   window.QRCode.toDataURL(payload, { width:640, margin:2 })
     .then(dataUrl => renderPaymentQr(qrWrap, dataUrl, booking))
-    .catch(() => renderPaymentQr(qrWrap, staticSrc, booking));
+    .catch(() => renderQrFallback(qrWrap, staticSrc, booking));
+}
+// Fallback when the dynamic QR could not be generated: use the static image
+// only when one with the CORRECT amount exists (staticSrc non-null); otherwise
+// show a safe contact-staff message — never a wrong-amount QR.
+function renderQrFallback(qrWrap, staticSrc, booking){
+  if(staticSrc){ renderPaymentQr(qrWrap, staticSrc, booking); return; }
+  qrWrap.innerHTML = `<div style="padding:18px 10px;text-align:center;font-size:.78rem;color:var(--muted);line-height:1.7">⚠️ สร้าง QR อัตโนมัติไม่สำเร็จ<br>กรุณาติดต่อแอดมินเพื่อรับ QR โอนเงิน<br><span style="font-size:.7rem">Could not generate the payment QR — please contact staff.</span></div>`;
 }
 
 function renderPaymentQr(qrWrap, qrSrc, booking) {
@@ -2795,6 +2835,27 @@ function legacySlipNotify(bd){
     endTime: bd.endTime
   });
 }
+async function runSlipPrecheckPass(file,purchaseId,purchaseCode,pd){
+  try{
+    const [clientSlipHash,clientQrPayload]=await Promise.all([hashFileSha256(file),decodeSlipQr(file)]);
+    const res=await fetch("/api/slip-verify",{
+      method:"POST",headers:{"Content-Type":"application/json"},keepalive:true,
+      body:JSON.stringify({targetType:"pass_purchase",purchaseId,purchaseCode,clientSlipHash,clientQrPayload})
+    });
+    const d=await res.json().catch(()=>null);
+    if(!res.ok||!d||!d.ok) throw new Error((d&&d.error)||`HTTP ${res.status}`);
+    console.log("[slip-precheck pass]",d.verification);
+  }catch(e){
+    console.warn("[slip-precheck pass] failed — falling back to direct notify:",e);
+    if(window.notifyAdmins){
+      window.notifyAdmins({
+        type:"pass_purchase_admin", bookingCode:purchaseCode, purchaseCode,
+        customerName:pd.customerName, customerPhone:pd.customerPhone,
+        packageName:pd.packageName, price:pd.price
+      });
+    }
+  }
+}
 async function runSlipPrecheck(file,bookingDocId,bookingCode,bd){
   try{
     const [clientSlipHash,clientQrPayload]=await Promise.all([hashFileSha256(file),decodeSlipQr(file)]);
@@ -2845,20 +2906,11 @@ $("submitSlipBtn").addEventListener("click", async()=>{
       await updateDoc(pRef,{ status:"pending_review", paymentStatus:"pending_review", slipUrl:url, slipUploadedAt:serverTimestamp(), updatedAt:serverTimestamp() });
       console.log("Pass purchase updated");
       clearTimeout(warningTimer);
-      // Fire-and-forget: pass purchases previously notified no one. Uses the
-      // dedicated pass template so admins never mistake it for a court booking.
-      if(window.notifyAdmins){
-        const pd=state.currentPurchaseData||{};
-        window.notifyAdmins({
-          type: "pass_purchase_admin",
-          bookingCode: code,             // eventId key — pass purchaseCode
-          purchaseCode: code,
-          customerName: pd.customerName,
-          customerPhone: pd.customerPhone,
-          packageName: pd.packageName,
-          price: pd.price
-        });
-      }
+      // Fire-and-forget slip pre-check for the PASS purchase (Stage D): the
+      // server hashes the slip, checks duplicates, and notifies admins itself
+      // (pass template — clearly not a court booking). Falls back to the
+      // direct pass notify on any failure so no pass slip goes silent.
+      runSlipPrecheckPass(file, state.currentPurchaseDocId, code, state.currentPurchaseData||{});
       showSuccess("📨",t("slipReceived"),code,t("passPending"));
     } else {
       const slotId=`${RESOURCE_ID}_${state.currentBookingData.date}_${state.currentBookingData.startTime.replace(":","")}`; 
@@ -3222,6 +3274,91 @@ window.openBookingView=openBookingView;
 // NOTE: customer self-purchase pass flow is not enabled. Passes are issued only via
 // admin.html → "Add Pass". Do not re-add a window.openBuyPassView reference until
 // the buy-pass view actually exists in this file.
+
+// ── PASS SELF-PURCHASE (Stage D — feature-flagged OFF by default) ────
+// Catalog + price come from the server (pass_catalog / create_pass_purchase).
+// Payment, slip upload, pre-check, and admin approval reuse the existing
+// pass_purchases machinery — a pass is issued ONLY after admin approval.
+let pbCatalog=[], pbSel=null, pbBusy=false;
+const PB_DESC={
+  ultra_pass_10:"10 ชั่วโมง (600 นาที) · ใช้ได้ 90 วัน · เฉลี่ย ฿310/ชม.",
+  ultra_pass_20:"20 ชั่วโมง (1,200 นาที) · ใช้ได้ 180 วัน · เฉลี่ย ฿295/ชม.",
+  offpeak:"16 ชั่วโมง ใน 30 วัน · จ.–ศ. 09:00–15:00 · สูงสุด 4 ชม./สัปดาห์",
+};
+
+async function initPassSelfPurchase(){
+  try{
+    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"pass_catalog"})});
+    const d=await r.json().catch(()=>null);
+    if(r.ok&&d&&d.ok&&d.enabled===true&&Array.isArray(d.passes)&&d.passes.length){
+      pbCatalog=d.passes;
+      $("passBuyWrap").style.display="block";
+      renderPassBuyList();
+    }
+  }catch(e){ console.warn("[pass-buy] catalog failed (section stays hidden):",e); }
+}
+
+function renderPassBuyList(){
+  const box=$("passBuyList"); box.innerHTML="";
+  pbCatalog.forEach(p=>{
+    const b=document.createElement("button");
+    b.className="hcard";
+    b.style.cssText="flex-direction:row;align-items:center;justify-content:space-between;gap:10px;padding:13px 15px;text-align:left"+
+      (pbSel&&pbSel.packageType===p.packageType?";border-color:var(--ut-blue);box-shadow:0 0 0 1px var(--ut-blue)":"");
+    b.innerHTML=`<div><div style="font-weight:800">${esc(p.packageName)}</div>`+
+      `<div style="font-size:.72rem;color:var(--muted);margin-top:2px">${esc(PB_DESC[p.packageType]||"")}</div></div>`+
+      `<div style="font-weight:900;white-space:nowrap">฿${Number(p.price).toLocaleString("en-US")}</div>`;
+    b.addEventListener("click",()=>{
+      pbSel=p;
+      renderPassBuyList();
+      $("passBuyForm").style.display="block";
+      $("pbConfirmBtn").textContent=`ยืนยันซื้อ ${p.packageName} — ฿${Number(p.price).toLocaleString("en-US")}`;
+      if(!$("pbName").value.trim()){
+        const n=$("bkName")?.value?.trim();
+        $("pbName").value=n||((state.lineProfile&&state.lineProfile.displayName!=="Guest")?state.lineProfile.displayName:"");
+      }
+      if(!$("pbPhone").value.trim()&&$("bkPhone")?.value?.trim()) $("pbPhone").value=$("bkPhone").value.trim();
+    });
+    box.appendChild(b);
+  });
+}
+
+$("pbConfirmBtn").addEventListener("click", async()=>{
+  if(pbBusy||!pbSel) return;
+  const name=$("pbName").value.trim(), phone=$("pbPhone").value.trim();
+  if(!name||!phone){ showToast(currentLang==="th"?"กรอกชื่อและเบอร์โทร":"Please fill in name and phone",true); return; }
+  if(!state.lineProfile?.userId||state.lineProfile.userId==="guest"){
+    showToast(currentLang==="th"?"กรุณาเปิดผ่าน LINE เพื่อซื้อแพ็กเกจ":"Please open via LINE to buy a pass",true); return;
+  }
+  pbBusy=true;
+  const btn=$("pbConfirmBtn"); btn.disabled=true; btn.textContent="กำลังสร้างรายการ...";
+  try{
+    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        action:"create_pass_purchase",
+        packageType:pbSel.packageType,
+        customerName:name, customerPhone:phone,
+        lineUserId:state.lineProfile.userId,
+        lineDisplayName:state.lineProfile.displayName||"",
+      })});
+    const d=await r.json().catch(()=>null);
+    if(!r.ok||!d||!d.ok){ showToast((d&&d.error)||"สร้างรายการซื้อไม่สำเร็จ",true); return; }
+    const p=d.purchase;
+    state.paymentMode="pass";
+    state.currentPurchaseCode=p.purchaseCode;
+    state.currentPurchaseDocId=p.id;
+    state.currentPurchaseData={ ...p, customerPhone:phone };
+    showPaymentPanel(p.purchaseCode, p.price, null, p.packageName, name);
+    showView("viewPayment");
+  }catch(e){
+    console.error("[pass-buy] create failed:",e);
+    showToast("เครือข่ายมีปัญหา ลองใหม่อีกครั้ง",true);
+  }finally{
+    pbBusy=false; btn.disabled=false;
+    btn.textContent=pbSel?`ยืนยันซื้อ ${pbSel.packageName} — ฿${Number(pbSel.price).toLocaleString("en-US")}`:"ยืนยันซื้อ";
+  }
+});
 
 // ── COACH LESSON BOOKING (Stage 3 — feature-flagged OFF by default) ──
 // Fully separate view from viewBooking. Availability comes from the server

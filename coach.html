@@ -139,6 +139,15 @@
       </div>
       <div id="schedule"><div class="empty">กำลังโหลด...</div></div>
       <div id="availView" class="hidden">
+        <div class="card" style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <button id="smPrev" style="border:1px solid var(--line);background:#fff;border-radius:8px;padding:4px 12px;font-weight:800;cursor:pointer">‹</button>
+            <div style="font-weight:800;font-size:.85rem" id="smLabel">ปฏิทินร้าน</div>
+            <button id="smNext" style="border:1px solid var(--line);background:#fff;border-radius:8px;padding:4px 12px;font-weight:800;cursor:pointer">›</button>
+          </div>
+          <div id="smGrid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px"></div>
+          <div style="font-size:.66rem;color:var(--muted);margin-top:7px">🟩 วันที่ร้านเปิดให้จอง — กดเพื่อเลือกวันแล้วเปิด/ปิดชั่วโมงด้านล่าง (ร้านมักเปิดเดือนต่อเดือน)</div>
+        </div>
         <div class="avail-strip" id="availStrip"></div>
         <div id="availGrid"><div class="empty">กำลังโหลด...</div></div>
         <div class="legend">
@@ -201,7 +210,7 @@ function switchTab(tab){
   $("tabAvail").classList.toggle("on", isAvail);
   $("schedule").classList.toggle("hidden", isAvail);
   $("availView").classList.toggle("hidden", !isAvail);
-  if(isAvail){ initAvailStrip(); loadAvail(); } else { loadSchedule(); }
+  if(isAvail){ initAvailStrip(); loadAvail(); loadShopMonth(); } else { loadSchedule(); }
 }
 $("tabSchedule").addEventListener("click", ()=>switchTab("schedule"));
 $("tabAvail").addEventListener("click",   ()=>switchTab("avail"));
@@ -412,6 +421,67 @@ function renderAvail(d){
   });
   $("availGrid").replaceChildren(grid);
 }
+
+// ── Shop month calendar (Stage A) — which days the shop is open ────
+let smMonth=null, smLastData=null;
+const TH_MONTHS=["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+function shiftMonth(ym,delta){
+  const [y,m]=ym.split("-").map(Number);
+  const d=new Date(Date.UTC(y,m-1+delta,1));
+  return d.toISOString().slice(0,7);
+}
+async function loadShopMonth(){
+  if(!smMonth) smMonth=new Date(Date.now()+7*3600*1000).toISOString().slice(0,7);
+  $("smLabel").textContent="กำลังโหลด...";
+  try{
+    const r=await fetch(API_OPS,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"shop_open_days",month:smMonth})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok){ $("smLabel").textContent="โหลดปฏิทินไม่สำเร็จ"; $("smGrid").innerHTML=""; return; }
+    smLastData=d;
+    renderShopMonth(d);
+  }catch(e){ $("smLabel").textContent="เครือข่ายมีปัญหา"; }
+}
+function renderShopMonth(d){
+  const [y,m]=smMonth.split("-").map(Number);
+  $("smLabel").textContent=`${TH_MONTHS[m-1]} ${y+543}`;
+  const open=new Set(d.openDays||[]);
+  const today=d.today||"";
+  const startDow=new Date(Date.UTC(y,m-1,1)).getUTCDay();
+  const daysInMonth=new Date(Date.UTC(y,m,0)).getUTCDate();
+  const grid=$("smGrid"); grid.innerHTML="";
+  ["อา","จ","อ","พ","พฤ","ศ","ส"].forEach(w=>{
+    const el=document.createElement("div");
+    el.textContent=w;
+    el.style.cssText="text-align:center;font-size:.6rem;color:var(--muted);font-weight:700;padding:2px 0";
+    grid.appendChild(el);
+  });
+  for(let i=0;i<startDow;i++) grid.appendChild(document.createElement("div"));
+  for(let day=1;day<=daysInMonth;day++){
+    const iso=`${smMonth}-${String(day).padStart(2,"0")}`;
+    const isOpen=open.has(iso), isPast=iso<today;
+    const b=document.createElement("button");
+    b.textContent=day;
+    b.style.cssText="border-radius:8px;padding:7px 0;font-size:.74rem;font-weight:700;border:1px solid var(--line);background:#fff;color:var(--muted);cursor:default";
+    if(isOpen&&!isPast){
+      if(iso===availDate){ b.style.background="var(--brand)"; b.style.borderColor="var(--brand)"; b.style.color="#fff"; }
+      else { b.style.background="#e3f6ec"; b.style.borderColor="var(--ok)"; b.style.color="var(--ok)"; }
+      b.style.cursor="pointer";
+      b.addEventListener("click",()=>{
+        availDate=iso;
+        document.querySelectorAll("#availStrip button").forEach(x=>x.classList.toggle("on",x.dataset.iso===iso));
+        loadAvail();
+        renderShopMonth(d);
+      });
+    } else {
+      b.disabled=true;
+      if(isPast) b.style.opacity=".35";
+    }
+    grid.appendChild(b);
+  }
+}
+$("smPrev").addEventListener("click",()=>{ smMonth=shiftMonth(smMonth||new Date(Date.now()+7*3600*1000).toISOString().slice(0,7),-1); loadShopMonth(); });
+$("smNext").addEventListener("click",()=>{ smMonth=shiftMonth(smMonth||new Date(Date.now()+7*3600*1000).toISOString().slice(0,7),1); loadShopMonth(); });
 
 async function toggleAvail(hour, open, btn){
   if(availBusy) return;
