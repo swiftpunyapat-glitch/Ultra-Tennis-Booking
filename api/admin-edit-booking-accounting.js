@@ -705,6 +705,28 @@ async function handleRefund({ res, adminName, session, db, booking, bookingRef, 
     } catch (e) {
       console.error('[refund] slot read (non-fatal):', e.message);
     }
+
+    // Coach lesson (Stage 3): a refund that releases the room also releases
+    // the coach hour — ownership-checked, non-fatal on read error.
+    if (booking.serviceType === 'coach_lesson' && booking.coachId && booking.date && booking.startTime) {
+      const caRef = db.collection('coach_availability')
+        .doc(`${booking.coachId}_${booking.date}_${String(booking.startTime).replace(':', '')}`);
+      try {
+        const caSnap = await caRef.get();
+        if (caSnap.exists) {
+          const ca = caSnap.data();
+          if (ca.status === 'booked' && ca.bookingId === bookingId) {
+            batch.set(caRef, {
+              coachId: ca.coachId, branchId: ca.branchId || null,
+              date: ca.date, hour: ca.hour, status: 'open',
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+          }
+        }
+      } catch (e) {
+        console.error('[refund] coach availability read (non-fatal):', e.message);
+      }
+    }
   }
 
   // ── Commit ────────────────────────────────────────────────────────
@@ -929,6 +951,10 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
 
   const slotId  = `${booking.resourceId || RESOURCE_ID}_${booking.date}_${booking.startTime?.replace(':', '')}`;
   const slotRef = db.collection('booking_slots').doc(slotId);
+  // Coach lesson (Stage 3): admin reject must release the coach hour too.
+  const coachAvailRef = (booking.serviceType === 'coach_lesson' && booking.coachId && booking.date && booking.startTime)
+    ? db.collection('coach_availability').doc(`${booking.coachId}_${booking.date}_${String(booking.startTime).replace(':', '')}`)
+    : null;
 
   try {
     await db.runTransaction(async (t) => {
@@ -939,6 +965,7 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
       if (bNow.paymentStatus === 'paid') throw new Error('ALREADY_PAID');
 
       const slotSnap = await t.get(slotRef);
+      const caSnap = coachAvailRef ? await t.get(coachAvailRef) : null;
 
       t.update(bookingRef, {
         bookingStatus: 'cancelled',
@@ -954,6 +981,17 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
         const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
         if (ownsSlot) {
           t.update(slotRef, { bookingStatus: 'cancelled', paymentStatus: 'rejected' });
+        }
+      }
+      // Reopen the coach hour only when this booking still owns the lock.
+      if (caSnap && caSnap.exists) {
+        const ca = caSnap.data();
+        if (ca.status === 'booked' && ca.bookingId === bookingId) {
+          t.set(coachAvailRef, {
+            coachId: ca.coachId, branchId: ca.branchId || null,
+            date: ca.date, hour: ca.hour, status: 'open',
+            updatedAt: FieldValue.serverTimestamp(),
+          });
         }
       }
     });

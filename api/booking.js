@@ -14,6 +14,7 @@
 
 import { getAdminDb, getAdminAuth, writeAuditLog } from './_lib/firebase-admin.js';
 import { computeQuote } from './_lib/pricing.js';
+import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 
 const RESOURCE_ID       = 'room1';
@@ -56,8 +57,25 @@ export default async function handler(req, res) {
   if (body.action === 'price_quote')   return handlePriceQuote(res, body);
   if (body.action === 'create')        return handleCreate(res, body);
   if (body.action === 'cancel_pending') return handleCancelPending(res, body);
+  // Coach lesson booking (Stage 3) — customer-facing, feature-flagged OFF by
+  // default via system_settings/features.enableCoachBookingCustomer.
+  if (body.action === 'coach_options')       return handleCoachOptions(res);
+  if (body.action === 'coach_slots')         return handleCoachSlots(res, body);
+  if (body.action === 'create_coach_lesson') return handleCreateCoachLesson(res, body);
   return res.status(400).json({ ok: false, error: `Unknown action "${body.action}"` });
 }
+
+// ── Coach booking feature flag — missing doc/field = OFF (safe default) ──
+async function coachBookingEnabled(db) {
+  try {
+    const snap = await db.collection('system_settings').doc('features').get();
+    return snap.exists && snap.data().enableCoachBookingCustomer === true;
+  } catch (e) {
+    console.warn('[coach flag] read failed → OFF:', e.message);
+    return false;
+  }
+}
+const coachAvailDocId = (coachId, date, hour) => `${coachId}_${date}_${String(hour).replace(':', '')}`;
 
 // ── price_quote — READ-ONLY. No writes anywhere. ────────────────────
 async function handlePriceQuote(res, body) {
@@ -310,15 +328,32 @@ async function handleCancelPending(res, body) {
     ? `${RESOURCE_ID}_${booking.date}_${String(booking.startTime).replace(':', '')}`
     : null;
   const slotRef = slotId ? db.collection('booking_slots').doc(slotId) : null;
+  // Coach lesson: the coach hour was locked in the create transaction —
+  // release it here (ownership-checked below).
+  const coachAvailRef = (booking.serviceType === 'coach_lesson' && booking.coachId && booking.date && booking.startTime)
+    ? db.collection('coach_availability').doc(coachAvailDocId(booking.coachId, booking.date, booking.startTime))
+    : null;
 
   try {
     await db.runTransaction(async (t) => {
       const bSnap = await t.get(bookingRef);
       const slotSnap = slotRef ? await t.get(slotRef) : null;
+      const caSnap = coachAvailRef ? await t.get(coachAvailRef) : null;
       if (!bSnap.exists) throw new Error('GONE');
       const bNow = bSnap.data();
       if (bNow.bookingStatus !== 'pending_payment') throw new Error('BAD_STATE');
       if (bNow.paymentStatus !== 'unpaid') throw new Error('BAD_STATE');
+      // Reopen the coach hour only when this booking still owns the lock.
+      if (caSnap && caSnap.exists) {
+        const ca = caSnap.data();
+        if (ca.status === 'booked' && ca.bookingId === bookingId) {
+          t.set(coachAvailRef, {
+            coachId: ca.coachId, branchId: ca.branchId || DEFAULT_BRANCH_ID,
+            date: ca.date, hour: ca.hour, status: 'open',
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+      }
 
       // Keep paymentStatus inside the existing enum ("rejected", same as the
       // admin reject flow) — never introduce a new "cancelled" paymentStatus.
@@ -356,5 +391,295 @@ async function handleCancelPending(res, body) {
     note: bookingCode,
   });
   console.log(`[cancel_pending] ${bookingCode} cancelled by customer`);
+
+  // ── Admin notification — flag-gated, DEFAULT OFF ────────────────────
+  // Every cancel_pending is by definition an unpaid, no-slip booking (the
+  // preconditions above guarantee it), so the safe default is silence: no
+  // admin action is needed and the slot is already released. Set
+  // system_settings/notification_flags.notifyAdminOnCustomerPendingCancel
+  // to true to broadcast "ลูกค้ายกเลิกก่อนชำระเงิน" to all admins.
+  // Never fails the request — the cancel already succeeded above.
+  try {
+    const flags = await loadNotificationFlags();
+    if (flags.notifyAdminOnCustomerPendingCancel === true) {
+      const admins = await loadActiveAdmins();
+      await Promise.all(admins.map(a =>
+        sendAndLog({
+          eventId: `${bookingCode}_customer_cancel_${a.lineUserId}`,
+          type: 'customer_cancel_pending_admin',
+          targetType: 'admin',
+          lineUserId: a.lineUserId,
+          bookingCode,
+          payload: {
+            bookingCode,
+            customerName:  booking.customerName,
+            customerPhone: booking.customerPhone,
+            date: booking.date, startTime: booking.startTime, endTime: booking.endTime,
+          },
+        }).catch(e => ({ ok: false, error: e.message }))
+      ));
+    }
+  } catch (e) {
+    console.error('[cancel_pending] notify (non-fatal):', e.message);
+  }
+
   return res.status(200).json({ ok: true });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Coach lesson booking — Stage 3 (feature-flagged, OFF by default)
+// ════════════════════════════════════════════════════════════════════
+
+// coach_options — PUBLIC read. Lists bookable coaches (active + lessonPrice
+// set). Returns enabled:false with an empty list while the flag is off, so
+// the client renders nothing. Never exposes payout or auth data.
+async function handleCoachOptions(res) {
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[coach_options] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+  try {
+    if (!(await coachBookingEnabled(db))) {
+      return res.status(200).json({ ok: true, enabled: false, coaches: [] });
+    }
+    const snap = await db.collection('coaches').get();
+    const coaches = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(c => c.active !== false && Number.isInteger(c.lessonPrice) && c.lessonPrice > 0)
+      .map(c => ({ id: c.id, displayName: c.displayName || c.id, lessonPrice: c.lessonPrice }))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+    return res.status(200).json({ ok: true, enabled: true, coaches });
+  } catch (e) {
+    console.error('[coach_options]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to load coaches' });
+  }
+}
+
+// coach_slots — PUBLIC read. Hours where ROOM availability intersects COACH
+// availability for a date: room open, room not live-booked, coach hour open
+// (or locked by an expired unpaid hold), and the hour is still in the future.
+async function handleCoachSlots(res, body) {
+  const date    = typeof body.date === 'string' ? body.date.trim() : '';
+  const coachId = typeof body.coachId === 'string' ? body.coachId.trim() : '';
+  if (!DATE_RE.test(date)) return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
+  if (!coachId)            return res.status(400).json({ ok: false, error: 'Missing coachId' });
+
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[coach_slots] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+
+  try {
+    if (!(await coachBookingEnabled(db))) {
+      return res.status(200).json({ ok: true, enabled: false, hours: [] });
+    }
+    const coachSnap = await db.collection('coaches').doc(coachId).get();
+    if (!coachSnap.exists) return res.status(404).json({ ok: false, error: 'Coach not found' });
+    const coach = coachSnap.data();
+    if (coach.active === false || !Number.isInteger(coach.lessonPrice) || coach.lessonPrice <= 0) {
+      return res.status(409).json({ ok: false, error: 'โค้ชคนนี้ยังไม่เปิดรับจองผ่านระบบ' });
+    }
+
+    const allHours = [];
+    for (let h = 0; h < 24; h++) allHours.push(`${String(h).padStart(2, '0')}:00`);
+    const caRefs = allHours.map(h => db.collection('coach_availability').doc(coachAvailDocId(coachId, date, h)));
+    const [availSnap, slotSnap, caSnaps] = await Promise.all([
+      db.collection('available_slots').where('date', '==', date).where('resourceId', '==', RESOURCE_ID).get(),
+      db.collection('booking_slots').where('date', '==', date).where('resourceId', '==', RESOURCE_ID).get(),
+      db.getAll(...caRefs),
+    ]);
+
+    const roomOpen = new Set(availSnap.docs.filter(d => d.data().status === 'open').map(d => d.data().startTime));
+    const nowMs = Date.now();
+    const roomLive = new Set(slotSnap.docs.filter(d => {
+      const sd = d.data();
+      if (sd.bookingStatus === 'confirmed') return true;
+      if (sd.bookingStatus === 'pending_payment') {
+        const exp = sd.expiresAt?.toMillis?.() ?? 0;
+        return exp > nowMs;
+      }
+      return false;
+    }).map(d => d.data().hour));
+
+    const hours = [];
+    caSnaps.forEach(s => {
+      if (!s.exists) return;
+      const ca = s.data();
+      const h = ca.hour;
+      if (!roomOpen.has(h) || roomLive.has(h)) return;
+      const holdExp = ca.holdExpiresAt?.toMillis?.() ?? 0;
+      const takeable = ca.status === 'open' || (ca.status === 'booked' && holdExp > 0 && holdExp < nowMs);
+      if (!takeable) return;
+      // Hour must still be in the future (Bangkok wall clock).
+      const start = new Date(`${date}T${h}:00+07:00`).getTime();
+      if (!Number.isFinite(start) || start <= nowMs) return;
+      hours.push(h);
+    });
+    hours.sort();
+    return res.status(200).json({
+      ok: true, enabled: true, coachId,
+      coachName: coach.displayName || coachId,
+      lessonPrice: coach.lessonPrice,
+      hours,
+    });
+  } catch (e) {
+    console.error('[coach_slots]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to load coach slots' });
+  }
+}
+
+// create_coach_lesson — locks ROOM slot + COACH hour + writes the booking in
+// ONE transaction. Price/payout are snapshot from the coaches doc at create
+// time (rate changes never affect existing bookings). No vouchers/passes.
+async function handleCreateCoachLesson(res, body) {
+  const date          = typeof body.date === 'string' ? body.date.trim() : '';
+  const startTime     = typeof body.startTime === 'string' ? body.startTime.trim() : '';
+  const coachId       = typeof body.coachId === 'string' ? body.coachId.trim() : '';
+  const customerName  = typeof body.customerName === 'string' ? body.customerName.trim() : '';
+  const customerPhone = typeof body.customerPhone === 'string' ? body.customerPhone.trim() : '';
+  const lineUserId    = typeof body.lineUserId === 'string' && body.lineUserId ? body.lineUserId : 'guest';
+  const lineDisplayName = typeof body.lineDisplayName === 'string' ? body.lineDisplayName : '';
+  const customerNote  = typeof body.customerNote === 'string' ? body.customerNote.slice(0, 500) : '';
+
+  if (!DATE_RE.test(date))      return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'date must be YYYY-MM-DD' });
+  if (!TIME_RE.test(startTime)) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'startTime must be HH:mm' });
+  if (!coachId)       return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'coachId is required' });
+  if (!customerName)  return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerName is required' });
+  if (!customerPhone) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerPhone is required' });
+
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[create_coach_lesson] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+
+  if (!(await coachBookingEnabled(db))) {
+    return res.status(403).json({ ok: false, error: 'การจองพร้อมโค้ชยังไม่เปิดให้บริการ' });
+  }
+
+  let coach;
+  try {
+    const snap = await db.collection('coaches').doc(coachId).get();
+    if (!snap.exists) return res.status(404).json({ ok: false, error: 'Coach not found' });
+    coach = snap.data();
+  } catch (e) { console.error('[create_coach_lesson] coach read:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+
+  if (coach.active === false || !Number.isInteger(coach.lessonPrice) || coach.lessonPrice <= 0) {
+    return res.status(409).json({ ok: false, error: 'โค้ชคนนี้ยังไม่เปิดรับจองผ่านระบบ' });
+  }
+  const customerPrice = coach.lessonPrice;   // one clear total, INCLUDES room
+  const coachPayoutAmount = (Number.isInteger(coach.payoutPerHour) && coach.payoutPerHour >= 500)
+    ? coach.payoutPerHour : 500;             // business minimum 500 THB/hour
+
+  const nowMs = Date.now();
+  const startMs = new Date(`${date}T${startTime}:00+07:00`).getTime();
+  if (!Number.isFinite(startMs) || startMs <= nowMs) {
+    return res.status(409).json({ ok: false, code: 'SLOT', error: 'ช่วงเวลานี้ผ่านมาแล้ว' });
+  }
+
+  const endTime          = nextHourEnd(startTime);
+  const bookingCode      = genBookingCode();
+  const paymentExpiresAt = Timestamp.fromMillis(nowMs + PAY_MINS * 60 * 1000);
+
+  const bookingRef    = db.collection('bookings').doc();
+  const slotRef       = db.collection('booking_slots').doc(slotIdOf(date, startTime));
+  const availRef      = db.collection('available_slots').doc(slotIdOf(date, startTime));
+  const coachAvailRef = db.collection('coach_availability').doc(coachAvailDocId(coachId, date, startTime));
+
+  try {
+    await db.runTransaction(async (t) => {
+      const [slotSnap, availSnap, caSnap] = await Promise.all([
+        t.get(slotRef), t.get(availRef), t.get(coachAvailRef),
+      ]);
+
+      // ── Room guards (identical rules to handleCreate) ───────────────
+      if (!availSnap.exists || availSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
+      if (slotSnap.exists) {
+        const sd = slotSnap.data();
+        if (sd.bookingStatus === 'confirmed') throw new Error('SLOT_TAKEN');
+        if (sd.bookingStatus === 'pending_payment') {
+          const exp = sd.expiresAt?.toMillis?.() ?? 0;
+          if (!exp || exp > nowMs) throw new Error('SLOT_HELD');
+        }
+      }
+
+      // ── Coach guards: hour must be offered and not live-locked ──────
+      if (!caSnap.exists) throw new Error('COACH_NOT_OPEN');
+      const ca = caSnap.data();
+      if (ca.status === 'booked') {
+        const holdExp = ca.holdExpiresAt?.toMillis?.() ?? 0;
+        // A dead unpaid hold is reusable; anything else is locked. Slip-
+        // uploaded lessons keep the ROOM slot confirmed, so the room guard
+        // above already blocks them — this covers the pure coach lock.
+        if (!(holdExp > 0 && holdExp < nowMs)) throw new Error('COACH_HELD');
+      } else if (ca.status !== 'open') {
+        throw new Error('COACH_NOT_OPEN');
+      }
+
+      // ── Writes: booking + room lock + coach lock (one commit) ───────
+      t.set(bookingRef, {
+        bookingCode, resourceId: RESOURCE_ID, branchId: ca.branchId || DEFAULT_BRANCH_ID,
+        bookingType: 'Coach Lesson',
+        serviceType: 'coach_lesson',
+        coachId, coachName: coach.displayName || coachId,
+        customerPrice, coachPayoutAmount, coachPayoutStatus: 'pending',
+        lessonStatus: 'scheduled',
+        lineUserId, lineDisplayName,
+        customerName, customerPhone, customerPhoneNormalized: normalizePhone(customerPhone),
+        customerNote,
+        date, startTime, endTime, durationHours: 1,
+        price: customerPrice, amount: customerPrice,
+        originalPrice: customerPrice, finalPrice: customerPrice,
+        basePrice: customerPrice, effectivePrice: customerPrice,
+        pricingType: 'coach_lesson', pricingMode: 'coach_lesson',
+        promoCode: null, voucherCode: null, discountAmount: 0,
+        qrAmount: customerPrice, qrType: 'normal', paymentQrType: 'normal',
+        promoApplied: false,
+        bookingStatus: 'pending_payment', paymentStatus: 'unpaid',
+        paymentExpiresAt,
+        slipUrl: null, slipUploadedAt: null, cancelReason: null,
+        createdVia: 'server',
+        createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+      });
+      t.set(slotRef, {
+        bookingCode, bookingId: bookingRef.id, resourceId: RESOURCE_ID,
+        branchId: ca.branchId || DEFAULT_BRANCH_ID,
+        date, hour: startTime,
+        bookingStatus: 'pending_payment', paymentStatus: 'unpaid',
+        expiresAt: paymentExpiresAt,
+        coachId,
+      });
+      t.set(coachAvailRef, {
+        coachId, branchId: ca.branchId || DEFAULT_BRANCH_ID,
+        date, hour: startTime,
+        status: 'booked',
+        bookingId: bookingRef.id, bookingCode,
+        holdExpiresAt: paymentExpiresAt,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+  } catch (e) {
+    const msg = e.message || '';
+    const m = {
+      SLOT_NOT_OPEN:  'ช่องเวลานี้ปิดรับจองแล้ว',
+      SLOT_TAKEN:     'ช่องเวลานี้เพิ่งถูกจอง',
+      SLOT_HELD:      'ช่องเวลานี้ถูกจองค้างอยู่ ลองใหม่อีกครั้ง',
+      COACH_NOT_OPEN: 'โค้ชไม่ได้เปิดรับสอนช่วงเวลานี้แล้ว',
+      COACH_HELD:     'ช่วงเวลานี้ของโค้ชเพิ่งถูกจอง',
+    };
+    if (m[msg]) return res.status(409).json({ ok: false, code: 'SLOT', error: m[msg] });
+    console.error('[create_coach_lesson] tx:', msg);
+    return res.status(500).json({ ok: false, error: 'Failed to create coach lesson booking' });
+  }
+
+  console.log(`[create_coach_lesson] ${bookingCode} coach:${coachId} ฿${customerPrice} payout:฿${coachPayoutAmount}`);
+  return res.status(200).json({
+    ok: true,
+    paymentExpiresAt: paymentExpiresAt.toDate().toISOString(),
+    booking: {
+      id: bookingRef.id, bookingCode, date, startTime, endTime,
+      bookingType: 'Coach Lesson', serviceType: 'coach_lesson',
+      coachId, coachName: coach.displayName || coachId,
+      finalPrice: customerPrice, price: customerPrice, originalPrice: customerPrice,
+      qrType: 'normal', qrAmount: customerPrice, paymentQrType: 'normal',
+      pricingType: 'coach_lesson', discountAmount: 0, voucherCode: null,
+      lineUserId, customerName, customerPhone, customerNote,
+    },
+  });
 }

@@ -43,6 +43,7 @@ const VALID_ACTIONS = [
   'auth_metric',
   'coach_create', 'coach_list', 'coach_set_active', 'coach_my_bookings',
   'coach_reset_code', 'coach_set_pin',
+  'coach_availability_get', 'coach_availability_set', 'coach_update_rates',
 ];
 
 // Coach login name = coaches doc id = booking.coachName. Keep it Firestore-id
@@ -231,6 +232,9 @@ export default async function handler(req, res) {
     case 'coach_set_active':       return handleCoachSetActive(res, session, body);
     case 'coach_my_bookings':      return handleCoachMyBookings(res, session, body);
     case 'coach_reset_code':       return handleCoachResetCode(res, session, body);
+    case 'coach_availability_get': return handleCoachAvailabilityGet(res, session, body);
+    case 'coach_availability_set': return handleCoachAvailabilitySet(res, session, body);
+    case 'coach_update_rates':     return handleCoachUpdateRates(res, session, body);
     default:
       // Unreachable (VALID_ACTIONS gate above) — defensive.
       return res.status(400).json({ ok: false, error: `Unknown action "${action}"` });
@@ -1250,5 +1254,248 @@ async function handleCoachSetPin(res, body) {
   } catch (e) {
     console.error('[coach_set_pin]', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to set PIN' });
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Coach availability (Coach Phase — Stage 2)
+// ════════════════════════════════════════════════════════════════════
+// Collection: coach_availability/{coachId}_{date}_{HHmm}
+//   { coachId, branchId, date, hour:"HH:mm", status:"open"|"booked",
+//     bookingId?, bookingCode?, holdExpiresAt?, createdAt, updatedAt }
+// "open"   = coach offers this hour (customer coach booking may take it)
+// "booked" = locked by a coach-lesson booking (written transactionally by
+//            /api/booking create_coach_lesson — Stage 3)
+// Closing an hour DELETES the doc. Server-only writes (client rules deny).
+
+const HOUR_RE = /^\d{2}:\d{2}$/;
+const availDocId = (coachId, date, hour) => `${coachId}_${date}_${String(hour).replace(':', '')}`;
+const bangkokTodayISO = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+
+// Coach session revocation check — same rule as coach_my_bookings (fail-open
+// on read error; mismatch = revoked).
+async function coachSessionRevoked(db, session) {
+  try {
+    const a = await db.collection('coach_auth').doc(session.name).get();
+    const storedSv = a.exists ? (Number(a.data().sessionVersion) || 1) : 1;
+    return (session.sv ?? 1) !== storedSv;
+  } catch (e) { console.warn('[coach sv]', e.message); return false; }
+}
+
+// A booking blocks its coach hour when it is confirmed/paid/pending_review,
+// or an unexpired pending_payment hold.
+function isLiveCoachBooking(b, nowMs = Date.now()) {
+  if (!b || b.bookingStatus === 'cancelled') return false;
+  if (b.bookingStatus === 'confirmed') return true;
+  if (['paid', 'pending_review'].includes(b.paymentStatus)) return true;
+  if (b.bookingStatus === 'pending_payment') {
+    const exp = b.paymentExpiresAt?.toMillis?.() ?? null;
+    return exp === null || exp > nowMs;
+  }
+  return false;
+}
+
+// Resolve which coach the caller may act on. Returns { coachId, coach } or
+// writes the error response and returns null.
+async function resolveCoachActor(res, session, body, db) {
+  const isCoach = session.role === 'coach';
+  const isMgr   = requireRole(session, 'owner', 'ultra_admin', 'branch_manager');
+  const isStaff = requireRole(session, 'branch_staff');
+  if (!isCoach && !isMgr && !isStaff) {
+    res.status(403).json({ ok: false, error: 'Coach or admin only' });
+    return null;
+  }
+  if (isCoach && await coachSessionRevoked(db, session)) {
+    res.status(401).json({ ok: false, error: 'Session revoked — please log in again' });
+    return null;
+  }
+  const coachId = isCoach ? session.name : (typeof body.coachId === 'string' ? body.coachId.trim() : '');
+  if (!coachId) { res.status(400).json({ ok: false, error: 'coachId required' }); return null; }
+  const snap = await db.collection('coaches').doc(coachId).get();
+  if (!snap.exists) { res.status(404).json({ ok: false, error: 'Coach not found' }); return null; }
+  const coach = snap.data();
+  if (!hasBranchAccess(session, resolveBranchId(coach))) {
+    res.status(403).json({ ok: false, error: 'No access to this branch' });
+    return null;
+  }
+  if (coach.active === false && isCoach) {
+    res.status(403).json({ ok: false, error: 'Coach is inactive' });
+    return null;
+  }
+  return { coachId, coach };
+}
+
+// coach_availability_get {date, coachId?} — coach (own) or any admin.
+// Returns everything the "วันว่างของฉัน" grid needs in one call.
+async function handleCoachAvailabilityGet(res, session, body) {
+  const date = typeof body.date === 'string' ? body.date.trim() : '';
+  if (!DATE_RE.test(date)) return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
+  const db = getDbOr500(res); if (!db) return;
+
+  let actor;
+  try { actor = await resolveCoachActor(res, session, body, db); }
+  catch (e) { console.error('[coach_availability_get] actor:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+  if (!actor) return;
+  const { coachId } = actor;
+
+  try {
+    const hours = [...SLOT_LN_HOURS, ...normalHours()].map(slotStartStr);
+    const availRefs = hours.map(h => db.collection('coach_availability').doc(availDocId(coachId, date, h)));
+    const [roomAvailSnap, roomSlotSnap, coachAvailSnaps, bookingsSnap] = await Promise.all([
+      db.collection('available_slots').where('date', '==', date).where('resourceId', '==', SLOT_RESOURCE_ID).get(),
+      db.collection('booking_slots').where('date', '==', date).where('resourceId', '==', SLOT_RESOURCE_ID).get(),
+      db.getAll(...availRefs),
+      db.collection('bookings').where('date', '==', date).get(),
+    ]);
+
+    const roomOpen = roomAvailSnap.docs.filter(d => d.data().status === 'open').map(d => d.data().startTime);
+    const nowMs = Date.now();
+    const roomLive = roomSlotSnap.docs.filter(d => isLiveBookedSlot(d.data(), nowMs)).map(d => d.data().hour);
+
+    const coachOpen = {};
+    coachAvailSnaps.forEach(s => {
+      if (!s.exists) return;
+      const d = s.data();
+      coachOpen[d.hour] = { status: d.status || 'open', bookingCode: d.bookingCode ?? null };
+    });
+
+    // Hours blocked by a live booking already assigned to this coach (either a
+    // coach lesson or an admin Assign Coach on a normal booking).
+    const assignedHours = bookingsSnap.docs
+      .map(d => d.data())
+      .filter(b => b.coachId === coachId && isLiveCoachBooking(b, nowMs))
+      .map(b => b.startTime)
+      .filter(Boolean);
+
+    return res.status(200).json({
+      ok: true, coachId, date, today: bangkokTodayISO(),
+      roomOpen, roomLive, coachOpen, assignedHours,
+    });
+  } catch (e) {
+    console.error('[coach_availability_get]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to load availability' });
+  }
+}
+
+// coach_availability_set {date, hour, open, coachId?} — coach (own) or
+// branch_manager+. Open requires the room slot to be open (rule: a coach can
+// only offer hours the shop itself offers). Close is blocked while any live
+// booking holds the hour for this coach.
+async function handleCoachAvailabilitySet(res, session, body) {
+  const date = typeof body.date === 'string' ? body.date.trim() : '';
+  const hour = typeof body.hour === 'string' ? body.hour.trim() : '';
+  const open = body.open === true;
+  if (!DATE_RE.test(date)) return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
+  if (!HOUR_RE.test(hour)) return res.status(400).json({ ok: false, error: 'hour must be HH:mm' });
+  if (date < bangkokTodayISO()) return res.status(400).json({ ok: false, error: 'วันที่ผ่านมาแล้ว' });
+
+  const db = getDbOr500(res); if (!db) return;
+
+  // Coaches manage their own; admins need branch_manager+ to edit others.
+  if (session.role !== 'coach' && !requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+  let actor;
+  try { actor = await resolveCoachActor(res, session, body, db); }
+  catch (e) { console.error('[coach_availability_set] actor:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+  if (!actor) return;
+  const { coachId, coach } = actor;
+
+  const availRef = db.collection('coach_availability').doc(availDocId(coachId, date, hour));
+  const roomRef  = db.collection('available_slots').doc(slotDocId(date, parseInt(hour, 10)));
+
+  try {
+    const result = await db.runTransaction(async (t) => {
+      const availSnap = await t.get(availRef);
+
+      if (open) {
+        const roomSnap = await t.get(roomRef);
+        if (!roomSnap.exists || roomSnap.data().status !== 'open') throw new Error('ROOM_CLOSED');
+        if (availSnap.exists && availSnap.data().status === 'booked') throw new Error('HAS_BOOKING');
+        if (availSnap.exists) return 'already_open';
+        t.set(availRef, {
+          coachId, branchId: resolveBranchId(coach),
+          date, hour, status: 'open',
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        return 'opened';
+      }
+
+      // Close: never while a live booking holds this hour for the coach.
+      // All reads happen before the delete (Firestore tx rule). The Admin SDK
+      // supports queries inside transactions, so the admin-assigned-booking
+      // conflict check is atomic with the delete.
+      if (!availSnap.exists) return 'already_closed';
+      const av = availSnap.data();
+      if (av.status === 'booked' && av.bookingId) {
+        // Locked by a coach lesson — allow close only if that booking is dead
+        // (missing booking = stale lock → closable).
+        const bSnap = await t.get(db.collection('bookings').doc(av.bookingId));
+        if (bSnap.exists && isLiveCoachBooking(bSnap.data())) throw new Error('HAS_BOOKING');
+      }
+      const daySnap = await t.get(db.collection('bookings').where('date', '==', date));
+      const conflict = daySnap.docs.map(d => d.data())
+        .some(b => b.coachId === coachId && b.startTime === hour && isLiveCoachBooking(b));
+      if (conflict) throw new Error('HAS_BOOKING');
+      t.delete(availRef);
+      return 'closed';
+    });
+
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: resolveBranchId(coach),
+      action: 'coach_availability_set', targetId: availDocId(coachId, date, hour),
+      after: { open, result },
+    });
+    return res.status(200).json({ ok: true, result });
+  } catch (e) {
+    if (e.message === 'ROOM_CLOSED') return res.status(409).json({ ok: false, error: 'ชั่วโมงนี้ร้านไม่ได้เปิดให้จอง เปิดรับสอนไม่ได้' });
+    if (e.message === 'HAS_BOOKING') return res.status(409).json({ ok: false, error: 'มีการจอง/คาบสอนอยู่ในชั่วโมงนี้ ปิดไม่ได้' });
+    console.error('[coach_availability_set]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to update availability' });
+  }
+}
+
+// coach_update_rates {coachId, lessonPrice, payoutPerHour} — branch_manager+.
+// lessonPrice = customer-facing total per hour INCLUDING room. payoutPerHour =
+// fixed coach payout (business rule: minimum 500 THB/hour). Both are snapshot
+// into each booking at create time — changing them never affects old bookings.
+async function handleCoachUpdateRates(res, session, body) {
+  if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+  const coachId = typeof body.coachId === 'string' ? body.coachId.trim() : '';
+  const lessonPrice   = Number(body.lessonPrice);
+  const payoutPerHour = Number(body.payoutPerHour);
+  if (!coachId) return res.status(400).json({ ok: false, error: 'Missing coachId' });
+  if (!Number.isInteger(lessonPrice) || lessonPrice <= 0 || lessonPrice > 20000) {
+    return res.status(400).json({ ok: false, error: 'lessonPrice must be a positive integer (THB, includes room)' });
+  }
+  if (!Number.isInteger(payoutPerHour) || payoutPerHour < 500) {
+    return res.status(400).json({ ok: false, error: 'payoutPerHour must be an integer ≥ 500 THB' });
+  }
+  if (payoutPerHour >= lessonPrice) {
+    return res.status(400).json({ ok: false, error: 'payoutPerHour must be less than lessonPrice (price includes the room)' });
+  }
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    const ref  = db.collection('coaches').doc(coachId);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ ok: false, error: 'Coach not found' });
+    const coach = snap.data();
+    if (!hasBranchAccess(session, resolveBranchId(coach))) {
+      return res.status(403).json({ ok: false, error: 'No access to this branch' });
+    }
+    await ref.update({ lessonPrice, payoutPerHour, updatedAt: FieldValue.serverTimestamp() });
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: resolveBranchId(coach),
+      action: 'coach_update_rates', targetId: `coaches/${coachId}`,
+      before: { lessonPrice: coach.lessonPrice ?? null, payoutPerHour: coach.payoutPerHour ?? null },
+      after:  { lessonPrice, payoutPerHour },
+    });
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error('[coach_update_rates]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to update rates' });
   }
 }
