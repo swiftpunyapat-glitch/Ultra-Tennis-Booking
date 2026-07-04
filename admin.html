@@ -1346,17 +1346,42 @@ async function renderCoachTab(){
     if(!coachCache.length){ box.innerHTML = `<div class="smempty">ยังไม่มี coach — เพิ่มด้านบน</div>`; return; }
     box.innerHTML = coachCache.map(c=>{
       const active = c.active !== false;
+      const hasRates=Number(c.lessonPrice)>0;
       return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--s1);border:1px solid var(--bd);border-radius:8px;padding:10px 12px">
         <div>
           <div style="font-weight:800;font-size:.85rem">${esc(c.displayName||c.name)} ${active?'':'<span style="color:var(--m);font-weight:400">(inactive)</span>'}</div>
           <div style="font-size:.7rem;color:var(--m)">login: ${esc(c.name)} · branch: ${esc(c.branchId||"ladprao1")}</div>
+          <div style="font-size:.7rem;color:${hasRates?'#2fbf76':'var(--warn)'}">${hasRates?`lesson ฿${Number(c.lessonPrice)}/ชม. (รวมห้อง) · payout ฿${Number(c.payoutPerHour)||500}/ชม.`:'⚠ ยังไม่ตั้งราคา — ลูกค้าจองโค้ชคนนี้ไม่ได้'}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="smbtn" data-coach-rates="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#0f2d1e;color:#2fbf76;border:1px solid #2fbf76">💰 Rates</button>
           ${active?`<button class="smbtn" data-coach-reset="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#1e2f4d;color:#8fb8ff;border:1px solid #2d4a7a">🔑 Reset PIN</button>`:''}
           <button class="smbtn ${active?'':'smg'}" data-coach-toggle="${esc(c.id)}" data-coach-active="${active?'1':'0'}" style="padding:6px 12px;font-size:.75rem">${active?'Deactivate':'Activate'}</button>
         </div>
       </div>`;
     }).join("");
+    box.querySelectorAll("[data-coach-rates]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        const coachId = btn.dataset.coachRates;
+        const c = coachCache.find(x=>x.id===coachId)||{};
+        const priceRaw = prompt(`ราคาคาบสอนของ ${coachId} ต่อชั่วโมง (บาท รวมค่าห้องแล้ว — ลูกค้าเห็นราคานี้ราคาเดียว):`, c.lessonPrice||"");
+        if(priceRaw===null) return;
+        const payoutRaw = prompt(`payout โค้ช ${coachId} ต่อชั่วโมง (บาท ขั้นต่ำ 500 — snapshot เข้า booking ตอนจอง ไม่กระทบ booking เก่า):`, c.payoutPerHour||500);
+        if(payoutRaw===null) return;
+        const lessonPrice = parseInt(priceRaw,10), payoutPerHour = parseInt(payoutRaw,10);
+        if(!Number.isInteger(lessonPrice)||lessonPrice<=0){ showToast("ราคาคาบสอนไม่ถูกต้อง",true); return; }
+        if(!Number.isInteger(payoutPerHour)||payoutPerHour<500){ showToast("payout ขั้นต่ำ 500 บาท/ชม.",true); return; }
+        btn.disabled=true;
+        try{
+          const res = await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({action:"coach_update_rates",coachId,lessonPrice,payoutPerHour})});
+          const data = await res.json().catch(()=>({}));
+          if(!res.ok||!data.ok){ showToast(data.error||"Failed.",true); btn.disabled=false; return; }
+          showToast(`✓ ตั้งราคา ${coachId}: ฿${lessonPrice}/ชม. (payout ฿${payoutPerHour})`);
+          renderCoachTab();
+        }catch(e){ console.error(e); showToast("Failed.",true); btn.disabled=false; }
+      });
+    });
     box.querySelectorAll("[data-coach-reset]").forEach(btn=>{
       btn.addEventListener("click", async ()=>{
         const coachId = btn.dataset.coachReset;
@@ -1674,6 +1699,16 @@ function cardHTML(b){
     }
   } catch(_) {}
 
+  // ── Coach lesson row (Stage 3) — payout is the CREATE-TIME snapshot, never
+  // recalculated from the current coach registry rates.
+  const coachLessonRow = b.serviceType==="coach_lesson"
+    ?`<div style="grid-column:1/-1"><div style="background:#0f2d1e;border:1px solid #2fbf76;border-radius:7px;padding:7px 10px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">`+
+      `<span style="font-size:.62rem;color:#2fbf76;font-weight:800;text-transform:uppercase;letter-spacing:.4px">🎾 Coach Lesson</span>`+
+      `<span style="font-size:.78rem;font-weight:800;color:#2fbf76">${esc(b.coachName||b.coachId||"—")}</span>`+
+      `<span style="font-size:.7rem;color:var(--m)">ลูกค้าจ่าย ฿${Number(b.customerPrice)||Number(b.price)||0} (รวมห้อง) · payout โค้ช ฿${Number(b.coachPayoutAmount)||0} (${esc(b.coachPayoutStatus||"pending")})</span>`+
+      `</div></div>`
+    :"";
+
   // Generate copy button inside screenshot block if data is present and booking is confirmed
   const hasRequiredFields = !!(b.customerName && b.customerPhone && b.date && b.startTime && b.endTime && b.bookingCode);
   const isConfirmedBooking = b.bookingStatus === "confirmed" &&
@@ -1707,6 +1742,7 @@ function cardHTML(b){
       ${screenshotBlock}
       <div class="bfields" style="margin-top:10px">
         ${prevRow}
+        ${coachLessonRow}
         ${pkgUsageRow}
         ${timeline}
         ${refundRow}
@@ -1804,6 +1840,26 @@ async function cancelBooking(b){
         startTime: b.startTime,
         endTime: b.endTime,
         reason: data.booking?.cancelReason || "สลิปไม่ถูกต้องหรือไม่พบยอดโอน"
+      });
+    }
+    // Fire-and-forget admin visibility — ONLY when the cancel mattered: a slip
+    // was attached, payment was in review, or the booking was confirmed. Quick
+    // unpaid-pending cancels stay silent to avoid admin spam (Stage 1 policy).
+    const cancelMattered=!!getSlipUrl(b)||["pending_review","paid"].includes(b.paymentStatus)||b.bookingStatus==="confirmed";
+    if (cancelMattered && window.notifyAdmins) {
+      window.notifyAdmins({
+        type: "booking_cancelled_admin",
+        bookingCode: b.bookingCode,
+        eventSuffix: "cancel",
+        customerName: b.customerName,
+        customerPhone: b.customerPhone,
+        date: b.date,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        prevPaymentStatus: b.paymentStatus,
+        hadSlip: !!getSlipUrl(b),
+        actionBy: currentAdminName,
+        reason: data.booking?.cancelReason || ""
       });
     }
     showToast(`✗ ${b.bookingCode} cancelled`);await loadBookings();

@@ -492,6 +492,15 @@
           <div class="hcard-sub" id="homeSingleSub" style="font-size:.8rem;margin-top:3px" data-i18n="singleSub">฿350 / hour · Weekday mornings ฿330/320 · Pay by QR slip</div>
         </div>
       </button>
+      <!-- Coach booking (Stage 3) — stays hidden unless the feature flag is on
+           AND at least one coach has rates configured (see initCoachHome). -->
+      <button class="hcard" id="btnCoach" style="display:none;flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
+        <div class="hcard-icon" style="font-size:2rem">👨‍🏫</div>
+        <div>
+          <div class="hcard-label" style="font-size:1rem">จองคอร์ทพร้อมโค้ช</div>
+          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px">เลือกโค้ช · ราคาเดียวรวมค่าคอร์ท · จ่ายด้วย QR</div>
+        </div>
+      </button>
       <button class="hcard" id="btnRegister" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
         <div class="hcard-icon" style="font-size:2rem">👤</div>
         <div>
@@ -581,6 +590,59 @@
             <p id="bkNote2">Payment due within 15 minutes.</p>
           </div>
           <button class="btn-go" id="confirmBkBtn" disabled data-i18n="confirmBooking">Confirm Booking</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW: COACH LESSON BOOKING (Stage 3 — reachable only via the flag-gated
+       home card; completely separate from viewBooking so the normal booking
+       flow is untouched) -->
+  <div id="viewCoach" style="display:none">
+    <div class="view">
+      <button class="back" id="ckBack">← <span data-i18n="back">Back</span></button>
+      <div class="ptitle">จองคอร์ทพร้อมโค้ช</div>
+
+      <div class="card">
+        <div class="slabel">เลือกโค้ช</div>
+        <div id="ckCoachList" style="display:flex;flex-direction:column;gap:8px"></div>
+      </div>
+
+      <div class="card" id="ckDateCard" style="display:none">
+        <div class="slabel" data-i18n="selectDate">Select Date</div>
+        <div class="dstrip" id="ckDateStrip"></div>
+      </div>
+
+      <div class="card" id="ckTimeCard" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px">
+          <div class="slabel" style="margin:0">เวลาที่โค้ชและคอร์ทว่างตรงกัน</div>
+          <div id="ckSlotsText" style="font-size:.72rem;color:var(--muted)">—</div>
+        </div>
+        <div class="tgrid" id="ckTimeGrid"></div>
+      </div>
+
+      <div class="card" id="ckInfoCard" style="display:none">
+        <div class="slabel" data-i18n="yourInfo">Your Info</div>
+        <div class="fgrid">
+          <label><span data-i18n="name">Name</span><input type="text" id="ckName" autocomplete="name" placeholder="Full name"/></label>
+          <label><span data-i18n="phone">Phone</span><input type="tel" id="ckPhone" autocomplete="tel" placeholder="Phone number"/></label>
+          <label class="full"><span data-i18n="noteOptional">Note (optional)</span><textarea id="ckNote" rows="2"></textarea></label>
+        </div>
+        <p style="font-size:.68rem;color:var(--muted);line-height:1.8;margin:10px 2px 0">
+          📌 <strong>นโยบายคาบสอนโค้ช</strong> · ยกเลิก/เลื่อนล่วงหน้าอย่างน้อย 48 ชั่วโมง
+          · กรณีไม่มาเรียน (no-show) กรุณาติดต่อโค้ชโดยตรง
+          · การจองวันเสาร์–อาทิตย์และวันหยุดนักขัตฤกษ์ไม่สามารถเลื่อนได้
+        </p>
+      </div>
+
+      <div class="card" id="ckConfirmCard" style="display:none">
+        <div class="crow">
+          <div>
+            <div class="eyebrow">ราคารวม (รวมค่าคอร์ทแล้ว)</div>
+            <h2 id="ckPrice">฿—</h2>
+            <p>ชำระภายใน 15 นาที · QR ตามยอดจริง</p>
+          </div>
+          <button class="btn-go" id="ckConfirmBtn" disabled>ยืนยันจองพร้อมโค้ช</button>
         </div>
       </div>
     </div>
@@ -918,7 +980,7 @@ const state = {
 
 // ── DOM ─────────────────────────────────────────────────────────
 const $     = id => document.getElementById(id);
-const VIEWS = ["viewHome","viewBooking","viewPayment","viewMyBookings","viewSuccess","viewRegister","viewPromotions"];
+const VIEWS = ["viewHome","viewBooking","viewCoach","viewPayment","viewMyBookings","viewSuccess","viewRegister","viewPromotions"];
 const LANG_KEY = "ultra_lang";
 let currentLang = localStorage.getItem(LANG_KEY) || "th";
 if(!["th","en"].includes(currentLang)) currentLang="th";
@@ -1512,6 +1574,13 @@ function setupNav() {
   if (_navBound) return;
   _navBound = true;
   $("btnSingle").addEventListener("click", ()=>{ openBookingView(); });
+  // Coach booking (Stage 3) — button is display:none until initCoachHome()
+  // confirms the feature flag is on AND at least one coach is bookable.
+  $("btnCoach").addEventListener("click", ()=>{ openCoachView(); });
+  $("ckBack").addEventListener("click", ()=>showView("viewHome"));
+  $("ckName").addEventListener("input", updateCkConfirm);
+  $("ckPhone").addEventListener("input", updateCkConfirm);
+  initCoachHome();
   $("btnMyBookings").addEventListener("click",()=>{ activeMyNav="bookings"; openMyBookings(); });
   $("btnRegister").addEventListener("click", ()=>{ openRegisterView(); });
   $("btnPromotions").addEventListener("click", ()=>{ showView("viewPromotions"); });
@@ -2175,7 +2244,10 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
     const endTime = b.endTime;
     state.currentBookingCode  = b.bookingCode;
     state.currentBookingDocId = b.id;
-    state.currentBookingData  = { ...b, expiresAt, paymentQrType: b.qrType, price: b.finalPrice, qrAmount: b.qrAmount };
+    // bookingStatus/paymentStatus are known at creation but the server create
+    // response omits them — renderPaymentQr's canDownload gate needs both, so
+    // set them explicitly or the Download QR button never shows (Stage 1 fix).
+    state.currentBookingData  = { ...b, expiresAt, paymentQrType: b.qrType, price: b.finalPrice, qrAmount: b.qrAmount, bookingStatus: "pending_payment", paymentStatus: "unpaid" };
     if(window.notifyAdmins){
       window.notifyAdmins({ type:"new_booking_admin", bookingCode:b.bookingCode, customerName:name, customerPhone:phone, date:dateISO, startTime:state.time, endTime });
     }
@@ -2467,7 +2539,11 @@ $("confirmBkBtn").addEventListener("click", async()=>{
         customerPhone: phone,
         date: dateISO,
         startTime: state.time,
-        endTime
+        endTime,
+        // Lets the template distinguish Pass bookings ("package" → confirmed,
+        // no slip coming) from single-use ("unpaid" → waiting for payment).
+        paymentStatus: bookingPayload.paymentStatus,
+        bookingType: bookingPayload.bookingType
       });
     }
 
@@ -2769,6 +2845,20 @@ $("submitSlipBtn").addEventListener("click", async()=>{
       await updateDoc(pRef,{ status:"pending_review", paymentStatus:"pending_review", slipUrl:url, slipUploadedAt:serverTimestamp(), updatedAt:serverTimestamp() });
       console.log("Pass purchase updated");
       clearTimeout(warningTimer);
+      // Fire-and-forget: pass purchases previously notified no one. Uses the
+      // dedicated pass template so admins never mistake it for a court booking.
+      if(window.notifyAdmins){
+        const pd=state.currentPurchaseData||{};
+        window.notifyAdmins({
+          type: "pass_purchase_admin",
+          bookingCode: code,             // eventId key — pass purchaseCode
+          purchaseCode: code,
+          customerName: pd.customerName,
+          customerPhone: pd.customerPhone,
+          packageName: pd.packageName,
+          price: pd.price
+        });
+      }
       showSuccess("📨",t("slipReceived"),code,t("passPending"));
     } else {
       const slotId=`${RESOURCE_ID}_${state.currentBookingData.date}_${state.currentBookingData.startTime.replace(":","")}`; 
@@ -3132,6 +3222,165 @@ window.openBookingView=openBookingView;
 // NOTE: customer self-purchase pass flow is not enabled. Passes are issued only via
 // admin.html → "Add Pass". Do not re-add a window.openBuyPassView reference until
 // the buy-pass view actually exists in this file.
+
+// ── COACH LESSON BOOKING (Stage 3 — feature-flagged OFF by default) ──
+// Fully separate view from viewBooking. Availability comes from the server
+// (coach_slots = room ∩ coach). Creation locks BOTH the room slot and the
+// coach hour in one server transaction (create_coach_lesson). Payment/slip/
+// cancel then reuse the existing machinery unchanged.
+let ckCoaches=[], ckSel=null, ckDate=null, ckTime=null, ckBusy=false;
+
+async function initCoachHome(){
+  try{
+    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"coach_options"})});
+    const d=await r.json().catch(()=>null);
+    if(r.ok&&d&&d.ok&&d.enabled===true&&Array.isArray(d.coaches)&&d.coaches.length){
+      ckCoaches=d.coaches;
+      $("btnCoach").style.display="flex";
+    }
+  }catch(e){ console.warn("[coach] options failed (button stays hidden):",e); }
+}
+
+function openCoachView(){
+  ckSel=null; ckDate=null; ckTime=null;
+  ["ckDateCard","ckTimeCard","ckInfoCard","ckConfirmCard"].forEach(id=>{$(id).style.display="none";});
+  renderCkCoaches();
+  if(!$("ckName").value.trim()){
+    const n=$("bkName")?.value?.trim();
+    $("ckName").value=n||((state.lineProfile&&state.lineProfile.displayName!=="Guest")?state.lineProfile.displayName:"");
+  }
+  if(!$("ckPhone").value.trim()&&$("bkPhone")?.value?.trim()) $("ckPhone").value=$("bkPhone").value.trim();
+  showView("viewCoach");
+}
+
+function renderCkCoaches(){
+  const box=$("ckCoachList"); box.innerHTML="";
+  ckCoaches.forEach(c=>{
+    const b=document.createElement("button");
+    b.className="hcard";
+    b.style.cssText="flex-direction:row;align-items:center;gap:12px;padding:14px 16px;text-align:left"+
+      (ckSel&&ckSel.id===c.id?";border-color:var(--ut-blue);box-shadow:0 0 0 1px var(--ut-blue)":"");
+    b.innerHTML=`<div style="font-size:1.6rem">👨‍🏫</div><div><div style="font-weight:800">${esc(c.displayName)}</div>`+
+      `<div style="font-size:.75rem;color:var(--muted)">฿${Number(c.lessonPrice).toLocaleString("en-US")} / ชั่วโมง (รวมค่าคอร์ทแล้ว)</div></div>`;
+    b.addEventListener("click",()=>{
+      ckSel=c; ckTime=null;
+      renderCkCoaches();
+      buildCkDates();
+      $("ckDateCard").style.display="block";
+      $("ckPrice").textContent=`฿${Number(c.lessonPrice).toLocaleString("en-US")}`;
+      if(ckDate) loadCkHours(); else { $("ckTimeCard").style.display="none"; }
+      updateCkConfirm();
+    });
+    box.appendChild(b);
+  });
+}
+
+function buildCkDates(){
+  const strip=$("ckDateStrip");
+  const fmt=new Intl.DateTimeFormat(currentLang==="th"?"th-TH":"en-US",{weekday:"short"});
+  const today=new Date(); strip.innerHTML="";
+  for(let i=0;i<14;i++){
+    const d=new Date(today); d.setDate(today.getDate()+i);
+    const iso=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const btn=document.createElement("button");
+    btn.className=`dbtn${iso===ckDate?" on":""}`;
+    btn.innerHTML=`<span>${i===0?t("today"):fmt.format(d)}</span><strong>${d.getDate()}</strong>`;
+    btn.addEventListener("click",()=>{
+      ckDate=iso; ckTime=null;
+      strip.querySelectorAll(".dbtn").forEach(b=>b.classList.remove("on"));
+      btn.classList.add("on");
+      loadCkHours();
+      updateCkConfirm();
+    });
+    strip.append(btn);
+  }
+}
+
+async function loadCkHours(){
+  if(!ckSel||!ckDate) return;
+  $("ckTimeCard").style.display="block";
+  $("ckTimeGrid").innerHTML=`<p class="tloading">${t("loading")}</p>`;
+  $("ckSlotsText").textContent="—";
+  try{
+    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"coach_slots",coachId:ckSel.id,date:ckDate})});
+    const d=await r.json().catch(()=>null);
+    if(!r.ok||!d||!d.ok){ $("ckTimeGrid").innerHTML=`<p class="tloading">${esc((d&&d.error)||"โหลดไม่สำเร็จ")}</p>`; return; }
+    const hours=d.hours||[];
+    $("ckSlotsText").textContent=`${hours.length} ช่วงเวลา`;
+    if(!hours.length){
+      $("ckTimeGrid").innerHTML=`<p class="tloading">โค้ชไม่ว่าง หรือคอร์ทเต็มในวันนี้ ลองวันอื่น</p>`;
+      return;
+    }
+    const grid=$("ckTimeGrid"); grid.innerHTML="";
+    hours.forEach(h=>{
+      const btn=document.createElement("button");
+      btn.className=`tbtn${h===ckTime?" on":""}`;
+      btn.textContent=h;
+      btn.addEventListener("click",()=>{
+        ckTime=h;
+        grid.querySelectorAll(".tbtn").forEach(b=>b.classList.remove("on"));
+        btn.classList.add("on");
+        $("ckInfoCard").style.display="block";
+        $("ckConfirmCard").style.display="block";
+        updateCkConfirm();
+      });
+      grid.appendChild(btn);
+    });
+  }catch(e){
+    console.error("[coach] slots failed:",e);
+    $("ckTimeGrid").innerHTML=`<p class="tloading">เครือข่ายมีปัญหา ลองใหม่อีกครั้ง</p>`;
+  }
+}
+
+function updateCkConfirm(){
+  $("ckConfirmBtn").disabled=!(ckSel&&ckDate&&ckTime&&$("ckName").value.trim()&&$("ckPhone").value.trim())||ckBusy;
+}
+
+$("ckConfirmBtn").addEventListener("click", async()=>{
+  if(ckBusy||!ckSel||!ckDate||!ckTime) return;
+  const name=$("ckName").value.trim(), phone=$("ckPhone").value.trim();
+  if(!name||!phone){ showToast(currentLang==="th"?"กรอกชื่อและเบอร์โทร":"Please fill in name and phone",true); return; }
+  ckBusy=true;
+  const btn=$("ckConfirmBtn"); btn.disabled=true; btn.textContent="กำลังจอง...";
+  try{
+    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        action:"create_coach_lesson",
+        coachId:ckSel.id, date:ckDate, startTime:ckTime,
+        customerName:name, customerPhone:phone,
+        customerNote:$("ckNote").value.trim(),
+        lineUserId:state.lineProfile?.userId||"guest",
+        lineDisplayName:state.lineProfile?.displayName||"",
+      })});
+    const d=await r.json().catch(()=>null);
+    if(!r.ok||!d||!d.ok){
+      showToast((d&&d.error)||"จองไม่สำเร็จ ลองใหม่อีกครั้ง",true);
+      if(d&&d.code==="SLOT") loadCkHours();   // slot moved — refresh the grid
+      return;
+    }
+    const b=d.booking;
+    const expiresAt=new Date(d.paymentExpiresAt);
+    state.paymentMode="booking";
+    state.currentBookingCode=b.bookingCode;
+    state.currentBookingDocId=b.id;
+    state.currentBookingData={ ...b, expiresAt, paymentQrType:b.qrType, price:b.finalPrice, qrAmount:b.qrAmount, bookingStatus:"pending_payment", paymentStatus:"unpaid" };
+    try{
+      localStorage.setItem("ut_pending_booking", JSON.stringify({ code:b.bookingCode, docId:b.id, expiresAt:expiresAt.getTime(), date:ckDate, startTime:ckTime, endTime:b.endTime, price:b.finalPrice, isLN:false }));
+    }catch(_){/* non-fatal */}
+    if(window.notifyAdmins){
+      window.notifyAdmins({ type:"new_booking_admin", bookingCode:b.bookingCode, customerName:name, customerPhone:phone, date:ckDate, startTime:ckTime, endTime:b.endTime, coachName:b.coachName });
+    }
+    showPaymentPanel(b.bookingCode, b.finalPrice, expiresAt, ckDate, `${ckTime} – ${b.endTime} · โค้ช ${b.coachName}`, false);
+    showView("viewPayment");
+  }catch(e){
+    console.error("[coach] create failed:",e);
+    showToast("เครือข่ายมีปัญหา ลองใหม่อีกครั้ง",true);
+  }finally{
+    ckBusy=false; btn.textContent="ยืนยันจองพร้อมโค้ช"; updateCkConfirm();
+  }
+});
 
 // ── SUCCESS ─────────────────────────────────────────────────────
 function showSuccess(icon,title,code,msg) {

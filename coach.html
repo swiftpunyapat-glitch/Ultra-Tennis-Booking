@@ -51,6 +51,29 @@
   .note-row textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-size:.82rem;font-family:inherit;resize:vertical;min-height:44px;background:#fafcfb;color:var(--ink)}
   .note-row .save{margin-top:6px;background:#f0f4f2;color:var(--brand-2);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:.76rem;font-weight:800;cursor:pointer}
   .empty{text-align:center;color:var(--muted);padding:26px 10px;font-size:.85rem}
+  /* Tabs + availability grid (Coach Stage 2) */
+  .tabs{display:flex;gap:8px;margin:2px 0 10px}
+  .tabs button{flex:1;border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:10px;padding:10px 6px;font-size:.84rem;font-weight:800;cursor:pointer}
+  .tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+  .avail-strip{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch}
+  .avail-strip button{flex:0 0 auto;min-width:52px;border:1px solid var(--line);background:#fff;border-radius:10px;padding:7px 4px;font-size:.68rem;font-weight:700;color:var(--muted);cursor:pointer;text-align:center}
+  .avail-strip button strong{display:block;font-size:.95rem;color:var(--ink)}
+  .avail-strip button.on{border-color:var(--brand);background:var(--brand);color:#e9f5ee}
+  .avail-strip button.on strong{color:#fff}
+  .hour-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+  .hr-btn{border:1px solid var(--line);border-radius:9px;padding:10px 4px;font-size:.82rem;font-weight:800;cursor:pointer;background:#fff;color:var(--muted);line-height:1.3}
+  .hr-btn small{display:block;font-size:.58rem;font-weight:700}
+  .hr-btn.st-on{background:#e3f6ec;border-color:var(--ok);color:var(--ok)}
+  .hr-btn.st-off{background:#fff;color:var(--ink)}
+  .hr-btn.st-locked{background:#fbe8e6;border-color:#eecac5;color:var(--danger);cursor:default}
+  .hr-btn.st-roomclosed{background:#f0f2f1;color:#b6c0ba;cursor:default;border-style:dashed}
+  .hr-btn:disabled{opacity:.9}
+  .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:.68rem;color:var(--muted);margin:10px 2px 0}
+  .legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+  .legend .lg-on::before{background:#2fbf76}
+  .legend .lg-off::before{background:#fff;border:1px solid var(--line)}
+  .legend .lg-locked::before{background:#e88}
+  .legend .lg-closed::before{background:#d9dedb}
   /* Login */
   .login{flex:1;display:flex;flex-direction:column;justify-content:center;padding:24px;gap:12px;max-width:360px;margin:0 auto;width:100%}
   .login h1{font-size:1.1rem;text-align:center;margin:0 0 4px}
@@ -110,7 +133,22 @@
       </div>
     </header>
     <main>
+      <div class="tabs">
+        <button id="tabSchedule" class="on">📅 ตารางสอน</button>
+        <button id="tabAvail">🕐 วันว่างของฉัน</button>
+      </div>
       <div id="schedule"><div class="empty">กำลังโหลด...</div></div>
+      <div id="availView" class="hidden">
+        <div class="avail-strip" id="availStrip"></div>
+        <div id="availGrid"><div class="empty">กำลังโหลด...</div></div>
+        <div class="legend">
+          <span class="lg-on">เปิดรับสอน (กดเพื่อปิด)</span>
+          <span class="lg-off">ยังไม่เปิด (กดเพื่อเปิด)</span>
+          <span class="lg-locked">มีจอง/คาบสอน</span>
+          <span class="lg-closed">ร้านไม่เปิดชั่วโมงนี้</span>
+        </div>
+        <p style="font-size:.7rem;color:var(--muted);margin:10px 2px 0">เปิดได้เฉพาะชั่วโมงที่ร้านเปิดให้จองคอร์ท · ชั่วโมงที่มีการจอง/คาบสอนอยู่จะปิดไม่ได้</p>
+      </div>
     </main>
   </div>
 </div>
@@ -153,8 +191,20 @@ function showSetup(){ $("appView").classList.add("hidden"); $("loginView").class
 function showApp(){
   $("loginView").classList.add("hidden"); $("setupView").classList.add("hidden"); $("appView").classList.remove("hidden");
   $("whoName").textContent = me.name + (me.role!=="coach" ? ` (${me.role})` : "");
-  loadSchedule();
+  switchTab("schedule");
 }
+
+// ── Tabs ────────────────────────────────────────────────────────────
+function switchTab(tab){
+  const isAvail = tab==="avail";
+  $("tabSchedule").classList.toggle("on", !isAvail);
+  $("tabAvail").classList.toggle("on", isAvail);
+  $("schedule").classList.toggle("hidden", isAvail);
+  $("availView").classList.toggle("hidden", !isAvail);
+  if(isAvail){ initAvailStrip(); loadAvail(); } else { loadSchedule(); }
+}
+$("tabSchedule").addEventListener("click", ()=>switchTab("schedule"));
+$("tabAvail").addEventListener("click",   ()=>switchTab("avail"));
 
 // ── Setup / reset PIN ───────────────────────────────────────────────
 $("toSetup").addEventListener("click", ()=>{ $("suName").value = $("liName").value.trim(); showSetup(); });
@@ -273,6 +323,108 @@ async function postLesson(bookingId, extra){
     toast("✓ บันทึกแล้ว");
     loadSchedule();
   }catch(e){ toast("เครือข่ายมีปัญหา", true); }
+}
+
+// ── My availability (Coach Stage 2) ────────────────────────────────
+// Grid of hours per day. States come entirely from coach_availability_get;
+// every toggle goes through coach_availability_set (server validates that the
+// room slot is open, and blocks closing an hour that has a live booking).
+let availDate = null;   // YYYY-MM-DD currently shown
+let availBusy = false;
+
+function isoAddDays(base, days){
+  const d = new Date(base.getTime() + days*24*3600*1000);
+  return d.toISOString().slice(0,10);
+}
+function initAvailStrip(){
+  const strip = $("availStrip");
+  if(strip.dataset.built==="1") return;
+  strip.dataset.built="1";
+  // Bangkok "today" — same +07:00 arithmetic the server uses.
+  const bkkNow = new Date(Date.now() + 7*3600*1000);
+  const fmt = new Intl.DateTimeFormat("th-TH",{weekday:"short"});
+  for(let i=0;i<14;i++){
+    const iso = isoAddDays(bkkNow, i);
+    const d = new Date(iso+"T00:00:00");
+    const btn = document.createElement("button");
+    btn.innerHTML = `<span>${i===0?"วันนี้":fmt.format(d)}</span><strong>${d.getDate()}</strong>`;
+    btn.dataset.iso = iso;
+    if(i===0){ btn.classList.add("on"); availDate = iso; }
+    btn.addEventListener("click", ()=>{
+      availDate = iso;
+      strip.querySelectorAll("button").forEach(b=>b.classList.remove("on"));
+      btn.classList.add("on");
+      loadAvail();
+    });
+    strip.appendChild(btn);
+  }
+}
+
+async function loadAvail(){
+  if(!availDate) return;
+  $("availGrid").innerHTML = `<div class="empty">กำลังโหลด...</div>`;
+  try{
+    const r = await fetch(API_OPS,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"coach_availability_get",date:availDate})});
+    const d = await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok){ $("availGrid").innerHTML=`<div class="empty">❌ ${esc(d.error||"โหลดไม่สำเร็จ")}</div>`; return; }
+    renderAvail(d);
+  }catch(e){ $("availGrid").innerHTML=`<div class="empty">❌ เครือข่ายมีปัญหา</div>`; }
+}
+
+function renderAvail(d){
+  const roomOpen = new Set(d.roomOpen||[]);
+  const roomLive = new Set(d.roomLive||[]);
+  const assigned = new Set(d.assignedHours||[]);
+  const coachOpen = d.coachOpen||{};
+  // Show every hour the room offers today plus any hour the coach already has
+  // a state for (covers room hours closed after the coach opened them).
+  const hours = [...new Set([...roomOpen, ...Object.keys(coachOpen)])].sort();
+  if(!hours.length){ $("availGrid").innerHTML=`<div class="empty">ร้านยังไม่เปิดชั่วโมงให้จองในวันนี้</div>`; return; }
+
+  const grid = document.createElement("div");
+  grid.className = "hour-grid";
+  hours.forEach(h=>{
+    const av = coachOpen[h];
+    const isBooked = (av && av.status==="booked") || assigned.has(h);
+    const isOn = !!av && !isBooked;
+    const roomIsOpen = roomOpen.has(h);
+    const btn = document.createElement("button");
+    btn.className = "hr-btn";
+    if(isBooked){
+      btn.classList.add("st-locked");
+      btn.innerHTML = `${esc(h)}<small>มีจอง${av&&av.bookingCode?` · ${esc(av.bookingCode)}`:""}</small>`;
+      btn.disabled = true;
+    } else if(isOn){
+      btn.classList.add("st-on");
+      btn.innerHTML = `${esc(h)}<small>เปิดรับสอน${roomLive.has(h)?" · คอร์ทมีคิวแล้ว":""}</small>`;
+      btn.addEventListener("click", ()=>toggleAvail(h,false,btn));
+    } else if(roomIsOpen){
+      btn.classList.add("st-off");
+      btn.innerHTML = `${esc(h)}<small>ยังไม่เปิด${roomLive.has(h)?" · คอร์ทมีคิวแล้ว":""}</small>`;
+      btn.addEventListener("click", ()=>toggleAvail(h,true,btn));
+    } else {
+      btn.classList.add("st-roomclosed");
+      btn.innerHTML = `${esc(h)}<small>ร้านปิด</small>`;
+      btn.disabled = true;
+    }
+    grid.appendChild(btn);
+  });
+  $("availGrid").replaceChildren(grid);
+}
+
+async function toggleAvail(hour, open, btn){
+  if(availBusy) return;
+  if(!open && !confirm(`ปิดรับสอนเวลา ${hour} วันที่ ${availDate}?`)) return;
+  availBusy = true; if(btn) btn.disabled = true;
+  try{
+    const r = await fetch(API_OPS,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"coach_availability_set",date:availDate,hour,open})});
+    const d = await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok){ toast(d.error||"บันทึกไม่สำเร็จ", true); }
+    else toast(open?`✓ เปิดรับสอน ${hour}`:`✓ ปิดรับสอน ${hour}`);
+  }catch(e){ toast("เครือข่ายมีปัญหา", true); }
+  finally{ availBusy = false; loadAvail(); }
 }
 
 boot();
