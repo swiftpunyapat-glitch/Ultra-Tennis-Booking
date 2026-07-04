@@ -763,9 +763,10 @@
         </p>
       </div>
 
-      <!-- Pass self-purchase (Stage D) — hidden until the enablePassSelfPurchase
-           flag is on. Purchase doc + price are created server-side; slip upload
-           and admin approval reuse the existing pass_purchases machinery. -->
+      <!-- Pass self-purchase (Stage D) — LIVE by default; hides itself when
+           system_settings/features.enablePassSelfPurchase === false (kill-switch).
+           Purchase doc + price are created server-side; slip upload and admin
+           approval reuse the existing pass_purchases machinery. -->
       <div class="card" id="passBuyWrap" style="display:none;margin-bottom:14px">
         <div class="slabel">🛒 ซื้อแพ็กเกจออนไลน์ · จ่ายด้วย QR + แนบสลิป</div>
         <div id="passBuyList" style="display:flex;flex-direction:column;gap:8px"></div>
@@ -3281,6 +3282,7 @@ window.openBookingView=openBookingView;
 // pass_purchases machinery — a pass is issued ONLY after admin approval.
 let pbCatalog=[], pbSel=null, pbBusy=false;
 const PB_DESC={
+  ultra_starter_3:"3 ชั่วโมง (180 นาที) · ใช้ได้ 30 วัน · เฉลี่ย ฿333/ชม.",
   ultra_pass_10:"10 ชั่วโมง (600 นาที) · ใช้ได้ 90 วัน · เฉลี่ย ฿310/ชม.",
   ultra_pass_20:"20 ชั่วโมง (1,200 นาที) · ใช้ได้ 180 วัน · เฉลี่ย ฿295/ชม.",
   offpeak:"16 ชั่วโมง ใน 30 วัน · จ.–ศ. 09:00–15:00 · สูงสุด 4 ชม./สัปดาห์",
