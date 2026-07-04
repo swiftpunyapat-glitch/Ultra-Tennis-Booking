@@ -84,6 +84,7 @@ const BOOKING_TYPE_TH = {
   "Off-Peak Manual": "ใช้ Off-Peak Pass โดยแอดมิน",
   "Single Use": "จองรายครั้ง",
   "Late Night Session": "รอบดึก",
+  "Coach Lesson": "คาบสอนกับโค้ช",
 };
 
 const REFUND_REASON_TH = {
@@ -148,17 +149,87 @@ Ultra Tennis
 กรุณาตรวจสอบใน My Booking`,
   }],
 
+  // Distinguishes payment paths via p.paymentStatus (sent by the client):
+  //   "package"        → booked with a Pass — CONFIRMED, no slip will come.
+  //   anything else    → single-use / coach lesson — waiting for payment+slip.
+  // p.bookingType carries the pass name; p.coachName marks coach lessons.
   new_booking_admin: (p) => [{
     type: "text",
-    text:
-`🎾 มีรายการจองใหม่
+    text: p.paymentStatus === "package"
+      ?
+`🎾 มีการจองคอร์ท (ใช้ Pass)
 
 รหัสจอง: ${p.bookingCode}
 ลูกค้า: ${p.customerName || "—"}
 เบอร์โทร: ${p.customerPhone || "—"}
 วันที่: ${p.date}
 เวลา: ${p.startTime}–${p.endTime}
-สถานะ: รอชำระเงิน`,
+วิธีชำระ: ใช้ ${thaiValue(BOOKING_TYPE_TH, p.bookingType)}
+สถานะ: ยืนยันแล้ว ไม่ต้องรอสลิป`
+      :
+`🎾 มีการจองคอร์ทใหม่
+
+รหัสจอง: ${p.bookingCode}
+ลูกค้า: ${p.customerName || "—"}
+เบอร์โทร: ${p.customerPhone || "—"}
+วันที่: ${p.date}
+เวลา: ${p.startTime}–${p.endTime}${p.coachName ? `
+โค้ช: ${p.coachName} (คาบสอนพร้อมคอร์ท)` : ""}
+สถานะ: รอชำระเงิน (จองช่วงเวลาคอร์ท)`,
+  }],
+
+  // Customer cancelled their own UNPAID pending booking (cancel_pending).
+  // Sent server-side by /api/booking, gated by the
+  // notifyAdminOnCustomerPendingCancel flag (default OFF — see notify flags).
+  customer_cancel_pending_admin: (p) => [{
+    type: "text",
+    text:
+`❌ ลูกค้ายกเลิกก่อนชำระเงิน
+
+รหัสจอง: ${p.bookingCode}
+ลูกค้า: ${p.customerName || "—"}
+เบอร์โทร: ${p.customerPhone || "—"}
+วันที่: ${p.date || "—"}
+เวลา: ${p.startTime || "—"}–${p.endTime || "—"}
+สถานะเดิม: รอชำระเงิน / ยังไม่มีสลิป
+หมายเหตุ: ลูกค้ากดยกเลิกเอง ช่องเวลาถูกปล่อยแล้ว`,
+  }],
+
+  // Admin visibility on a cancellation that mattered (had a slip, was in
+  // review, or was confirmed/paid). Quick unpaid-pending cancels do NOT use
+  // this — callers decide (see admin.html cancelBooking).
+  booking_cancelled_admin: (p) => [{
+    type: "text",
+    text:
+`✖️ การจองถูกยกเลิก
+
+รหัสจอง: ${p.bookingCode}
+ลูกค้า: ${p.customerName || "—"}
+เบอร์โทร: ${p.customerPhone || "—"}
+วันที่: ${p.date || "—"}
+เวลา: ${p.startTime || "—"}–${p.endTime || "—"}
+สถานะก่อนยกเลิก: ${thaiValue(PAYMENT_STATUS_TH, p.prevPaymentStatus)}${p.hadSlip ? `
+มีสลิปแนบอยู่ — ตรวจสอบใน Slip Review` : ""}
+ยกเลิกโดย: ${p.actionBy || "—"}${p.reason ? `
+เหตุผล: ${p.reason}` : ""}`,
+  }],
+
+  // Pass purchase slip — explicitly NOT a court time-slot booking, so admins
+  // don't confuse it with a room reservation.
+  pass_purchase_admin: (p) => [{
+    type: "text",
+    text:
+`🎫 มีการซื้อแพ็กเกจ (Pass)
+⚠️ ไม่ใช่การจองคอร์ท — ไม่มีช่วงเวลาคอร์ทถูกจอง
+
+รหัสซื้อ: ${p.purchaseCode || p.bookingCode || "—"}
+ลูกค้า: ${p.customerName || "—"}
+เบอร์โทร: ${p.customerPhone || "—"}
+แพ็กเกจ: ${p.packageName || "—"}
+ยอด: ฿${p.price ?? "—"}
+สถานะ: รอตรวจสอบสลิป
+
+กรุณาตรวจสลิปและเปิดใช้งาน Pass ในหน้า Admin`,
   }],
 
   slip_uploaded_admin: (p) => [{
@@ -413,6 +484,10 @@ export async function sendAndLog({
 // Known flags:
 //   suppressNewBookingAdmin: true → skip new_booking_admin broadcasts
 //   slipVerifyNotifications: false → /api/slip-verify sends no admin push
+//   notifyAdminOnCustomerPendingCancel: true → cancel_pending notifies admins
+//     (default OFF: every cancel_pending is by definition an unpaid no-slip
+//      booking, so notifying by default would spam admins with non-actionable
+//      messages — especially when suppressNewBookingAdmin hid the create too)
 export async function loadNotificationFlags() {
   try {
     const snap = await getDb()
