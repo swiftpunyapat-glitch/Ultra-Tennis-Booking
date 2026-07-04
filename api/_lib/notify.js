@@ -227,9 +227,38 @@ Ultra Tennis
 เบอร์โทร: ${p.customerPhone || "—"}
 แพ็กเกจ: ${p.packageName || "—"}
 ยอด: ฿${p.price ?? "—"}
-สถานะ: รอตรวจสอบสลิป
+สถานะ: รอตรวจสอบสลิป${p.precheckNote ? `
+${p.precheckNote}` : ""}
 
 กรุณาตรวจสลิปและเปิดใช้งาน Pass ในหน้า Admin`,
+  }],
+
+  // Pass purchase approved by admin → package auto-issued (Stage D).
+  pass_issued_admin: (p) => [{
+    type: "text",
+    text:
+`✅ เปิดใช้งาน Pass แล้ว (ซื้อออนไลน์)
+
+รหัสซื้อ: ${p.purchaseCode || "—"}
+ลูกค้า: ${p.customerName || "—"}
+เบอร์โทร: ${p.customerPhone || "—"}
+แพ็กเกจ: ${p.packageName || "—"}
+ยอด: ฿${p.price ?? "—"}
+อนุมัติโดย: ${p.actionBy || "—"}
+
+Pass ถูกเพิ่มเข้าบัญชี LINE ของลูกค้าแล้วอัตโนมัติ`,
+  }],
+
+  pass_purchase_rejected_customer: (p) => [{
+    type: "text",
+    text:
+`❌ การซื้อแพ็กเกจไม่ผ่านการตรวจสอบ
+
+รหัสซื้อ: ${p.purchaseCode || "—"}
+แพ็กเกจ: ${p.packageName || "—"}
+
+เหตุผล: ${p.reason || "สลิปไม่ถูกต้องหรือไม่พบยอดโอน"}
+กรุณาติดต่อแอดมิน Ultra Tennis`,
   }],
 
   slip_uploaded_admin: (p) => [{
