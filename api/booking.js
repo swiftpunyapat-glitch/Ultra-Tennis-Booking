@@ -62,7 +62,8 @@ export default async function handler(req, res) {
   if (body.action === 'coach_options')       return handleCoachOptions(res);
   if (body.action === 'coach_slots')         return handleCoachSlots(res, body);
   if (body.action === 'create_coach_lesson') return handleCreateCoachLesson(res, body);
-  // Pass self-purchase (Stage D) — flag enablePassSelfPurchase, OFF by default.
+  // Pass self-purchase (Stage D) — LIVE (on by default); kill-switch:
+  // system_settings/features.enablePassSelfPurchase = false.
   if (body.action === 'pass_catalog')         return handlePassCatalog(res);
   if (body.action === 'create_pass_purchase') return handleCreatePassPurchase(res, body);
   return res.status(400).json({ ok: false, error: `Unknown action "${body.action}"` });
@@ -72,16 +73,21 @@ export default async function handler(req, res) {
 // systematized passes are sellable online; Beginner Coaching ("from ฿4,000",
 // varies by coach) stays contact-admin by business decision.
 const PASS_CATALOG = {
-  ultra_pass_10: { packageName: 'Ultra Pass 10 Hours', price: 3100 },
-  ultra_pass_20: { packageName: 'Ultra Pass 20 Hours', price: 5900 },
-  offpeak:       { packageName: 'Off-Peak Pass',       price: 3600 },
+  ultra_starter_3: { packageName: 'Ultra Starter',       price: 999  },
+  ultra_pass_10:   { packageName: 'Ultra Pass 10 Hours', price: 3100 },
+  ultra_pass_20:   { packageName: 'Ultra Pass 20 Hours', price: 5900 },
+  offpeak:         { packageName: 'Off-Peak Pass',       price: 3600 },
 };
 
 async function passSelfPurchaseEnabled(db) {
   try {
     const snap = await db.collection('system_settings').doc('features').get();
-    return snap.exists && snap.data().enablePassSelfPurchase === true;
+    // LIVE since 2026-07 (owner-verified): ON by default. Kill-switch stays
+    // available — set system_settings/features.enablePassSelfPurchase to
+    // false to hide/refuse self purchases without a redeploy.
+    return !(snap.exists && snap.data().enablePassSelfPurchase === false);
   } catch (e) {
+    // Fail-safe: on a read error, hide purchases rather than sell blind.
     console.warn('[pass flag] read failed → OFF:', e.message);
     return false;
   }
@@ -455,7 +461,7 @@ async function handleCancelPending(res, body) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Pass self-purchase — Stage D (feature-flagged, OFF by default)
+// Pass self-purchase — Stage D (LIVE; kill-switch flag = false to disable)
 // ════════════════════════════════════════════════════════════════════
 // Flow: create purchase (here) → customer pays Dynamic QR → uploads slip
 // (existing pass branch: pass_purchases → pending_review) → slip pre-check →
