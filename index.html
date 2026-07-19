@@ -541,7 +541,12 @@
 
       <div class="card">
         <div class="slabel" data-i18n="duration">Duration</div>
-        <div class="dur-badge"><strong>⏱ <span data-i18n="oneHour">1 Hour per Booking</span></strong><span data-i18n="bookAgain">Book again for more time</span></div>
+        <div class="tgrid" id="durGrid" style="grid-template-columns:repeat(3,1fr)">
+          <button class="tbtn on" data-dur="1" data-i18n="durHour1">1 Hour</button>
+          <button class="tbtn" data-dur="2" data-i18n="durHour2">2 Hours</button>
+          <button class="tbtn" data-dur="3" data-i18n="durHour3">3 Hours</button>
+        </div>
+        <p id="durNote" style="font-size:.7rem;color:var(--muted);margin:8px 2px 0" data-i18n="durNote">Consecutive hours, paid with one QR</p>
       </div>
 
       <div class="card">
@@ -978,6 +983,7 @@ const state = {
   // Booking flow
   dateOffset: 0,
   time: null,
+  durationHours: 1,   // Phase A: single-use bookings may span 1-3 consecutive hours
   openSlots: new Set(),
   blockedSlots: new Set(),
   currentDateIsHoliday: false,
@@ -1020,6 +1026,12 @@ const I18N = {
     duration:"ระยะเวลา",
     oneHour:"จองครั้งละ 1 ชั่วโมง",
     bookAgain:"หากต้องการหลายชั่วโมง สามารถจองเพิ่มได้",
+    durHour1:"1 ชั่วโมง",
+    durHour2:"2 ชั่วโมง",
+    durHour3:"3 ชั่วโมง",
+    durNote:"จองติดกันได้สูงสุด 3 ชั่วโมง จ่าย QR เดียว",
+    durPassOnly:"แพ็กเกจใช้ได้ครั้งละ 1 ชั่วโมง",
+    durCrossMidnight:"เกินเที่ยงคืน — เลือกเวลาเริ่มให้เร็วขึ้น",
     availableTimes:"เลือกเวลา",
     loadingSlots:"กำลังโหลดช่วงเวลา...",
     paymentType:"วิธีชำระ / สิทธิ์ที่ใช้",
@@ -1155,6 +1167,12 @@ const I18N = {
     duration:"Duration",
     oneHour:"1 Hour per Booking",
     bookAgain:"Book again for more time",
+    durHour1:"1 Hour",
+    durHour2:"2 Hours",
+    durHour3:"3 Hours",
+    durNote:"Up to 3 consecutive hours, one QR payment",
+    durPassOnly:"Passes can be used 1 hour at a time",
+    durCrossMidnight:"Past midnight — choose an earlier start",
     availableTimes:"Available Times",
     loadingSlots:"Loading slots...",
     paymentType:"Payment Type",
@@ -1640,15 +1658,43 @@ function setupNav() {
       document.querySelectorAll(".ptbtn").forEach(b=>b.classList.remove("on"));
       btn.classList.add("on");
       state.bookingPaymentType=btn.dataset.pt;
+      // Passes are 1 hour per booking — multi-hour is single-use only.
+      syncDurButtons();
       // Re-validate selected time BEFORE rendering — otherwise the disabled tile keeps
       // its "on" class while the Confirm button is disabled, which looks broken.
-      if(state.time && getDisabledReason(state.time, parseInt(state.time))) state.time=null;
+      if(state.time && getDisabledReasonRange(parseInt(state.time))) state.time=null;
       renderTimes();
       updateBookingConfirmBtn();
       // Update price display
       updateBookingPriceNote();
       refreshQuote();
     });
+  });
+
+  // ── Duration selector (Phase A: 1-3 consecutive hours, single-use only) ──
+  document.querySelectorAll("#durGrid [data-dur]").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      const n=parseInt(btn.dataset.dur,10);
+      if(state.bookingPaymentType!=="single" && n>1){ showToast(t("durPassOnly"),true); return; }
+      state.durationHours=n;
+      syncDurButtons();
+      if(state.time && getDisabledReasonRange(parseInt(state.time))) state.time=null;
+      renderTimes();
+      updateBookingConfirmBtn();
+      updateBookingPriceNote();
+      refreshQuote();
+    });
+  });
+}
+
+// Keep duration buttons in sync with the payment type: passes lock to 1 hour.
+function syncDurButtons(){
+  const single = state.bookingPaymentType==="single";
+  if(!single && state.durationHours!==1) state.durationHours=1;
+  document.querySelectorAll("#durGrid [data-dur]").forEach(b=>{
+    const n=parseInt(b.dataset.dur,10);
+    b.classList.toggle("on", n===state.durationHours);
+    b.disabled = !single && n>1;
   });
 }
 
@@ -1896,6 +1942,8 @@ function updateHomeSingleUsePricing() {
 async function openBookingView() {
   state.time=null;
   state.bookingPaymentType="single";
+  state.durationHours=1;
+  syncDurButtons();
   state.dateOffset=0;
 
   // Set visual loading state on pass buttons while eligibility loads
@@ -2012,14 +2060,19 @@ function renderTimes() {
   if(hasOpenLN){ for(let h=LN_START;h<LN_END;h++) hoursToRender.push(h); }
   for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++) hoursToRender.push(h);
 
+  // Range highlight: hours covered by the current selection (start + duration).
+  const selStart = state.time ? parseInt(state.time,10) : null;
+  const selN     = state.durationHours||1;
+
   for(const h of hoursToRender){
     const time=`${String(h).padStart(2,"0")}:00`;
-    const reason=getDisabledReason(time,h);
+    const reason=getDisabledReasonRange(h);
     const isLN=isLateNightHour(h);
+    const inRange = selStart!==null && h>=selStart && h<selStart+selN;
     const btn=document.createElement("button");
-    btn.className=`tbtn${time===state.time?" on":""}`;
+    btn.className=`tbtn${inRange?" on":""}`;
     btn.title=reason||t("available");
-    btn.disabled=Boolean(reason);
+    btn.disabled=Boolean(reason)&&!inRange;
     if(isLN){
       // 🌙 badge below time — visible only when slot is open
       btn.innerHTML=`${time}<br><span style="font-size:.58rem;color:#a855f7;font-weight:800;white-space:nowrap;line-height:1">🌙 Late Night</span>`;
@@ -2027,15 +2080,15 @@ function renderTimes() {
       btn.textContent=time;
     }
     btn.addEventListener("click",()=>{
+      if(getDisabledReasonRange(h)){ return; }   // continuation tile of the old range
       state.time=time;
-      grid.querySelectorAll(".tbtn").forEach(b=>b.classList.remove("on"));
-      btn.classList.add("on");
-      
+
       const isLN = isLateNightHour(h);
       if (isLN) {
         state.bookingPaymentType = "single";
       }
 
+      renderTimes();   // repaint so the whole selected range highlights
       updatePaymentTypeButtons();
       updateBookingConfirmBtn();
       updateBookingPriceNote();
@@ -2065,6 +2118,19 @@ function getDisabledReason(time, h) {
     const day=getSelectedDate().getDay();
     if(day<1||day>5) return "MONSTR Event Pass: ใช้ได้เฉพาะจันทร์–ศุกร์";
     if(state.currentDateIsHoliday) return "MONSTR Event Pass: ใช้ในวันหยุดไม่ได้";
+  }
+  return "";
+}
+
+// Multi-hour (Phase A): a start hour is bookable only when EVERY hour in
+// [h, h+durationHours) passes the single-hour checks. Never crosses midnight.
+function getDisabledReasonRange(h){
+  const n=state.durationHours||1;
+  if(h+n>24) return t("durCrossMidnight");
+  for(let i=0;i<n;i++){
+    const hi=h+i, time=`${String(hi).padStart(2,"0")}:00`;
+    const r=getDisabledReason(time,hi);
+    if(r) return n>1?`${time} — ${r}`:r;
   }
   return "";
 }
@@ -2161,7 +2227,8 @@ function currentQuoteKey(){
   const startTime = state.time || "";
   const payType   = state.bookingPaymentType;
   const voucher   = ($("bkVoucher")?.value || "").trim().toUpperCase();
-  return { date, startTime, payType, voucher, key:`${date}|${startTime}|${payType}|${voucher}` };
+  const dur       = state.durationHours || 1;
+  return { date, startTime, payType, voucher, dur, key:`${date}|${startTime}|${payType}|${voucher}|${dur}` };
 }
 
 async function refreshQuote(){
@@ -2177,7 +2244,7 @@ async function refreshQuote(){
   try{
     const res = await fetch("/api/booking", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ action:"price_quote", date:ctx.date, startTime:ctx.startTime, payType:"single", voucherCode:ctx.voucher||undefined, lineUserId:state.lineProfile.userId }),
+      body: JSON.stringify({ action:"price_quote", date:ctx.date, startTime:ctx.startTime, payType:"single", voucherCode:ctx.voucher||undefined, durationHours:ctx.dur, lineUserId:state.lineProfile.userId }),
     });
     const d = await res.json().catch(()=>({}));
     if (currentQuoteKey().key !== ctx.key) return;   // context changed → discard stale
@@ -2200,7 +2267,11 @@ function updateBookingPriceNote(){
     } else {
       $("bkPrice").textContent = "฿—";
     }
-    $("bkNote2").textContent = t("paymentDue");
+    // Multi-hour: show the per-hour breakdown under the total (e.g. 350+350+450).
+    const q = (latestQuote && latestQuote.key === ctx.key) ? latestQuote.quote : null;
+    $("bkNote2").textContent = (q && Array.isArray(q.breakdown) && q.breakdown.length > 1)
+      ? `${state.time}–${q.endTime} · ${q.breakdown.map(b=>Number(b.price)).join("+")} · ${t("paymentDue")}`
+      : t("paymentDue");
   } else {
     $("bkPrice").textContent="฿0 (Pass)";
     if(state.bookingPaymentType==="ultra" && state.eligibility.ultraPkg) {
@@ -2245,6 +2316,7 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
         action:"create", date:dateISO, startTime:state.time,
+        durationHours: state.durationHours || 1,
         customerName:name, customerPhone:phone, customerNote:note,
         lineUserId:state.lineProfile.userId, lineDisplayName:state.lineProfile.displayName,
         voucherCode: voucherCode || undefined,
@@ -2274,7 +2346,7 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
     }
     state.paymentMode="booking";
     try{
-      localStorage.setItem("ut_pending_booking", JSON.stringify({ code:b.bookingCode, docId:b.id, expiresAt:expiresAt.getTime(), date:dateISO, startTime:state.time, endTime, price:b.finalPrice, isLN:b.qrType==="late_night" }));
+      localStorage.setItem("ut_pending_booking", JSON.stringify({ code:b.bookingCode, docId:b.id, expiresAt:expiresAt.getTime(), date:dateISO, startTime:state.time, endTime, durationHours:b.durationHours||1, price:b.finalPrice, isLN:b.qrType==="late_night" }));
     }catch(_){}
     showPaymentPanel(b.bookingCode, b.finalPrice, expiresAt, dateISO, `${state.time} – ${endTime}`, b.qrType==="late_night");
     showView("viewPayment");
@@ -2316,6 +2388,9 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       const r = await tryServerCreate({ dateISO:getSelectedDateISO(), name, phone, note:$("bkNote").value.trim(), voucherCode:($("bkVoucher")?.value||"").trim().toUpperCase() });
       if (r === true) { if($("bkVoucher")) $("bkVoucher").value=""; return; }   // success (finally resets btn)
       if (r === "handled") return;                                              // legit rejection already shown
+      // Multi-hour bookings exist ONLY on the server path — the legacy
+      // client-create can't lock several slots atomically. No fallback.
+      if ((state.durationHours||1) > 1){ showToast(t("bookingFailed"),true); return; }
       // Voucher redemption is transactional on the server — never fall back to
       // client-create with a voucher (it would book at full price and skip the
       // usedCount bookkeeping).
@@ -2663,9 +2738,10 @@ function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLa
         qrUrl = Number(bData.qrAmount ?? bData.price ?? 0) === 333 ? "/payment-qr-special.png" : null;
       } else {
         // Pricing v2: fixed-amount QR selected by the (server-computed) qrAmount.
-        // Falls back to the booking price for legacy bookings (always 350 → normal).
+        // Multi-hour totals (e.g. ฿700) have NO amount-locked static image —
+        // null means the fallback shows "contact staff", never a wrong-amount QR.
         const amt = Number(bData.qrAmount ?? bData.price ?? 0);
-        qrUrl = ({ 300:"/payment-qr-voucher-300.png", 320:"/payment-qr-morning-320.png", 330:"/payment-qr-morning-330.png", 350:"/payment-qr.png" })[amt] || "/payment-qr.png";
+        qrUrl = ({ 300:"/payment-qr-voucher-300.png", 320:"/payment-qr-morning-320.png", 330:"/payment-qr-morning-330.png", 350:"/payment-qr.png" })[amt] || null;
       }
     } else {
       if (isLateNightBooking) {
@@ -2914,18 +2990,26 @@ $("submitSlipBtn").addEventListener("click", async()=>{
       runSlipPrecheckPass(file, state.currentPurchaseDocId, code, state.currentPurchaseData||{});
       showSuccess("📨",t("slipReceived"),code,t("passPending"));
     } else {
-      const slotId=`${RESOURCE_ID}_${state.currentBookingData.date}_${state.currentBookingData.startTime.replace(":","")}`; 
+      // Multi-hour (Phase A): the booking may hold 1-3 hourly slots — verify
+      // ownership of and update EVERY one, atomically with the booking doc.
+      const bd=state.currentBookingData;
+      const bdN=Math.min(Math.max(parseInt(bd.durationHours,10)||1,1),3);
+      const bdH0=parseInt(bd.startTime,10);
+      const slotIds=[];
+      for(let i=0;i<bdN&&bdH0+i<24;i++) slotIds.push(`${RESOURCE_ID}_${bd.date}_${String(bdH0+i).padStart(2,"0")}00`);
       await runTransaction(db, async (t) => {
-        const slotRef = doc(db, "booking_slots", slotId);
         const bookingRef = doc(db, "bookings", state.currentBookingDocId);
-        const slotSnap = await t.get(slotRef);
-        if (!slotSnap.exists()) {
-          throw new Error("Hold expired and slot has been rebooked.");
-        }
-        const slotData = slotSnap.data();
-        const ownsSlot = slotData.bookingId === state.currentBookingDocId || slotData.bookingCode === state.currentBookingCode;
-        if (!ownsSlot) {
-          throw new Error("Hold expired and slot has been rebooked.");
+        const slotRefs = slotIds.map(id=>doc(db,"booking_slots",id));
+        const slotSnaps = await Promise.all(slotRefs.map(r=>t.get(r)));
+        for(const slotSnap of slotSnaps){
+          if (!slotSnap.exists()) {
+            throw new Error("Hold expired and slot has been rebooked.");
+          }
+          const slotData = slotSnap.data();
+          const ownsSlot = slotData.bookingId === state.currentBookingDocId || slotData.bookingCode === state.currentBookingCode;
+          if (!ownsSlot) {
+            throw new Error("Hold expired and slot has been rebooked.");
+          }
         }
         t.update(bookingRef, {
           bookingStatus: "confirmed",
@@ -2934,10 +3018,10 @@ $("submitSlipBtn").addEventListener("click", async()=>{
           slipUploadedAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
-        t.update(slotRef, {
+        slotRefs.forEach(r=>t.update(r, {
           bookingStatus: "confirmed",
           paymentStatus: "pending_review"
-        });
+        }));
       });
       console.log("Booking + slot updated");
       clearTimeout(warningTimer);

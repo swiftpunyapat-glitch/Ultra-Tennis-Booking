@@ -2342,7 +2342,7 @@ function renderCustomerListTab(){
     const key=np||b.lineUserId||"unknown";
     if(!map.has(key)) map.set(key,{
       customerName:"",lineDisplayName:"",lineUserId:"",customerPhone:"",normalizedPhone:np,
-      total:0,confirmed:0,cancelled:0,pending:0,lastDate:"",_lastTs:-1,
+      total:0,confirmed:0,cancelled:0,pending:0,lastDate:"",_lastTs:-1,visits:[],
     });
     const c=map.get(key);
     c.total++;
@@ -2350,6 +2350,11 @@ function renderCustomerListTab(){
     if(b.bookingStatus==="cancelled") c.cancelled++;
     if(b.bookingStatus==="pending_payment") c.pending++;
     if((b.date||"")>c.lastDate) c.lastDate=b.date||"";
+    c.visits.push({
+      date:b.date||"",startTime:b.startTime||"",endTime:b.endTime||"",
+      bookingType:b.bookingType||"",bookingStatus:b.bookingStatus||"",
+      coachName:b.coachName||"",
+    });
     const ts=b.createdAt?.seconds||0;
     if(ts>=c._lastTs){
       c._lastTs=ts;
@@ -2363,29 +2368,66 @@ function renderCustomerListTab(){
     .filter(c=>c.total>0)
     .sort((a,b)=>b.lastDate.localeCompare(a.lastDate));
 
+  // Visit history: "played" = confirmed/completed on a date that already passed
+  // (today included) — a confirmed future booking is upcoming, not a visit yet.
+  const todayISO=formatLocalISODate(new Date());
+  custListData.forEach(c=>{
+    c.visits.sort((a,b)=>`${b.date} ${b.startTime}`.localeCompare(`${a.date} ${a.startTime}`));
+    c.playedCount=c.visits.filter(v=>(v.bookingStatus==="confirmed"||v.bookingStatus==="completed")&&v.date&&v.date<=todayISO).length;
+    c.upcomingCount=c.visits.filter(v=>v.bookingStatus==="confirmed"&&v.date>todayISO).length;
+  });
+
+  const VISIT_BADGE={
+    confirmed:["var(--ac)","confirmed"],completed:["var(--ac)","completed"],
+    cancelled:["var(--dan)","cancelled"],pending_payment:["var(--warn)","pending"],
+    rescheduled:["var(--warn)","rescheduled"],expired:["var(--m)","expired"],no_show:["var(--dan)","no show"],
+  };
+
   el.innerHTML=`<div style="font-size:.72rem;color:var(--m);margin-bottom:10px">${custListData.length} unique customers (all-time)</div>`+
     custListData.map((c,i)=>{
       const lineLinked=canNotifyLine(c.lineUserId);
       const lineTag=lineLinked
         ?`<span style="color:var(--g);font-size:.72rem">✓ LINE linked</span>`
         :`<span style="color:var(--m);font-size:.72rem">Not linked</span>`;
+      const histRows=c.visits.map(v=>{
+        const played=(v.bookingStatus==="confirmed"||v.bookingStatus==="completed")&&v.date&&v.date<=todayISO;
+        const upcoming=v.bookingStatus==="confirmed"&&v.date>todayISO;
+        const [bc,bl]=VISIT_BADGE[v.bookingStatus]||["var(--m)",v.bookingStatus||"—"];
+        return `<div style="display:flex;gap:10px;align-items:baseline;padding:4px 0;border-bottom:1px solid var(--bd);font-size:.75rem">
+          <span style="min-width:86px;font-weight:700">${esc(v.date||"—")}</span>
+          <span style="min-width:96px;color:var(--m)">${esc(v.startTime||"—")}–${esc(v.endTime||"—")}</span>
+          <span style="flex:1;color:var(--m)">${esc(v.bookingType||"—")}${v.coachName?` · โค้ช ${esc(v.coachName)}`:""}</span>
+          <span style="color:${bc};font-weight:700">${upcoming?"upcoming":esc(bl)}${played?" ✓":""}</span>
+        </div>`;
+      }).join("");
       return `<div class="cl-row">
         <div class="cl-info">
           <div><div class="fl">Name</div><div class="fv">${esc(c.customerName||"—")}</div></div>
           <div><div class="fl">Phone</div><div class="fv">${esc(c.customerPhone||"—")}</div></div>
           <div><div class="fl">LINE</div><div class="fv">${lineTag}</div></div>
+          <div><div class="fl">Visits</div><div class="fv"><span style="color:var(--ac);font-weight:800">${c.playedCount}</span> played${c.upcomingCount?` · <span style="color:var(--warn)">${c.upcomingCount}</span> upcoming`:""}</div></div>
           <div><div class="fl">Bookings</div><div class="fv">${c.total} total · <span style="color:var(--ac)">${c.confirmed}</span> conf · <span style="color:var(--dan)">${c.cancelled}</span> cancel${c.pending?` · <span style="color:var(--warn)">${c.pending}</span> pending`:""}</div></div>
           <div><div class="fl">Last Visit</div><div class="fv dim">${esc(c.lastDate||"—")}</div></div>
           ${c.lineDisplayName?`<div><div class="fl">LINE Name</div><div class="fv dim">${esc(c.lineDisplayName)}</div></div>`:""}
         </div>
         <div class="cl-actions">
+          <button class="smbtn" style="font-size:.72rem;padding:5px 10px" data-hist-idx="${i}">📅 History (${c.visits.length})</button>
           ${lineLinked?`<button class="smbtn smg" style="font-size:.72rem;padding:5px 10px" data-alert-idx="${i}">📢 Alert</button>`:`<span style="font-size:.68rem;color:var(--m)">No LINE</span>`}
         </div>
+        <div id="clHist${i}" style="display:none;grid-column:1/-1;border-top:1px solid var(--bd);margin-top:4px;padding-top:6px;max-height:260px;overflow-y:auto">${histRows||`<div style="font-size:.75rem;color:var(--m)">No bookings</div>`}</div>
       </div>`;
     }).join("");
 
   el.querySelectorAll("[data-alert-idx]").forEach(btn=>{
     btn.addEventListener("click",()=>openAlertModal(custListData[Number(btn.dataset.alertIdx)]));
+  });
+  el.querySelectorAll("[data-hist-idx]").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      const box=$("clHist"+btn.dataset.histIdx);
+      const open=box.style.display!=="none";
+      box.style.display=open?"none":"block";
+      btn.classList.toggle("smg",!open);
+    });
   });
 }
 
