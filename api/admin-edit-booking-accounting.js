@@ -86,6 +86,37 @@ function nextHourEnd(startTime) {
   return h >= 24 ? '00:00' : `${String(h).padStart(2, '0')}:00`;
 }
 
+// ── Multi-hour (Phase A) helpers ──────────────────────────────────
+// A booking may hold 1–3 consecutive hourly slots (durationHours; legacy docs
+// without the field = 1). Every slot release/update/delete must cover ALL of
+// them, so handlers iterate these ids instead of a single reschedSlotId.
+function bookingDurationHours(booking) {
+  const n = parseInt(booking?.durationHours, 10);
+  return (Number.isInteger(n) && n >= 1 && n <= 6) ? n : 1;
+}
+// Hourly "HH:00" starts for a start time + duration (clamped at midnight).
+function hourStartsOf(startTime, n) {
+  const h0 = parseInt(String(startTime || '').slice(0, 2), 10);
+  if (!Number.isFinite(h0)) return [];
+  const out = [];
+  for (let i = 0; i < n && h0 + i < 24; i++) out.push(`${String(h0 + i).padStart(2, '0')}:00`);
+  return out;
+}
+// All booking_slots ids a booking occupies at (date, startTime). Defaults to
+// the booking's own date/startTime; reschedule handlers pass the original slot.
+function bookingSlotIds(booking, { resourceId, date, startTime } = {}) {
+  const rid = resourceId || booking?.resourceId || RESOURCE_ID;
+  const d   = date       || booking?.date;
+  const st  = startTime  || booking?.startTime;
+  if (!d || !st) return [];
+  return hourStartsOf(st, bookingDurationHours(booking)).map(h => reschedSlotId(rid, d, h));
+}
+// End time n hours after an "HH:00" start; midnight-crossing → "00:00".
+function endAfterHours(startTime, n) {
+  const h = Number(String(startTime).split(':')[0]) + n;
+  return h >= 24 ? '00:00' : `${String(h).padStart(2, '0')}:00`;
+}
+
 // Ported 1:1 from admin.html:927-935. A booking_slots doc blocks its hour only
 // when confirmed, or pending_payment that has not yet expired. Expiry field is
 // `expiresAt` (a Firestore Timestamp on the slot doc).
@@ -546,12 +577,12 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
     updatedAt:                  FieldValue.serverTimestamp(),
   });
 
-  // ── Update booking_slots (best-effort, non-fatal if missing) ─────
-  const slotId  = `${booking.resourceId || RESOURCE_ID}_${booking.date}_${(booking.startTime || '').replace(':', '')}`;
-  const slotRef = db.collection('booking_slots').doc(slotId);
+  // ── Update booking_slots (best-effort, non-fatal if missing) — all hours ──
   try {
-    const slotSnap = await slotRef.get();
-    if (slotSnap.exists) {   // Admin SDK: .exists is a boolean property, not a method
+    for (const slotId of bookingSlotIds(booking)) {
+      const slotRef  = db.collection('booking_slots').doc(slotId);
+      const slotSnap = await slotRef.get();
+      if (!slotSnap.exists) continue;   // Admin SDK: .exists is a boolean property, not a method
       const slotData = slotSnap.data();
       const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
       if (ownsSlot) {
@@ -683,13 +714,13 @@ async function handleRefund({ res, adminName, session, db, booking, bookingRef, 
 
   batch.update(bookingRef, bookingUpdate);
 
-  // ── Update booking_slots (only when releasing the slot) ───────────
+  // ── Update booking_slots (only when releasing the slot) — all hours ──
   if (releaseSlot === true) {
-    const slotId  = `${booking.resourceId || RESOURCE_ID}_${booking.date}_${(booking.startTime || '').replace(':', '')}`;
-    const slotRef = db.collection('booking_slots').doc(slotId);
     try {
-      const slotSnap = await slotRef.get();
-      if (slotSnap.exists) {   // Admin SDK: .exists is a boolean property, not a method
+      for (const slotId of bookingSlotIds(booking)) {
+        const slotRef  = db.collection('booking_slots').doc(slotId);
+        const slotSnap = await slotRef.get();
+        if (!slotSnap.exists) continue;   // Admin SDK: .exists is a boolean property, not a method
         const slotData = slotSnap.data();
         const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
         if (ownsSlot) {
@@ -768,18 +799,21 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
     return res.status(409).json({ ok: false, error: `Cannot mark paid: current paymentStatus is "${booking.paymentStatus}"` });
   }
 
-  const slotId  = `${booking.resourceId || RESOURCE_ID}_${booking.date}_${booking.startTime?.replace(':', '')}`;
-  const slotRef = db.collection('booking_slots').doc(slotId);
+  const slotRefs = bookingSlotIds(booking).map(id => db.collection('booking_slots').doc(id));
+  if (!slotRefs.length) return res.status(409).json({ ok: false, error: 'Slot does not exist' });
 
   // Atomic read-check-write: a transaction (not batch) closes the TOCTOU gap
   // between reading slot ownership and committing. All reads precede all writes.
+  // Multi-hour: every held slot must exist and belong to this booking.
   try {
     await db.runTransaction(async (t) => {
-      const slotSnap = await t.get(slotRef);
-      if (!slotSnap.exists) throw new Error('SLOT_MISSING');
-      const slotData = slotSnap.data();
-      const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
-      if (!ownsSlot) throw new Error('SLOT_CONFLICT');
+      const slotSnaps = await Promise.all(slotRefs.map(r => t.get(r)));
+      for (const slotSnap of slotSnaps) {
+        if (!slotSnap.exists) throw new Error('SLOT_MISSING');
+        const slotData = slotSnap.data();
+        const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+        if (!ownsSlot) throw new Error('SLOT_CONFLICT');
+      }
 
       const bSnap = await t.get(bookingRef);
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
@@ -801,7 +835,7 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
         confirmedAt:     FieldValue.serverTimestamp(),
         updatedAt:       FieldValue.serverTimestamp(),
       });
-      t.update(slotRef, { paymentStatus: 'paid', bookingStatus: 'confirmed' });
+      slotRefs.forEach(r => t.update(r, { paymentStatus: 'paid', bookingStatus: 'confirmed' }));
     });
   } catch (e) {
     const map = {
@@ -852,16 +886,18 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
     return res.status(409).json({ ok: false, error: `Cannot approve: current paymentStatus is "${booking.paymentStatus}"` });
   }
 
-  const slotId  = `${booking.resourceId || RESOURCE_ID}_${booking.date}_${booking.startTime?.replace(':', '')}`;
-  const slotRef = db.collection('booking_slots').doc(slotId);
+  const slotRefs = bookingSlotIds(booking).map(id => db.collection('booking_slots').doc(id));
+  if (!slotRefs.length) return res.status(409).json({ ok: false, error: 'Slot does not exist' });
 
   try {
     await db.runTransaction(async (t) => {
-      const slotSnap = await t.get(slotRef);
-      if (!slotSnap.exists) throw new Error('SLOT_MISSING');
-      const slotData = slotSnap.data();
-      const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
-      if (!ownsSlot) throw new Error('SLOT_CONFLICT');
+      const slotSnaps = await Promise.all(slotRefs.map(r => t.get(r)));
+      for (const slotSnap of slotSnaps) {
+        if (!slotSnap.exists) throw new Error('SLOT_MISSING');
+        const slotData = slotSnap.data();
+        const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+        if (!ownsSlot) throw new Error('SLOT_CONFLICT');
+      }
 
       const bSnap = await t.get(bookingRef);
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
@@ -886,12 +922,12 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
         update.paymentNote          = 'Admin confirmed payment without slip';
       }
       t.update(bookingRef, update);
-      t.update(slotRef, {
+      slotRefs.forEach(r => t.update(r, {
         paymentStatus: 'paid',
         bookingStatus: 'confirmed',
         bookingId,
         bookingCode:   booking.bookingCode,
-      });
+      }));
     });
   } catch (e) {
     const map = {
@@ -949,8 +985,7 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
     ? body.reason.trim().slice(0, 400)
     : 'Slip rejected or payment not received';
 
-  const slotId  = `${booking.resourceId || RESOURCE_ID}_${booking.date}_${booking.startTime?.replace(':', '')}`;
-  const slotRef = db.collection('booking_slots').doc(slotId);
+  const slotRefs = bookingSlotIds(booking).map(id => db.collection('booking_slots').doc(id));
   // Coach lesson (Stage 3): admin reject must release the coach hour too.
   const coachAvailRef = (booking.serviceType === 'coach_lesson' && booking.coachId && booking.date && booking.startTime)
     ? db.collection('coach_availability').doc(`${booking.coachId}_${booking.date}_${String(booking.startTime).replace(':', '')}`)
@@ -964,7 +999,7 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
       if (bNow.bookingStatus === 'cancelled') throw new Error('ALREADY_CANCELLED');
       if (bNow.paymentStatus === 'paid') throw new Error('ALREADY_PAID');
 
-      const slotSnap = await t.get(slotRef);
+      const slotSnaps = await Promise.all(slotRefs.map(r => t.get(r)));
       const caSnap = coachAvailRef ? await t.get(coachAvailRef) : null;
 
       t.update(bookingRef, {
@@ -976,13 +1011,14 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
         cancelledAt:   FieldValue.serverTimestamp(),
         updatedAt:     FieldValue.serverTimestamp(),
       });
-      if (slotSnap.exists) {
+      slotSnaps.forEach((slotSnap, i) => {
+        if (!slotSnap.exists) return;
         const slotData = slotSnap.data();
         const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
         if (ownsSlot) {
-          t.update(slotRef, { bookingStatus: 'cancelled', paymentStatus: 'rejected' });
+          t.update(slotRefs[i], { bookingStatus: 'cancelled', paymentStatus: 'rejected' });
         }
-      }
+      });
       // Reopen the coach hour only when this booking still owns the lock.
       if (caSnap && caSnap.exists) {
         const ca = caSnap.data();
@@ -1066,26 +1102,27 @@ async function handleDeleteBooking({ res, adminName, session, db, booking, booki
   // Safety: only delete if the slot's bookingId/bookingCode matches.
   // Protects against accidentally releasing a slot reassigned to another booking.
   if (resourceId && date && startTime) {
-    const slotId = `${resourceId}_${date}_${startTime.replace(':', '')}`;
-    const slotRef = db.collection('booking_slots').doc(slotId);
-    try {
-      const slotSnap = await slotRef.get();
-      if (!slotSnap.exists) {
-        console.log(`[delete-booking] booking_slot ${slotId} — not found, skipped`);
-      } else {
-        const slotData = slotSnap.data();
-        const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === bookingCode;
-        if (ownsSlot) {
-          await slotRef.delete();
-          console.log(`[delete-booking] booking_slot deleted: ${slotId}`);
+    for (const slotId of bookingSlotIds(booking)) {
+      const slotRef = db.collection('booking_slots').doc(slotId);
+      try {
+        const slotSnap = await slotRef.get();
+        if (!slotSnap.exists) {
+          console.log(`[delete-booking] booking_slot ${slotId} — not found, skipped`);
         } else {
-          // Slot belongs to a different booking — do NOT touch it.
-          console.log(`[delete-booking] booking_slot ${slotId} belongs to ${slotData.bookingCode} — skipped`);
+          const slotData = slotSnap.data();
+          const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === bookingCode;
+          if (ownsSlot) {
+            await slotRef.delete();
+            console.log(`[delete-booking] booking_slot deleted: ${slotId}`);
+          } else {
+            // Slot belongs to a different booking — do NOT touch it.
+            console.log(`[delete-booking] booking_slot ${slotId} belongs to ${slotData.bookingCode} — skipped`);
+          }
         }
+      } catch (e) {
+        // Non-fatal — log and continue to delete the booking document.
+        console.error('[delete-booking] booking_slot delete error:', e.message);
       }
-    } catch (e) {
-      // Non-fatal — log and continue to delete the booking document.
-      console.error('[delete-booking] booking_slot delete error:', e.message);
     }
   } else {
     console.log(`[delete-booking] missing resourceId/date/startTime — slot cleanup skipped`);
@@ -1133,11 +1170,11 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
   const fromStart = booking.pendingRescheduleFromStartTime || booking.previousStartTime || booking.startTime;
   const fromEnd   = booking.pendingRescheduleFromEndTime   || booking.previousEndTime   || booking.endTime;
 
-  const oldSlotRef = db.collection('booking_slots').doc(reschedSlotId(booking.resourceId, booking.date, booking.startTime));
+  const oldSlotRefs = bookingSlotIds(booking).map(id => db.collection('booking_slots').doc(id));
 
   try {
     await db.runTransaction(async (t) => {
-      const slotSnap = await t.get(oldSlotRef);
+      const slotSnaps = await Promise.all(oldSlotRefs.map(r => t.get(r)));
       const bSnap = await t.get(bookingRef);
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       const bNow = bSnap.data();
@@ -1155,17 +1192,18 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
         pendingRescheduleFromEndTime:   fromEnd,
         updatedAt:                      FieldValue.serverTimestamp(),
       });
-      if (slotSnap.exists) {
+      slotSnaps.forEach((slotSnap, i) => {
+        if (!slotSnap.exists) return;
         const sd = slotSnap.data();
         if (sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode) {
-          t.update(oldSlotRef, {
+          t.update(oldSlotRefs[i], {
             bookingStatus:               'rescheduled',
             paymentStatus:               booking.paymentStatus,
             pendingRescheduleReleasedAt: FieldValue.serverTimestamp(),
             updatedAt:                   FieldValue.serverTimestamp(),
           });
         }
-      }
+      });
     });
   } catch (e) {
     const map = {
@@ -1219,28 +1257,38 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
     return res.status(400).json({ ok: false, error: 'newStartTime must be HH:mm' });
   }
 
-  const newEndTime = nextHourEnd(newStartTime);
-  const resourceId = booking.resourceId || RESOURCE_ID;
-  const oldSlotId  = reschedSlotId(resourceId, booking.date, booking.startTime);
-  const newSlotId  = reschedSlotId(resourceId, newDate, newStartTime);
-  const avRef      = db.collection('available_slots').doc(newSlotId);
-  const newSlotRef = db.collection('booking_slots').doc(newSlotId);
-  const oldSlotRef = db.collection('booking_slots').doc(oldSlotId);
+  const durationHours = bookingDurationHours(booking);
+  const newHours      = hourStartsOf(newStartTime, durationHours);
+  if (newHours.length < durationHours) {
+    return res.status(400).json({ ok: false, error: `New time cannot fit ${durationHours} hours before midnight` });
+  }
+  const newEndTime  = endAfterHours(newStartTime, durationHours);
+  const resourceId  = booking.resourceId || RESOURCE_ID;
+  const oldSlotIds  = bookingSlotIds(booking);
+  const newSlotIds  = newHours.map(h => reschedSlotId(resourceId, newDate, h));
+  const avRefs      = newSlotIds.map(id => db.collection('available_slots').doc(id));
+  const newSlotRefs = newSlotIds.map(id => db.collection('booking_slots').doc(id));
+  const oldSlotRefs = oldSlotIds.map(id => db.collection('booking_slots').doc(id));
 
   let meta;
   try {
     meta = await db.runTransaction(async (t) => {
-      const [avSnap, newSnap, oldSnap, bSnap] = await Promise.all([
-        t.get(avRef), t.get(newSlotRef), t.get(oldSlotRef), t.get(bookingRef),
+      const [avSnaps, newSnaps, oldSnaps, bSnap] = await Promise.all([
+        Promise.all(avRefs.map(r => t.get(r))),
+        Promise.all(newSlotRefs.map(r => t.get(r))),
+        Promise.all(oldSlotRefs.map(r => t.get(r))),
+        t.get(bookingRef),
       ]);
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       const bNow = bSnap.data();
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
-      if (!avSnap.exists || avSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
-      if (newSnap.exists && oldSlotId !== newSlotId) {
-        const nd = newSnap.data();
-        const ownsNew = nd.bookingId === bookingId || nd.bookingCode === booking.bookingCode;
-        if (!ownsNew && isLiveBookedSlot(nd)) throw new Error('SLOT_TAKEN');
+      for (let i = 0; i < newSlotIds.length; i++) {
+        if (!avSnaps[i].exists || avSnaps[i].data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
+        if (newSnaps[i].exists && !oldSlotIds.includes(newSlotIds[i])) {
+          const nd = newSnaps[i].data();
+          const ownsNew = nd.bookingId === bookingId || nd.bookingCode === booking.bookingCode;
+          if (!ownsNew && isLiveBookedSlot(nd)) throw new Error('SLOT_TAKEN');
+        }
       }
 
       const wasPending = isPendingRescheduleBooking(bNow);
@@ -1265,22 +1313,26 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       }
       t.update(bookingRef, update);
 
-      if (oldSlotId !== newSlotId && oldSnap.exists) {
+      // Release every old slot that is not reused by the new range.
+      oldSnaps.forEach((oldSnap, i) => {
+        if (!oldSnap.exists || newSlotIds.includes(oldSlotIds[i])) return;
         const sd = oldSnap.data();
         if (sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode) {
-          t.update(oldSlotRef, { bookingStatus: 'rescheduled', paymentStatus: booking.paymentStatus });
+          t.update(oldSlotRefs[i], { bookingStatus: 'rescheduled', paymentStatus: booking.paymentStatus });
         }
-      }
+      });
 
-      t.set(newSlotRef, {
-        bookingCode:   booking.bookingCode,
-        bookingId,
-        resourceId,
-        date:          newDate,
-        hour:          newStartTime,
-        bookingStatus: slotNextStatus,
-        paymentStatus: booking.paymentStatus,
-        expiresAt:     null,
+      newSlotRefs.forEach((r, i) => {
+        t.set(r, {
+          bookingCode:   booking.bookingCode,
+          bookingId,
+          resourceId,
+          date:          newDate,
+          hour:          newHours[i],
+          bookingStatus: slotNextStatus,
+          paymentStatus: booking.paymentStatus,
+          expiresAt:     null,
+        });
       });
 
       return { wasPending, nextStatus };
@@ -1333,30 +1385,41 @@ async function handleRescheduleCancel({ res, adminName, session, db, booking, bo
   const origStart = booking.pendingRescheduleFromStartTime || booking.previousStartTime || booking.startTime;
   const origEnd   = booking.pendingRescheduleFromEndTime   || booking.previousEndTime   || booking.endTime;
   const resourceId = booking.resourceId || RESOURCE_ID;
-  const slotId  = reschedSlotId(resourceId, origDate, origStart);
-  const slotRef = db.collection('booking_slots').doc(slotId);
-  const avRef   = db.collection('available_slots').doc(slotId);
+  const durationHours = bookingDurationHours(booking);
+  const origHours  = hourStartsOf(origStart, durationHours);
+  const slotIds  = origHours.map(h => reschedSlotId(resourceId, origDate, h));
+  const slotRefs = slotIds.map(id => db.collection('booking_slots').doc(id));
+  const avRefs   = slotIds.map(id => db.collection('available_slots').doc(id));
 
   let restored;
   try {
     restored = await db.runTransaction(async (t) => {
-      const [avSnap, slotSnap, bSnap] = await Promise.all([
-        t.get(avRef), t.get(slotRef), t.get(bookingRef),
+      const [avSnaps, slotSnaps, bSnap] = await Promise.all([
+        Promise.all(avRefs.map(r => t.get(r))),
+        Promise.all(slotRefs.map(r => t.get(r))),
+        t.get(bookingRef),
       ]);
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       if (!isPendingRescheduleBooking(bSnap.data())) throw new Error('NOT_PENDING');
 
-      const slotOpen = avSnap.exists && avSnap.data().status === 'open';
-      const sd = slotSnap.exists ? slotSnap.data() : null;
-      const notOccupiedByOther = !sd || !isLiveBookedSlot(sd) ||
-        sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode;
+      // Every original hour must be open and not live-held by another booking.
+      const allRestorable = slotIds.length === durationHours &&
+        slotIds.every((_, i) => {
+          const slotOpen = avSnaps[i].exists && avSnaps[i].data().status === 'open';
+          const sd = slotSnaps[i].exists ? slotSnaps[i].data() : null;
+          const notOccupiedByOther = !sd || !isLiveBookedSlot(sd) ||
+            sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode;
+          return slotOpen && notOccupiedByOther;
+        });
 
-      if (origDate && origStart && origEnd && slotOpen && notOccupiedByOther) {
-        t.set(slotRef, {
-          bookingCode: booking.bookingCode, bookingId, resourceId,
-          date: origDate, hour: origStart,
-          bookingStatus: 'confirmed', paymentStatus: booking.paymentStatus,
-          expiresAt: null, updatedAt: FieldValue.serverTimestamp(),
+      if (origDate && origStart && origEnd && allRestorable) {
+        slotRefs.forEach((r, i) => {
+          t.set(r, {
+            bookingCode: booking.bookingCode, bookingId, resourceId,
+            date: origDate, hour: origHours[i],
+            bookingStatus: 'confirmed', paymentStatus: booking.paymentStatus,
+            expiresAt: null, updatedAt: FieldValue.serverTimestamp(),
+          });
         });
         t.update(bookingRef, {
           date: origDate, startTime: origStart, endTime: origEnd,

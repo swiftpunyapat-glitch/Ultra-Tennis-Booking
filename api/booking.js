@@ -33,6 +33,51 @@ const nextHourEnd = (startTime) => {
   const n = parseInt(String(startTime).slice(0, 2), 10) + 1;
   return n >= 24 ? '00:00' : `${String(n).padStart(2, '0')}:00`;
 };
+
+// ── Multi-hour (Phase A) helpers — bookings may span 1–3 consecutive hours ──
+const MAX_DURATION_HOURS = 3;
+function parseDurationHours(raw) {
+  if (raw === undefined || raw === null || raw === '') return 1;
+  const n = Number(raw);
+  return (Number.isInteger(n) && n >= 1 && n <= MAX_DURATION_HOURS) ? n : null;
+}
+// Hourly start times covered by [startTime, startTime + n hours). Null when the
+// range would cross midnight — a booking must stay within one calendar date.
+function hourListOf(startTime, n) {
+  const h0 = parseInt(String(startTime).slice(0, 2), 10);
+  if (!Number.isFinite(h0) || h0 + n > 24) return null;
+  return Array.from({ length: n }, (_, i) => `${String(h0 + i).padStart(2, '0')}:00`);
+}
+const endTimeAfter = (startTime, n) => {
+  const h = parseInt(String(startTime).slice(0, 2), 10) + n;
+  return h >= 24 ? '00:00' : `${String(h).padStart(2, '0')}:00`;
+};
+// PromptPay receiver for a qrType — special promo pays the ALT account; all
+// other types pay MAIN. Hours in one booking must share ONE receiver (one QR).
+const receiverOf = qrType => (qrType === 'special' ? 'alt' : 'main');
+
+// Sum per-hour quotes into one multi-hour quote. Throws {code:'MIXED_RECEIVER'}
+// when hours would need different PromptPay accounts (can't pay with one QR).
+function combineQuotes(hourQuotes) {
+  const receivers = new Set(hourQuotes.map(q => receiverOf(q.qrType)));
+  if (receivers.size > 1) {
+    const err = new Error('MIXED_RECEIVER'); err.code = 'MIXED_RECEIVER'; throw err;
+  }
+  const total     = hourQuotes.reduce((s, q) => s + q.finalPrice, 0);
+  const totalOrig = hourQuotes.reduce((s, q) => s + q.originalPrice, 0);
+  const allSame   = hourQuotes.every(q => q.qrType === hourQuotes[0].qrType);
+  return {
+    finalPrice: total, originalPrice: totalOrig, qrAmount: total,
+    price: total, amount: total,
+    qrType: allSame ? hourQuotes[0].qrType : 'normal',
+    pricingType: hourQuotes.every(q => q.pricingType === hourQuotes[0].pricingType)
+      ? hourQuotes[0].pricingType : 'multi_rate',
+    breakdown: hourQuotes.map(q => ({
+      startTime: q.startTime, endTime: nextHourEnd(q.startTime),
+      price: q.finalPrice, pricingType: q.pricingType, qrType: q.qrType,
+    })),
+  };
+}
 function genBookingCode() {
   const t = Date.now().toString(36).toUpperCase().slice(-5);
   const r = Math.random().toString(36).toUpperCase().slice(2, 4);
@@ -118,9 +163,17 @@ async function handlePriceQuote(res, body) {
   const payType     = typeof body.payType === 'string' && body.payType ? body.payType : 'single';
   const voucherCode = typeof body.voucherCode === 'string' && body.voucherCode.trim() ? body.voucherCode.trim() : null;
   const lineUserId  = typeof body.lineUserId === 'string' ? body.lineUserId : null;
+  const durationHours = parseDurationHours(body.durationHours);
 
   if (!DATE_RE.test(date))      return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
   if (!TIME_RE.test(startTime)) return res.status(400).json({ ok: false, error: 'startTime must be HH:mm' });
+  if (durationHours === null)   return res.status(400).json({ ok: false, error: `durationHours must be an integer 1-${MAX_DURATION_HOURS}` });
+  const hours = hourListOf(startTime, durationHours);
+  if (!hours) return res.status(400).json({ ok: false, error: 'Booking cannot cross midnight' });
+  // Vouchers stay single-hour only (rule: one voucher = one standard hour).
+  if (voucherCode && durationHours > 1) {
+    return res.status(409).json({ ok: false, code: 'VOUCHER', error: 'โค้ดส่วนลดใช้ได้กับการจอง 1 ชั่วโมงเท่านั้น' });
+  }
 
   let db;
   try { db = getAdminDb(); }
@@ -132,16 +185,32 @@ async function handlePriceQuote(res, body) {
       db.collection('holidays').doc(date).get(),
       voucherCode ? db.collection('vouchers').doc(voucherCode).get() : Promise.resolve(null),
     ]);
-    const quote = computeQuote({
-      date, startTime, nowMs: Date.now(),
+    const quoteInput = h => ({
+      date, startTime: h, nowMs: Date.now(),
       isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true,
       promoConfig: pricingSnap.exists ? pricingSnap.data() : null,
       payType, voucherCode,
       voucher: voucherSnap && voucherSnap.exists ? voucherSnap.data() : null,
       lineUserId,
     });
-    return res.status(200).json({ ok: true, quote });
+    if (durationHours === 1) {
+      return res.status(200).json({ ok: true, quote: computeQuote(quoteInput(startTime)) });
+    }
+    const hourQuotes = hours.map(h => ({ ...computeQuote(quoteInput(h)), startTime: h }));
+    const combined   = combineQuotes(hourQuotes);
+    return res.status(200).json({
+      ok: true,
+      quote: {
+        ...hourQuotes[0],                    // base flags from the first hour
+        ...combined,                         // totals + breakdown override
+        durationHours, endTime: endTimeAfter(startTime, durationHours),
+        voucherApplied: false, voucherCode: null, discountAmount: 0,
+      },
+    });
   } catch (e) {
+    if (e.code === 'MIXED_RECEIVER') {
+      return res.status(409).json({ ok: false, code: 'MIXED_RECEIVER', error: 'ช่วงเวลาที่เลือกมีช่องทางชำระเงินต่างกัน กรุณาจองแยกรายชั่วโมง' });
+    }
     console.error('[price_quote]', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to compute quote' });
   }
@@ -157,34 +226,51 @@ async function handleCreate(res, body) {
   const lineDisplayName = typeof body.lineDisplayName === 'string' ? body.lineDisplayName : '';
   const customerNote = typeof body.customerNote === 'string' ? body.customerNote.slice(0, 500) : '';
   const voucherCode  = typeof body.voucherCode === 'string' && body.voucherCode.trim() ? body.voucherCode.trim() : null;
+  const durationHours = parseDurationHours(body.durationHours);
 
   // Client NEVER sends price — it is recomputed below. Validate inputs only.
   if (!DATE_RE.test(date))      return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'date must be YYYY-MM-DD' });
   if (!TIME_RE.test(startTime)) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'startTime must be HH:mm' });
   if (!customerName)  return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerName is required' });
   if (!customerPhone) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerPhone is required' });
+  if (durationHours === null) return res.status(400).json({ ok: false, code: 'VALIDATION', error: `durationHours must be an integer 1-${MAX_DURATION_HOURS}` });
+  const hours = hourListOf(startTime, durationHours);
+  if (!hours) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Booking cannot cross midnight' });
+  if (voucherCode && durationHours > 1) {
+    return res.status(409).json({ ok: false, code: 'VOUCHER', error: 'โค้ดส่วนลดใช้ได้กับการจอง 1 ชั่วโมงเท่านั้น' });
+  }
 
   let db;
   try { db = getAdminDb(); }
   catch (e) { console.error('[create] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
 
   const nowMs = Date.now();
-  let quote;
+  let quote, hourQuotes;
   try {
     const [pricingSnap, holidaySnap, voucherSnap] = await Promise.all([
       db.collection('system_settings').doc('pricing').get(),
       db.collection('holidays').doc(date).get(),
       voucherCode ? db.collection('vouchers').doc(voucherCode).get() : Promise.resolve(null),
     ]);
-    quote = computeQuote({
-      date, startTime, nowMs,
-      isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true,
-      promoConfig: pricingSnap.exists ? pricingSnap.data() : null,
-      payType: 'single', voucherCode,
-      voucher: voucherSnap && voucherSnap.exists ? voucherSnap.data() : null,
-      lineUserId,
-    });
+    hourQuotes = hours.map(h => ({
+      ...computeQuote({
+        date, startTime: h, nowMs,
+        isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true,
+        promoConfig: pricingSnap.exists ? pricingSnap.data() : null,
+        payType: 'single', voucherCode,
+        voucher: voucherSnap && voucherSnap.exists ? voucherSnap.data() : null,
+        lineUserId,
+      }),
+      startTime: h,
+    }));
+    quote = durationHours === 1
+      ? hourQuotes[0]
+      : { ...hourQuotes[0], ...combineQuotes(hourQuotes),
+          voucherApplied: false, voucherCode: null, discountAmount: 0 };
   } catch (e) {
+    if (e.code === 'MIXED_RECEIVER') {
+      return res.status(409).json({ ok: false, code: 'MIXED_RECEIVER', error: 'ช่วงเวลาที่เลือกมีช่องทางชำระเงินต่างกัน กรุณาจองแยกรายชั่วโมง' });
+    }
     console.error('[create] quote:', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to price booking' });
   }
@@ -195,34 +281,40 @@ async function handleCreate(res, body) {
   }
 
   const finalPrice        = quote.finalPrice;
-  const endTime           = nextHourEnd(startTime);
+  const endTime           = endTimeAfter(startTime, durationHours);
   const bookingCode       = genBookingCode();
   const paymentExpiresAt  = Timestamp.fromMillis(nowMs + PAY_MINS * 60 * 1000);
-  const bookingType       = quote.qrType === 'late_night' ? 'Late Night Session' : 'Single Use';
-  const pricingMode       = quote.qrType === 'late_night' ? 'late_night'
-                          : quote.qrType === 'special'    ? 'special_promotion'
+  const allLateNight      = hourQuotes.every(q => q.qrType === 'late_night');
+  const bookingType       = allLateNight ? 'Late Night Session' : 'Single Use';
+  const pricingMode       = allLateNight             ? 'late_night'
+                          : quote.qrType === 'special' ? 'special_promotion'
                           : 'normal_single_use';
 
   const bookingRef = db.collection('bookings').doc();
-  const slotRef    = db.collection('booking_slots').doc(slotIdOf(date, startTime));
-  const availRef   = db.collection('available_slots').doc(slotIdOf(date, startTime));
+  const slotRefs   = hours.map(h => db.collection('booking_slots').doc(slotIdOf(date, h)));
+  const availRefs  = hours.map(h => db.collection('available_slots').doc(slotIdOf(date, h)));
   const voucherRef = quote.voucherApplied ? db.collection('vouchers').doc(voucherCode) : null;
 
   try {
     await db.runTransaction(async (t) => {
-      const reads = [t.get(slotRef), t.get(availRef)];
+      const reads = [...slotRefs.map(r => t.get(r)), ...availRefs.map(r => t.get(r))];
       if (voucherRef) reads.push(t.get(voucherRef));
       const snaps = await Promise.all(reads);
-      const slotSnap = snaps[0], availSnap = snaps[1], voucherSnap = voucherRef ? snaps[2] : null;
+      const slotSnaps  = snaps.slice(0, hours.length);
+      const availSnaps = snaps.slice(hours.length, hours.length * 2);
+      const voucherSnap = voucherRef ? snaps[hours.length * 2] : null;
 
-      // ── Double-booking guard (mirrors index.html client transaction) ──
-      if (!availSnap.exists || availSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
-      if (slotSnap.exists) {
-        const sd = slotSnap.data();
-        if (sd.bookingStatus === 'confirmed') throw new Error('SLOT_TAKEN');
-        if (sd.bookingStatus === 'pending_payment') {
-          const exp = sd.expiresAt?.toMillis?.() ?? 0;
-          if (!exp || exp > nowMs) throw new Error('SLOT_HELD');
+      // ── Double-booking guard on EVERY hour (mirrors the 1-hour rules) ──
+      for (let i = 0; i < hours.length; i++) {
+        const availSnap = availSnaps[i], slotSnap = slotSnaps[i];
+        if (!availSnap.exists || availSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
+        if (slotSnap.exists) {
+          const sd = slotSnap.data();
+          if (sd.bookingStatus === 'confirmed') throw new Error('SLOT_TAKEN');
+          if (sd.bookingStatus === 'pending_payment') {
+            const exp = sd.expiresAt?.toMillis?.() ?? 0;
+            if (!exp || exp > nowMs) throw new Error('SLOT_HELD');
+          }
         }
       }
 
@@ -243,14 +335,15 @@ async function handleCreate(res, body) {
         });
       }
 
-      // ── Write booking (server price) + slot lock ────────────────────
+      // ── Write booking (server price) + one slot lock per hour ───────
       t.set(bookingRef, {
         bookingCode, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
         bookingType,
         lineUserId, lineDisplayName,
         customerName, customerPhone, customerPhoneNormalized: normalizePhone(customerPhone),
         customerNote,
-        date, startTime, endTime, durationHours: 1,
+        date, startTime, endTime, durationHours,
+        ...(durationHours > 1 ? { priceBreakdown: quote.breakdown } : {}),
         // Pricing v2 metadata (server-authoritative)
         price: finalPrice, amount: finalPrice,
         originalPrice: quote.originalPrice, finalPrice,
@@ -268,11 +361,13 @@ async function handleCreate(res, body) {
         createdVia: 'server',
         createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
       });
-      t.set(slotRef, {
-        bookingCode, bookingId: bookingRef.id, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
-        date, hour: startTime,
-        bookingStatus: 'pending_payment', paymentStatus: 'unpaid',
-        expiresAt: paymentExpiresAt,
+      hours.forEach((h, i) => {
+        t.set(slotRefs[i], {
+          bookingCode, bookingId: bookingRef.id, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
+          date, hour: h,
+          bookingStatus: 'pending_payment', paymentStatus: 'unpaid',
+          expiresAt: paymentExpiresAt,
+        });
       });
     });
   } catch (e) {
@@ -288,16 +383,17 @@ async function handleCreate(res, body) {
     return res.status(500).json({ ok: false, error: 'Failed to create booking' }); // no code → client may fall back
   }
 
-  console.log(`[create] ${bookingCode} ${quote.pricingType} ฿${finalPrice}${quote.voucherApplied ? ' voucher=' + voucherCode : ''}`);
+  console.log(`[create] ${bookingCode} ${quote.pricingType} ${durationHours}h ฿${finalPrice}${quote.voucherApplied ? ' voucher=' + voucherCode : ''}`);
   return res.status(200).json({
     ok: true,
     paymentExpiresAt: paymentExpiresAt.toDate().toISOString(),
     booking: {
-      id: bookingRef.id, bookingCode, date, startTime, endTime,
+      id: bookingRef.id, bookingCode, date, startTime, endTime, durationHours,
       bookingType,
       finalPrice, price: finalPrice, originalPrice: quote.originalPrice,
       qrType: quote.qrType, qrAmount: quote.qrAmount, paymentQrType: quote.qrType,
       pricingType: quote.pricingType, discountAmount: quote.discountAmount, voucherCode: quote.voucherCode,
+      ...(durationHours > 1 ? { priceBreakdown: quote.breakdown } : {}),
       lineUserId, customerName, customerPhone, customerNote,
     },
   });
@@ -358,10 +454,11 @@ async function handleCancelPending(res, body) {
     return res.status(409).json({ ok: false, error: 'การจองหมดเวลาแล้ว' });
   }
 
-  const slotId  = (booking.date && booking.startTime)
-    ? `${RESOURCE_ID}_${booking.date}_${String(booking.startTime).replace(':', '')}`
-    : null;
-  const slotRef = slotId ? db.collection('booking_slots').doc(slotId) : null;
+  // Multi-hour (Phase A): release EVERY hourly slot the booking holds.
+  const heldHours = (booking.date && booking.startTime)
+    ? (hourListOf(booking.startTime, parseDurationHours(booking.durationHours) || 1) || [booking.startTime])
+    : [];
+  const slotRefs = heldHours.map(h => db.collection('booking_slots').doc(`${RESOURCE_ID}_${booking.date}_${String(h).replace(':', '')}`));
   // Coach lesson: the coach hour was locked in the create transaction —
   // release it here (ownership-checked below).
   const coachAvailRef = (booking.serviceType === 'coach_lesson' && booking.coachId && booking.date && booking.startTime)
@@ -371,7 +468,7 @@ async function handleCancelPending(res, body) {
   try {
     await db.runTransaction(async (t) => {
       const bSnap = await t.get(bookingRef);
-      const slotSnap = slotRef ? await t.get(slotRef) : null;
+      const slotSnaps = await Promise.all(slotRefs.map(r => t.get(r)));
       const caSnap = coachAvailRef ? await t.get(coachAvailRef) : null;
       if (!bSnap.exists) throw new Error('GONE');
       const bNow = bSnap.data();
@@ -400,14 +497,15 @@ async function handleCancelPending(res, body) {
         cancelledBy:   'customer',
         updatedAt:     FieldValue.serverTimestamp(),
       });
-      // Release the slot only if it still belongs to this booking and isn't confirmed.
-      if (slotSnap && slotSnap.exists) {
+      // Release each slot only if it still belongs to this booking and isn't confirmed.
+      slotSnaps.forEach((slotSnap, i) => {
+        if (!slotSnap.exists) return;
         const sd = slotSnap.data();
         const owns = sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode;
         if (owns && sd.bookingStatus !== 'confirmed') {
-          t.update(slotRef, { bookingStatus: 'cancelled', paymentStatus: 'rejected' });
+          t.update(slotRefs[i], { bookingStatus: 'cancelled', paymentStatus: 'rejected' });
         }
-      }
+      });
     });
   } catch (e) {
     if (e.message === 'BAD_STATE' || e.message === 'GONE') {
