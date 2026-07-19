@@ -2333,6 +2333,25 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
     }
     // Success — mirror the legacy post-transaction success flow, using server data.
     const b = d.booking;
+    // Deploy-skew guard: an older backend silently ignores durationHours and
+    // books only 1 hour while the customer believes they got 2-3. If the
+    // server's answer doesn't match what we asked for, undo and tell the user
+    // to book hour-by-hour — never show a success screen for the wrong hours.
+    const wantN = state.durationHours || 1;
+    const gotN  = parseInt(b.durationHours, 10) || 1;
+    if (gotN !== wantN) {
+      console.error(`[booking] duration mismatch — asked ${wantN}h, server booked ${gotN}h. Cancelling.`);
+      try {
+        await fetch("/api/booking", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ action:"cancel_pending", bookingId:b.id, bookingCode:b.bookingCode, lineUserId:state.lineProfile.userId }),
+        });
+      } catch(_){ /* best-effort — the unpaid hold expires by itself in 15 min */ }
+      showToast(currentLang==="th"
+        ? "ระบบจองหลายชั่วโมงยังไม่พร้อมใช้งาน กรุณาจองทีละ 1 ชั่วโมง"
+        : "Multi-hour booking is not available yet. Please book one hour at a time.", true);
+      return "handled";
+    }
     const expiresAt = new Date(d.paymentExpiresAt);
     const endTime = b.endTime;
     state.currentBookingCode  = b.bookingCode;
