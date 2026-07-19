@@ -542,9 +542,12 @@
       <div class="card">
         <div class="slabel" data-i18n="duration">Duration</div>
         <div class="tgrid" id="durGrid" style="grid-template-columns:repeat(3,1fr)">
-          <button class="tbtn on" data-dur="1" data-i18n="durHour1">1 Hour</button>
-          <button class="tbtn" data-dur="2" data-i18n="durHour2">2 Hours</button>
-          <button class="tbtn" data-dur="3" data-i18n="durHour3">3 Hours</button>
+          <button class="tbtn" data-durmin="30" data-i18n="dur30m" style="display:none">30 min</button>
+          <button class="tbtn on" data-durmin="60" data-i18n="durHour1">1 Hour</button>
+          <button class="tbtn" data-durmin="90" data-i18n="dur90m" style="display:none">1.5 Hours</button>
+          <button class="tbtn" data-durmin="120" data-i18n="durHour2">2 Hours</button>
+          <button class="tbtn" data-durmin="150" data-i18n="dur150m" style="display:none">2.5 Hours</button>
+          <button class="tbtn" data-durmin="180" data-i18n="durHour3">3 Hours</button>
         </div>
         <p id="durNote" style="font-size:.7rem;color:var(--muted);margin:8px 2px 0" data-i18n="durNote">Consecutive hours, paid with one QR</p>
       </div>
@@ -983,9 +986,10 @@ const state = {
   // Booking flow
   dateOffset: 0,
   time: null,
-  durationHours: 1,   // Phase A: single-use bookings may span 1-3 consecutive hours
+  durationMinutes: 60,     // Phase B: 30-180 min in 30-min steps (single-use only)
+  halfHourEnabled: false,  // server flag system_settings/features.enableHalfHourBooking
   openSlots: new Set(),
-  blockedSlots: new Set(),
+  blockedCells: new Set(),   // blocked 30-min cell starts, minutes since midnight
   currentDateIsHoliday: false,
   bookingPaymentType: "single",
   // Eligibility
@@ -1029,9 +1033,15 @@ const I18N = {
     durHour1:"1 ชั่วโมง",
     durHour2:"2 ชั่วโมง",
     durHour3:"3 ชั่วโมง",
+    dur30m:"30 นาที",
+    dur90m:"1.5 ชั่วโมง",
+    dur150m:"2.5 ชั่วโมง",
     durNote:"จองติดกันได้สูงสุด 3 ชั่วโมง จ่าย QR เดียว",
+    durNoteHalf:"ครึ่งชั่วโมง 200.- (ไม่ร่วมโปรโมชั่น) · จองติดกันได้สูงสุด 3 ชม. จ่าย QR เดียว",
     durPassOnly:"แพ็กเกจใช้ได้ครั้งละ 1 ชั่วโมง",
     durCrossMidnight:"เกินเที่ยงคืน — เลือกเวลาเริ่มให้เร็วขึ้น",
+    durLateNightHourly:"ช่วง Late Night จองเป็นชั่วโมงเต็มเท่านั้น",
+    durLateRoundHourly:"รอบ 23:00 ขายเป็นชั่วโมงเต็มเท่านั้น",
     availableTimes:"เลือกเวลา",
     loadingSlots:"กำลังโหลดช่วงเวลา...",
     paymentType:"วิธีชำระ / สิทธิ์ที่ใช้",
@@ -1170,9 +1180,15 @@ const I18N = {
     durHour1:"1 Hour",
     durHour2:"2 Hours",
     durHour3:"3 Hours",
+    dur30m:"30 min",
+    dur90m:"1.5 Hours",
+    dur150m:"2.5 Hours",
     durNote:"Up to 3 consecutive hours, one QR payment",
+    durNoteHalf:"Half hour ฿200 flat (no promotions) · up to 3 consecutive hours, one QR",
     durPassOnly:"Passes can be used 1 hour at a time",
     durCrossMidnight:"Past midnight — choose an earlier start",
+    durLateNightHourly:"Late Night sells whole hours only",
+    durLateRoundHourly:"The 23:00 round sells as a full hour only",
     availableTimes:"Available Times",
     loadingSlots:"Loading slots...",
     paymentType:"Payment Type",
@@ -1658,11 +1674,11 @@ function setupNav() {
       document.querySelectorAll(".ptbtn").forEach(b=>b.classList.remove("on"));
       btn.classList.add("on");
       state.bookingPaymentType=btn.dataset.pt;
-      // Passes are 1 hour per booking — multi-hour is single-use only.
+      // Passes are 1 hour per booking — multi-hour/half is single-use only.
       syncDurButtons();
       // Re-validate selected time BEFORE rendering — otherwise the disabled tile keeps
       // its "on" class while the Confirm button is disabled, which looks broken.
-      if(state.time && getDisabledReasonRange(parseInt(state.time))) state.time=null;
+      if(state.time && getDisabledReasonRange(toMinB(state.time))) state.time=null;
       renderTimes();
       updateBookingConfirmBtn();
       // Update price display
@@ -1671,14 +1687,14 @@ function setupNav() {
     });
   });
 
-  // ── Duration selector (Phase A: 1-3 consecutive hours, single-use only) ──
-  document.querySelectorAll("#durGrid [data-dur]").forEach(btn=>{
+  // ── Duration selector (Phase B: 30-180 min, single-use only) ──────
+  document.querySelectorAll("#durGrid [data-durmin]").forEach(btn=>{
     btn.addEventListener("click",()=>{
-      const n=parseInt(btn.dataset.dur,10);
-      if(state.bookingPaymentType!=="single" && n>1){ showToast(t("durPassOnly"),true); return; }
-      state.durationHours=n;
+      const n=parseInt(btn.dataset.durmin,10);
+      if(state.bookingPaymentType!=="single" && n!==60){ showToast(t("durPassOnly"),true); return; }
+      state.durationMinutes=n;
       syncDurButtons();
-      if(state.time && getDisabledReasonRange(parseInt(state.time))) state.time=null;
+      if(state.time && getDisabledReasonRange(toMinB(state.time))) state.time=null;
       renderTimes();
       updateBookingConfirmBtn();
       updateBookingPriceNote();
@@ -1687,15 +1703,34 @@ function setupNav() {
   });
 }
 
-// Keep duration buttons in sync with the payment type: passes lock to 1 hour.
+// Keep duration buttons in sync with the payment type + feature flag:
+// passes lock to 1 hour; x.5 chips exist only when half-hour booking is on.
 function syncDurButtons(){
   const single = state.bookingPaymentType==="single";
-  if(!single && state.durationHours!==1) state.durationHours=1;
-  document.querySelectorAll("#durGrid [data-dur]").forEach(b=>{
-    const n=parseInt(b.dataset.dur,10);
-    b.classList.toggle("on", n===state.durationHours);
-    b.disabled = !single && n>1;
+  if(!single && state.durationMinutes!==60) state.durationMinutes=60;
+  if(!state.halfHourEnabled && state.durationMinutes%60!==0) state.durationMinutes=60;
+  document.querySelectorAll("#durGrid [data-durmin]").forEach(b=>{
+    const n=parseInt(b.dataset.durmin,10);
+    const isHalfChip = n%60!==0;
+    b.style.display = (isHalfChip && !state.halfHourEnabled) ? "none" : "";
+    b.classList.toggle("on", n===state.durationMinutes);
+    b.disabled = !single && n!==60;
   });
+  const note=$("durNote");
+  if(note) note.textContent = state.halfHourEnabled ? t("durNoteHalf") : t("durNote");
+}
+
+// One-time fetch of customer feature flags (rules only expose system_settings/
+// pricing to clients, so the half-hour flag comes from the API). Fail-closed.
+let _featuresFetched=false;
+async function fetchBookingFeatures(){
+  if(_featuresFetched) return;
+  try{
+    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"features"})});
+    const d=await r.json().catch(()=>null);
+    if(r.ok&&d&&d.ok){ state.halfHourEnabled=d.enableHalfHourBooking===true; _featuresFetched=true; }
+  }catch(e){ console.warn("[features] fetch failed (half-hour stays hidden):",e); }
+  syncDurButtons();
 }
 
 let isAlreadyRegistered = false;
@@ -1942,8 +1977,9 @@ function updateHomeSingleUsePricing() {
 async function openBookingView() {
   state.time=null;
   state.bookingPaymentType="single";
-  state.durationHours=1;
+  state.durationMinutes=60;
   syncDurButtons();
+  fetchBookingFeatures();   // async; re-syncs chips when the flag arrives
   state.dateOffset=0;
 
   // Set visual loading state on pass buttons while eligibility loads
@@ -2030,7 +2066,7 @@ function buildDates() {
 }
 
 async function loadSlotsAndRender(dateStr) {
-  state.openSlots=new Set(); state.blockedSlots=new Set(); state.currentDateIsHoliday=false;
+  state.openSlots=new Set(); state.blockedCells=new Set(); state.currentDateIsHoliday=false;
   try {
     const [availSnap, bookSnap, holSnap] = await Promise.all([
       getDocs(query(collection(db,"available_slots"),where("date","==",dateStr),where("resourceId","==",RESOURCE_ID))),
@@ -2039,10 +2075,16 @@ async function loadSlotsAndRender(dateStr) {
     ]);
     availSnap.forEach(d=>{ if(d.data().status==="open") state.openSlots.add(d.data().startTime); });
     const now=new Date();
+    // Span-aware blocking: a live slot doc blocks every 30-min cell it covers.
+    // Legacy docs (no slotSpanMinutes) span the full hour.
     bookSnap.forEach(d=>{
       const bd=d.data();
-      if(bd.bookingStatus==="confirmed") state.blockedSlots.add(bd.hour);
-      if(bd.bookingStatus==="pending_payment"){ const exp=bd.expiresAt?.toDate?.(); if(exp&&exp>now) state.blockedSlots.add(bd.hour); }
+      const live = bd.bookingStatus==="confirmed" ||
+        (bd.bookingStatus==="pending_payment" && (()=>{ const exp=bd.expiresAt?.toDate?.(); return exp&&exp>now; })());
+      if(!live || !bd.hour) return;
+      const docMin=toMinB(bd.hour);
+      const span=bd.slotSpanMinutes===30?30:60;
+      for(let c=docMin;c<docMin+span;c+=30) state.blockedCells.add(c);
     });
     if(holSnap.exists()) state.currentDateIsHoliday = holSnap.data().isHoliday===true;
   } catch(e) { console.error("Load slots error:",e); }
@@ -2060,53 +2102,77 @@ function renderTimes() {
   if(hasOpenLN){ for(let h=LN_START;h<LN_END;h++) hoursToRender.push(h); }
   for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++) hoursToRender.push(h);
 
-  // Range highlight: hours covered by the current selection (start + duration).
-  const selStart = state.time ? parseInt(state.time,10) : null;
-  const selN     = state.durationHours||1;
+  const selN = state.durationMinutes||60;
+  // :30 start tiles exist only for x.5 durations with the feature on, and only
+  // in daytime (halves never live in Late Night; ≥23:00 blocked by range fn).
+  const renderHalves = state.halfHourEnabled && selN%60!==0;
+  const selStart = state.time ? toMinB(state.time) : null;
 
   for(const h of hoursToRender){
-    const time=`${String(h).padStart(2,"0")}:00`;
-    const reason=getDisabledReasonRange(h);
     const isLN=isLateNightHour(h);
-    const inRange = selStart!==null && h>=selStart && h<selStart+selN;
-    const btn=document.createElement("button");
-    btn.className=`tbtn${inRange?" on":""}`;
-    btn.title=reason||t("available");
-    btn.disabled=Boolean(reason)&&!inRange;
-    if(isLN){
-      // 🌙 badge below time — visible only when slot is open
-      btn.innerHTML=`${time}<br><span style="font-size:.58rem;color:#a855f7;font-weight:800;white-space:nowrap;line-height:1">🌙 Late Night</span>`;
-    } else {
-      btn.textContent=time;
-    }
-    btn.addEventListener("click",()=>{
-      if(getDisabledReasonRange(h)){ return; }   // continuation tile of the old range
-      state.time=time;
+    const cellStarts=[h*60];
+    if(renderHalves && !isLN && h>=6) cellStarts.push(h*60+30);
 
-      const isLN = isLateNightHour(h);
-      if (isLN) {
-        state.bookingPaymentType = "single";
+    for(const cellMin of cellStarts){
+      const time=toHHMMB(cellMin);
+      const reason=getDisabledReasonRange(cellMin);
+      const inRange = selStart!==null && cellMin>=selStart && cellMin<selStart+selN;
+      const btn=document.createElement("button");
+      btn.className=`tbtn${inRange?" on":""}`;
+      btn.title=reason||t("available");
+      btn.disabled=Boolean(reason)&&!inRange;
+      if(isLN){
+        // 🌙 badge below time — visible only when slot is open
+        btn.innerHTML=`${time}<br><span style="font-size:.58rem;color:#a855f7;font-weight:800;white-space:nowrap;line-height:1">🌙 Late Night</span>`;
+      } else if(cellMin%60===30){
+        btn.innerHTML=`${time}<br><span style="font-size:.58rem;color:var(--muted);font-weight:800;line-height:1">+30 น.</span>`;
+      } else {
+        btn.textContent=time;
       }
+      btn.addEventListener("click",()=>{
+        if(getDisabledReasonRange(cellMin)){ return; }   // continuation tile of the old range
+        state.time=time;
 
-      renderTimes();   // repaint so the whole selected range highlights
-      updatePaymentTypeButtons();
-      updateBookingConfirmBtn();
-      updateBookingPriceNote();
-      refreshQuote();
-    });
-    grid.append(btn);
-    if(!reason) avail++;
+        if (isLateNightHour(h)) {
+          state.bookingPaymentType = "single";
+        }
+
+        renderTimes();   // repaint so the whole selected range highlights
+        updatePaymentTypeButtons();
+        updateBookingConfirmBtn();
+        updateBookingPriceNote();
+        refreshQuote();
+      });
+      grid.append(btn);
+      if(!reason) avail++;
+    }
   }
   $("slotsText").textContent=avail ? t("slotsAvailable",{count:avail}) : t("noAvailableSlots");
 }
 
-function getDisabledReason(time, h) {
-  // Past time check
-  if(state.dateOffset===0 && h<=new Date().getHours()) return t("timePassed");
-  // Admin must open slot
-  if(!state.openSlots.has(time)) return t("notOpened");
-  // Actively booked
-  if(state.blockedSlots.has(time)) return t("alreadyBooked");
+// ── Phase B time helpers (minute-based; mirror api/booking.js) ─────
+const toMinB  = tm => { const [h,m]=String(tm).split(":").map(Number); return h*60+(m||0); };
+const toHHMMB = min => `${String(Math.floor(min/60)%24).padStart(2,"0")}:${String(min%60).padStart(2,"0")}`;
+// Segment a range into span-60 whole hours + span-30 halves (start in minutes).
+function segmentsOfB(startMin,n){
+  const segs=[]; let tt=startMin; const end=startMin+n;
+  while(tt<end){
+    if(tt%60===0&&tt+60<=end){segs.push({start:tt,span:60});tt+=60;}
+    else {segs.push({start:tt,span:30});tt+=30;}
+  }
+  return segs;
+}
+
+// Per-30-min-cell availability primitive. cellMin = minutes since midnight.
+function getCellReason(cellMin){
+  const h=Math.floor(cellMin/60);
+  const hourStr=`${String(h).padStart(2,"0")}:00`;
+  // Past time check (same rule as before: the current hour is not bookable)
+  if(state.dateOffset===0 && cellMin<(new Date().getHours()+1)*60) return t("timePassed");
+  // Admin opens whole hours — an open hour opens both halves
+  if(!state.openSlots.has(hourStr)) return t("notOpened");
+  // Actively booked (span-aware set built in loadSlotsAndRender)
+  if(state.blockedCells.has(cellMin)) return t("alreadyBooked");
   // Off-Peak restrictions
   if(state.bookingPaymentType==="offpeak"){
     const day=getSelectedDate().getDay();
@@ -2122,15 +2188,21 @@ function getDisabledReason(time, h) {
   return "";
 }
 
-// Multi-hour (Phase A): a start hour is bookable only when EVERY hour in
-// [h, h+durationHours) passes the single-hour checks. Never crosses midnight.
-function getDisabledReasonRange(h){
-  const n=state.durationHours||1;
-  if(h+n>24) return t("durCrossMidnight");
-  for(let i=0;i<n;i++){
-    const hi=h+i, time=`${String(hi).padStart(2,"0")}:00`;
-    const r=getDisabledReason(time,hi);
-    if(r) return n>1?`${time} — ${r}`:r;
+// A start is bookable only when EVERY covered 30-min cell passes, plus the
+// Phase B shape rules: whole-hour durations start :00; halves live only in
+// 06:00–23:00; nothing crosses midnight.
+function getDisabledReasonRange(startMin){
+  const n=state.durationMinutes||60;
+  if(startMin%30!==0||(n%60===0&&startMin%60!==0)) return t("notOpened");
+  if(startMin+n>1440) return t("durCrossMidnight");
+  const hasHalf=(n%60!==0)||(startMin%60!==0);
+  if(hasHalf){
+    if(startMin<6*60) return t("durLateNightHourly");
+    if(segmentsOfB(startMin,n).some(s=>s.span===30&&s.start>=23*60)) return t("durLateRoundHourly");
+  }
+  for(let c=startMin;c<startMin+n;c+=30){
+    const r=getCellReason(c);
+    if(r) return n>30?`${toHHMMB(c)} — ${r}`:r;
   }
   return "";
 }
@@ -2227,7 +2299,7 @@ function currentQuoteKey(){
   const startTime = state.time || "";
   const payType   = state.bookingPaymentType;
   const voucher   = ($("bkVoucher")?.value || "").trim().toUpperCase();
-  const dur       = state.durationHours || 1;
+  const dur       = state.durationMinutes || 60;
   return { date, startTime, payType, voucher, dur, key:`${date}|${startTime}|${payType}|${voucher}|${dur}` };
 }
 
@@ -2244,7 +2316,7 @@ async function refreshQuote(){
   try{
     const res = await fetch("/api/booking", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ action:"price_quote", date:ctx.date, startTime:ctx.startTime, payType:"single", voucherCode:ctx.voucher||undefined, durationHours:ctx.dur, lineUserId:state.lineProfile.userId }),
+      body: JSON.stringify({ action:"price_quote", date:ctx.date, startTime:ctx.startTime, payType:"single", voucherCode:ctx.voucher||undefined, durationMinutes:ctx.dur, lineUserId:state.lineProfile.userId }),
     });
     const d = await res.json().catch(()=>({}));
     if (currentQuoteKey().key !== ctx.key) return;   // context changed → discard stale
@@ -2316,7 +2388,7 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
         action:"create", date:dateISO, startTime:state.time,
-        durationHours: state.durationHours || 1,
+        durationMinutes: state.durationMinutes || 60,
         customerName:name, customerPhone:phone, customerNote:note,
         lineUserId:state.lineProfile.userId, lineDisplayName:state.lineProfile.displayName,
         voucherCode: voucherCode || undefined,
@@ -2333,12 +2405,14 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
     }
     // Success — mirror the legacy post-transaction success flow, using server data.
     const b = d.booking;
-    // Deploy-skew guard: an older backend silently ignores durationHours and
-    // books only 1 hour while the customer believes they got 2-3. If the
+    // Deploy-skew guard: an older backend silently ignores the duration and
+    // books only 1 hour while the customer believes they got more. If the
     // server's answer doesn't match what we asked for, undo and tell the user
     // to book hour-by-hour — never show a success screen for the wrong hours.
-    const wantN = state.durationHours || 1;
-    const gotN  = parseInt(b.durationHours, 10) || 1;
+    const wantN = state.durationMinutes || 60;
+    const gotN  = Number.isFinite(Number(b.durationMinutes)) && Number(b.durationMinutes) >= 30
+      ? Number(b.durationMinutes)
+      : (parseInt(b.durationHours, 10) || 1) * 60;
     if (gotN !== wantN) {
       console.error(`[booking] duration mismatch — asked ${wantN}h, server booked ${gotN}h. Cancelling.`);
       try {
@@ -2365,7 +2439,7 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
     }
     state.paymentMode="booking";
     try{
-      localStorage.setItem("ut_pending_booking", JSON.stringify({ code:b.bookingCode, docId:b.id, expiresAt:expiresAt.getTime(), date:dateISO, startTime:state.time, endTime, durationHours:b.durationHours||1, price:b.finalPrice, isLN:b.qrType==="late_night" }));
+      localStorage.setItem("ut_pending_booking", JSON.stringify({ code:b.bookingCode, docId:b.id, expiresAt:expiresAt.getTime(), date:dateISO, startTime:state.time, endTime, durationMinutes:b.durationMinutes||60, price:b.finalPrice, isLN:b.qrType==="late_night" }));
     }catch(_){}
     showPaymentPanel(b.bookingCode, b.finalPrice, expiresAt, dateISO, `${state.time} – ${endTime}`, b.qrType==="late_night");
     showView("viewPayment");
@@ -2407,9 +2481,9 @@ $("confirmBkBtn").addEventListener("click", async()=>{
       const r = await tryServerCreate({ dateISO:getSelectedDateISO(), name, phone, note:$("bkNote").value.trim(), voucherCode:($("bkVoucher")?.value||"").trim().toUpperCase() });
       if (r === true) { if($("bkVoucher")) $("bkVoucher").value=""; return; }   // success (finally resets btn)
       if (r === "handled") return;                                              // legit rejection already shown
-      // Multi-hour bookings exist ONLY on the server path — the legacy
+      // Multi-hour/half bookings exist ONLY on the server path — the legacy
       // client-create can't lock several slots atomically. No fallback.
-      if ((state.durationHours||1) > 1){ showToast(t("bookingFailed"),true); return; }
+      if ((state.durationMinutes||60) !== 60){ showToast(t("bookingFailed"),true); return; }
       // Voucher redemption is transactional on the server — never fall back to
       // client-create with a voucher (it would book at full price and skip the
       // usedCount bookkeeping).
@@ -3009,13 +3083,14 @@ $("submitSlipBtn").addEventListener("click", async()=>{
       runSlipPrecheckPass(file, state.currentPurchaseDocId, code, state.currentPurchaseData||{});
       showSuccess("📨",t("slipReceived"),code,t("passPending"));
     } else {
-      // Multi-hour (Phase A): the booking may hold 1-3 hourly slots — verify
+      // Phase B: the booking may hold hour + half slot segments — verify
       // ownership of and update EVERY one, atomically with the booking doc.
       const bd=state.currentBookingData;
-      const bdN=Math.min(Math.max(parseInt(bd.durationHours,10)||1,1),3);
-      const bdH0=parseInt(bd.startTime,10);
-      const slotIds=[];
-      for(let i=0;i<bdN&&bdH0+i<24;i++) slotIds.push(`${RESOURCE_ID}_${bd.date}_${String(bdH0+i).padStart(2,"0")}00`);
+      const bdDurRaw=Number(bd.durationMinutes);
+      const bdDur=(Number.isInteger(bdDurRaw)&&bdDurRaw>=30&&bdDurRaw%30===0)
+        ? Math.min(bdDurRaw,360)
+        : Math.min(Math.max(parseInt(bd.durationHours,10)||1,1),6)*60;
+      const slotIds=segmentsOfB(toMinB(bd.startTime),bdDur).map(s=>`${RESOURCE_ID}_${bd.date}_${toHHMMB(s.start).replace(":","")}`);
       await runTransaction(db, async (t) => {
         const bookingRef = doc(db, "bookings", state.currentBookingDocId);
         const slotRefs = slotIds.map(id=>doc(db,"booking_slots",id));

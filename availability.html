@@ -492,15 +492,26 @@
           const end = fEnd(h);
           const av = avByTime[start];
           const bs = bsByTime[start] || bsByTime[slotId(selectedDate,h)];
+          // Phase B: a half-hour doc at HH:30 (slotSpanMinutes 30) can occupy
+          // part of the hour; an HH:00 doc may itself be only a 30-min half.
+          const bs30 = bsByTime[`${String(h).padStart(2,"0")}:30`];
+          const firstHalfBusy  = isBlockingSlot(bs,now);
+          const secondHalfBusy = isBlockingSlot(bs30,now) ||
+            (firstHalfBusy && bs?.slotSpanMinutes !== 30);   // legacy/hour docs span 60
+          const fullyBusy   = firstHalfBusy && secondHalfBusy;
+          const partlyBusy  = (firstHalfBusy || secondHalfBusy) && !fullyBusy;
           const past = isPastSlot(selectedDate,h);
           let status = "closed";
           let reason = past ? "ผ่านเวลาแล้ว" : "ยังไม่เปิดให้จอง";
 
           if(av?.status === "closed") reason = "ปิดให้จอง";
           if(av?.status === "open" && !past){
-            if(isBlockingSlot(bs,now)){
+            if(fullyBusy){
               status = "booked";
               reason = "มีผู้จองแล้ว";
+            }else if(partlyBusy){
+              status = "booked";
+              reason = "จองแล้วบางช่วง · อาจเหลือครึ่งชั่วโมง (เช็กในหน้าจอง)";
             }else{
               status = "available";
               reason = "พร้อมจอง";

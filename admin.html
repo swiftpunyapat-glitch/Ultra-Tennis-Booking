@@ -3058,14 +3058,23 @@ async function loadDailyView(){
     for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
       const time=fH(h),endT=fEnd(h);
       const av=avByTime[time]||null;
-      const bs=bsByHour[time]||null;
-      let status,booking=null;
+      // Phase B: an hour can be occupied by its HH:00 doc (span 60 legacy/hour
+      // or span 30 half) AND/OR a separate HH:30 half doc — possibly two
+      // different bookings sharing the hour.
+      const bs00=bsByHour[time]||null;
+      const bs30=bsByHour[`${String(h).padStart(2,"0")}:30`]||null;
+      const liveDocs=[bs00,bs30].filter(x=>x&&isLiveBookedSlot(x,now));
+      let status,booking=null,booking2=null;
 
       // booking_slots takes precedence when it points to a live (confirmed or
       // unexpired-pending) booking; otherwise fall back to available_slots status.
-      if(bs && isLiveBookedSlot(bs,now)){
+      if(liveDocs.length){
         status="booked";
+        const bs=liveDocs[0];
         booking=bookingByCode[bs.bookingCode]||null;
+        if(liveDocs[1]&&liveDocs[1].bookingCode!==bs.bookingCode){
+          booking2=bookingByCode[liveDocs[1].bookingCode]||null;
+        }
         if(bs.bookingStatus==="pending_payment") countPending++;
         else countConfirmed++;
         if(booking?.paymentStatus==="pending_review") countReview++;
@@ -3073,7 +3082,7 @@ async function loadDailyView(){
       else  if(av && av.status==="closed"){ status="closed"; countClosed++; }
       else  { status="not_set"; }
 
-      rows.push({h,time,endT,status,booking});
+      rows.push({h,time,endT,status,booking,booking2});
     }
 
     $("dvStTotal").textContent     = countConfirmed+countPending;
@@ -3130,9 +3139,11 @@ function renderDailyRow(r,lookupHistory){
     pill = status==="booked"
       ? `<span class="sstatus ss-booked">${esc(booking.paymentStatus||"booked")}</span>`
       : `<span class="sstatus ss-booked" style="background:#3d2e00;color:var(--warn)">pending</span>`;
+    const b2=r.booking2;
     info = `<div class="dv-info">
       <strong>${esc(booking.customerName||"—")} · ${esc(phone||"—")}${visitLabel}${cancelledLabel}${passLabel}</strong>
-      <div class="dv-meta">${esc(booking.bookingCode||"—")} · ${esc(booking.bookingType||"—")} · ${esc(booking.bookingStatus||"—")}${hist.lastDate?` · last: ${esc(hist.lastDate)}`:""}</div>
+      <div class="dv-meta">${esc(booking.bookingCode||"—")} · ${esc(booking.startTime||"—")}–${esc(booking.endTime||"—")} · ${esc(booking.bookingType||"—")} · ${esc(booking.bookingStatus||"—")}${hist.lastDate?` · last: ${esc(hist.lastDate)}`:""}</div>
+      ${b2?`<div class="dv-meta">↳ ${esc(b2.bookingCode||"—")} · ${esc(b2.customerName||"—")} · ${esc(b2.startTime||"—")}–${esc(b2.endTime||"—")} · ${esc(b2.bookingStatus||"—")}</div>`:""}
     </div>`;
     const canResch=!["cancelled","expired","completed","no_show"].includes(booking.bookingStatus);
     const canCancel=booking.bookingStatus!=="cancelled"&&booking.paymentStatus!=="paid";
@@ -3449,6 +3460,9 @@ $("manConfirm").addEventListener("click",async()=>{
   }
   const slotId=`${RESOURCE_ID}_${date}_${time.replace(":","")}`;
   const slotRef=doc(db,"booking_slots",slotId);
+  // Phase B: a customer half-hour booking may hold a separate HH:30 doc —
+  // a manual full-hour booking must not overwrite/overlap it.
+  const slotRef30=doc(db,"booking_slots",`${RESOURCE_ID}_${date}_${String(startH).padStart(2,"0")}30`);
   const availRef=doc(db,"available_slots",slotId);
   const bookingRef=doc(collection(db,"bookings"));
   const paidMeta=paymentStatus==="paid"
@@ -3458,7 +3472,7 @@ $("manConfirm").addEventListener("click",async()=>{
   const btn=$("manConfirm"); btn.disabled=true; btn.textContent="Saving...";
   try{
     await runTransaction(db,async t=>{
-      const [slotSnap,availSnap]=await Promise.all([t.get(slotRef),t.get(availRef)]);
+      const [slotSnap,slot30Snap,availSnap]=await Promise.all([t.get(slotRef),t.get(slotRef30),t.get(availRef)]);
       if(!availSnap.exists())
         throw new Error("Slot is not set. Open it in Slot Manager first.");
       if(availSnap.data().status!=="open")
@@ -3468,6 +3482,8 @@ $("manConfirm").addEventListener("click",async()=>{
         if(isLiveBookedSlot(sd)) throw new Error(sd.bookingStatus==="pending_payment"?"Slot is held by a pending payment.":"Slot is already booked.");
         // "rescheduled" and "cancelled" slot rows are released → allowed to overwrite.
       }
+      if(slot30Snap.exists()&&isLiveBookedSlot(slot30Snap.data()))
+        throw new Error("The second half of this hour is booked (30-min booking).");
 
       t.set(bookingRef,{
         bookingCode:             code,
