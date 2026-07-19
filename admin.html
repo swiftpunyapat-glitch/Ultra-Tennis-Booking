@@ -627,6 +627,14 @@
         </div>
 
         <div class="smrow" style="margin-bottom:12px">
+          <div class="smf" style="flex:1">
+            <label>Half-Hour Price (THB / 30 min · never joins promos)</label>
+            <input type="number" id="promoHalfPrice" placeholder="200" min="100" max="1000"/>
+            <p style="font-size:.7rem;color:var(--m);margin-top:4px">Default 200. Applies instantly to new bookings/quotes — existing bookings keep their price. Tip: below 175 two half-hours undercut the ฿350 hour.</p>
+          </div>
+        </div>
+
+        <div class="smrow" style="margin-bottom:12px">
           <div class="smf" style="flex:1"><label>Starts At (Local Time)</label><input type="datetime-local" id="promoStartsAt"/></div>
           <div class="smf" style="flex:1"><label>Ends At (Local Time)</label><input type="datetime-local" id="promoEndsAt"/></div>
         </div>
@@ -4470,6 +4478,7 @@ async function loadPromoTab() {
   $("morningActive").disabled = !isArt;
   $("promoName").disabled = !isArt;
   $("promoPrice").disabled = !isArt;
+  $("promoHalfPrice").disabled = !isArt;
   $("promoLabel").disabled = !isArt;
   $("promoStartsAt").disabled = !isArt;
   $("promoEndsAt").disabled = !isArt;
@@ -4493,6 +4502,7 @@ async function loadPromoTab() {
       $("morningActive").checked = data.morningPromoActive !== false;
       $("promoName").value = data.specialPromoName || "";
       $("promoPrice").value = data.specialPromoPrice || "";
+      $("promoHalfPrice").value = data.halfHourPrice || 200;
       $("promoLabel").value = data.specialPromoLabel || "";
       $("promoSpecialQrUrl").value = data.specialQrUrl || "";
       
@@ -4531,6 +4541,7 @@ $("promoSaveBtn").addEventListener("click", async () => {
   const morningPromoActive = $("morningActive").checked;
   const promoName = $("promoName").value.trim();
   const promoPrice = $("promoPrice").value.trim();
+  const halfPriceRaw = $("promoHalfPrice").value.trim();
   const promoLabel = $("promoLabel").value.trim();
   const startsAtRaw = $("promoStartsAt").value;
   const endsAtRaw = $("promoEndsAt").value;
@@ -4545,6 +4556,20 @@ $("promoSaveBtn").addEventListener("click", async () => {
     showToast("Valid positive promo price is required.", true);
     $("promoPrice").focus();
     return;
+  }
+  // Half-hour price (Phase B) — optional field; when filled it must be a sane
+  // integer. Below 175 two half-hours undercut the ฿350 hour → confirm intent.
+  let halfHourPrice;
+  if (halfPriceRaw !== "") {
+    halfHourPrice = Number(halfPriceRaw);
+    if (!Number.isInteger(halfHourPrice) || halfHourPrice < 100 || halfHourPrice > 1000) {
+      showToast("Half-hour price must be an integer 100-1000 THB.", true);
+      $("promoHalfPrice").focus();
+      return;
+    }
+    if (halfHourPrice < 175 && !confirm(`Half-hour ฿${halfHourPrice}: two half-hours (฿${halfHourPrice*2}) would be CHEAPER than the ฿350 hour.\n\nSave anyway?`)) {
+      return;
+    }
   }
 
   let startsAt = "";
@@ -4570,6 +4595,7 @@ $("promoSaveBtn").addEventListener("click", async () => {
         morningPromoActive,
         promoName,
         promoPrice: Number(promoPrice),
+        ...(halfHourPrice !== undefined ? { halfHourPrice } : {}),
         promoLabel,
         startsAt,
         endsAt,

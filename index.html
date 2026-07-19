@@ -988,6 +988,7 @@ const state = {
   time: null,
   durationMinutes: 60,     // Phase B: 30-180 min in 30-min steps (single-use only)
   halfHourEnabled: false,  // server flag system_settings/features.enableHalfHourBooking
+  halfHourPrice: 200,      // display only — the server always prices halves itself
   openSlots: new Set(),
   blockedCells: new Set(),   // blocked 30-min cell starts, minutes since midnight
   currentDateIsHoliday: false,
@@ -1037,7 +1038,7 @@ const I18N = {
     dur90m:"1.5 ชั่วโมง",
     dur150m:"2.5 ชั่วโมง",
     durNote:"จองติดกันได้สูงสุด 3 ชั่วโมง จ่าย QR เดียว",
-    durNoteHalf:"ครึ่งชั่วโมง 200.- (ไม่ร่วมโปรโมชั่น) · จองติดกันได้สูงสุด 3 ชม. จ่าย QR เดียว",
+    durNoteHalf:"ครึ่งชั่วโมง {price}.- (ไม่ร่วมโปรโมชั่น) · จองติดกันได้สูงสุด 3 ชม. จ่าย QR เดียว",
     durPassOnly:"แพ็กเกจใช้ได้ครั้งละ 1 ชั่วโมง",
     durCrossMidnight:"เกินเที่ยงคืน — เลือกเวลาเริ่มให้เร็วขึ้น",
     durLateNightHourly:"ช่วง Late Night จองเป็นชั่วโมงเต็มเท่านั้น",
@@ -1184,7 +1185,7 @@ const I18N = {
     dur90m:"1.5 Hours",
     dur150m:"2.5 Hours",
     durNote:"Up to 3 consecutive hours, one QR payment",
-    durNoteHalf:"Half hour ฿200 flat (no promotions) · up to 3 consecutive hours, one QR",
+    durNoteHalf:"Half hour ฿{price} flat (no promotions) · up to 3 consecutive hours, one QR",
     durPassOnly:"Passes can be used 1 hour at a time",
     durCrossMidnight:"Past midnight — choose an earlier start",
     durLateNightHourly:"Late Night sells whole hours only",
@@ -1717,7 +1718,7 @@ function syncDurButtons(){
     b.disabled = !single && n!==60;
   });
   const note=$("durNote");
-  if(note) note.textContent = state.halfHourEnabled ? t("durNoteHalf") : t("durNote");
+  if(note) note.textContent = state.halfHourEnabled ? t("durNoteHalf",{price:state.halfHourPrice}) : t("durNote");
 }
 
 // One-time fetch of customer feature flags (rules only expose system_settings/
@@ -1728,7 +1729,11 @@ async function fetchBookingFeatures(){
   try{
     const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"features"})});
     const d=await r.json().catch(()=>null);
-    if(r.ok&&d&&d.ok){ state.halfHourEnabled=d.enableHalfHourBooking===true; _featuresFetched=true; }
+    if(r.ok&&d&&d.ok){
+      state.halfHourEnabled=d.enableHalfHourBooking===true;
+      if(Number.isInteger(Number(d.halfHourPrice))&&Number(d.halfHourPrice)>0) state.halfHourPrice=Number(d.halfHourPrice);
+      _featuresFetched=true;
+    }
   }catch(e){ console.warn("[features] fetch failed (half-hour stays hidden):",e); }
   syncDurButtons();
 }
