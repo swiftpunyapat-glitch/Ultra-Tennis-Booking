@@ -57,8 +57,8 @@
 // Does NOT touch: paymentStatus, price, slipUrl, package fields, Google Calendar.
 // ════════════════════════════════════════════════════════════════════
 
-import { verifySession, requireRole, resolveBranchId, hasBranchAccess } from './_lib/admin-auth.js';
-import { getAdminDb, writeAuditLog } from './_lib/firebase-admin.js';
+import { verifySession, requireRole, resolveBranchId, hasBranchAccess, coachSessionFromToken } from './_lib/admin-auth.js';
+import { getAdminDb, getAdminAuth, writeAuditLog } from './_lib/firebase-admin.js';
 import { FieldValue }          from 'firebase-admin/firestore';
 
 // ── Shared constants ──────────────────────────────────────────────
@@ -286,21 +286,27 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, error: 'Method not allowed' });
   }
 
-  // ── Auth: any valid session required for both operations ──────────
-  const session = verifySession(req);
-  if (!session) return res.status(401).json({ ok: false, error: 'Unauthorized' });
-  const adminName = session.name;
-
   const body = parseBody(req);
   if (!body) return res.status(400).json({ ok: false, error: 'Invalid request body' });
 
   // ── Route by operation ────────────────────────────────────────────
   const operation = body.operation || 'accounting_edit';
 
-  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach', 'coach_lesson_update'];
+  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach', 'coach_lesson_update', 'coach_payout_paid'];
   if (!VALID_OPERATIONS.includes(operation)) {
     return res.status(400).json({ ok: false, error: `Invalid operation. Must be one of: ${VALID_OPERATIONS.join(', ')}.` });
   }
+
+  // ── Auth: admin session cookie, or (coach_lesson_update only) a LINE-
+  //    derived Firebase ID token — Coach V2 replaces the PIN cookie. ──
+  let session = verifySession(req);
+  if (!session && operation === 'coach_lesson_update' && typeof body.idToken === 'string') {
+    try {
+      session = await coachSessionFromToken(body.idToken, { auth: getAdminAuth(), db: getAdminDb() });
+    } catch (e) { console.error('[coach token]', e.message); }
+  }
+  if (!session) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+  const adminName = session.name;
 
   // ── Per-operation auth + input validation (before any DB call) ────
 
@@ -405,6 +411,9 @@ export default async function handler(req, res) {
   }
   if (operation === 'coach_lesson_update') {
     return handleCoachLessonUpdate({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+  }
+  if (operation === 'coach_payout_paid') {
+    return handleCoachPayoutPaid({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
   }
   return handleMarkPaid({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
 }
@@ -1615,18 +1624,10 @@ async function handleCoachLessonUpdate({ res, session, db, booking, bookingRef, 
     return res.status(403).json({ ok: false, error: 'Coach or admin only' });
   }
   // A coach may only act on bookings assigned to them.
+  // (Coach V2: identity comes from the LINE token bridge — revocation is
+  //  per-request via coaches.active/lineUserId, no sessionVersion needed.)
   if (isCoach && booking.coachId !== session.name) {
     return res.status(403).json({ ok: false, error: 'This booking is not assigned to you' });
-  }
-  // Coach 2A: enforce session revocation (sv). A PIN reset invalidates old cookies.
-  if (isCoach) {
-    try {
-      const a = await db.collection('coach_auth').doc(session.name).get();
-      const storedSv = a.exists ? (Number(a.data().sessionVersion) || 1) : 1;
-      if ((session.sv ?? 1) !== storedSv) {
-        return res.status(401).json({ ok: false, error: 'Session revoked — please log in again' });
-      }
-    } catch (e) { console.warn('[coach_lesson_update] sv check:', e.message); }
   }
   if (!hasBranchAccess(session, resolveBranchId(booking))) {
     return res.status(403).json({ ok: false, error: 'No access to this branch' });
@@ -1662,6 +1663,15 @@ async function handleCoachLessonUpdate({ res, session, db, booking, bookingRef, 
     const tsMap     = { check_in: 'coachCheckedInAt', complete: 'coachCompletedAt', no_show: 'coachNoShowAt' };
     update.lessonStatus     = statusMap[lessonAction];
     update[tsMap[lessonAction]] = FieldValue.serverTimestamp();
+    // Coach V2 payout lifecycle: a completed lesson with a payout amount
+    // becomes PAYABLE — it then appears in the admin "ค้างโอนโค้ช" list.
+    // Never downgrade an already-paid payout.
+    if (lessonAction === 'complete' &&
+        Number(booking.coachPayoutAmount) > 0 &&
+        booking.coachPayoutStatus !== 'paid') {
+      update.coachPayoutStatus = 'payable';
+      update.coachPayoutPayableAt = FieldValue.serverTimestamp();
+    }
   }
 
   try {
@@ -1678,4 +1688,95 @@ async function handleCoachLessonUpdate({ res, session, db, booking, bookingRef, 
     after:  { lessonAction, lessonStatus: update.lessonStatus ?? booking.lessonStatus ?? null },
   });
   return res.status(200).json({ ok: true, lessonStatus: update.lessonStatus ?? booking.lessonStatus ?? null });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// handleCoachPayoutPaid — branch_manager+ records the per-lesson transfer to
+// the coach (owner rule: โอนรายคาบ). paid is terminal; a Staff expense is
+// created in Finance on today's Bangkok date (idempotent via payoutExpenseId,
+// same pattern as refunds). Never touches booking price/paymentStatus.
+// ════════════════════════════════════════════════════════════════════
+async function handleCoachPayoutPaid({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+  if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+  if (!hasBranchAccess(session, resolveBranchId(booking))) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
+  }
+  const amount = Number(booking.coachPayoutAmount);
+  if (!booking.coachId || !(amount > 0)) {
+    return res.status(409).json({ ok: false, error: 'Booking has no coach payout' });
+  }
+  if (booking.coachPayoutStatus === 'paid') {
+    return res.status(409).json({ ok: false, error: 'Payout already recorded as paid' });
+  }
+  // Legacy tolerance: lessons completed before this deploy still say "pending".
+  if (booking.lessonStatus !== 'completed') {
+    return res.status(409).json({ ok: false, error: 'Lesson is not completed yet' });
+  }
+  const note = typeof body.note === 'string' ? body.note.trim().slice(0, 200) : '';
+
+  const today = bangkokDateISO();
+  const expNote = [
+    `Coach payout: ${booking.bookingCode || bookingId}`,
+    `coach ${booking.coachName || booking.coachId}`,
+    booking.date ? `lesson ${booking.date}` : '',
+    (booking.startTime && booking.endTime) ? `${booking.startTime}–${booking.endTime}` : '',
+    note ? `| ${note}` : '',
+  ].filter(Boolean).join(' ').slice(0, 400);
+
+  const batch = db.batch();
+  const existingExpId = booking.payoutExpenseId || null;
+  let expId = existingExpId;
+  if (existingExpId) {
+    batch.update(db.collection('finance_expenses').doc(existingExpId), {
+      amount, date: today, note: expNote,
+      vendor: String(booking.coachName || booking.coachId).slice(0, 200),
+      updatedByAdmin: adminName, updatedAt: FieldValue.serverTimestamp(),
+      deleted: false, deletedAt: null, deletedBy: null,
+    });
+  } else {
+    const expRef = db.collection('finance_expenses').doc();
+    expId = expRef.id;
+    batch.set(expRef, {
+      businessUnit: 'ultra_tennis',
+      date: today,
+      category: 'Staff',
+      amount,
+      paymentMethod: 'Transfer',
+      vendor: String(booking.coachName || booking.coachId).slice(0, 200),
+      note: expNote,
+      deleted: false,
+      autoCreated: true,
+      sourceType: 'coach_payout',
+      sourceBookingId: bookingId,
+      addedByAdmin: adminName,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }
+  batch.update(bookingRef, {
+    coachPayoutStatus: 'paid',
+    payoutPaidAt:      FieldValue.serverTimestamp(),
+    payoutPaidBy:      adminName,
+    payoutNote:        note || null,
+    payoutExpenseId:   expId,
+    updatedAt:         FieldValue.serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+  } catch (e) {
+    console.error('[coach_payout_paid] commit:', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to record payout' });
+  }
+
+  console.log(`[coach_payout_paid] ${booking.bookingCode || bookingId} coach:${booking.coachId} ฿${amount} by ${adminName}`);
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
+    action: 'coach_payout_paid', targetId: bookingId,
+    before: { coachPayoutStatus: booking.coachPayoutStatus ?? 'pending' },
+    after:  { coachPayoutStatus: 'paid', amount, payoutExpenseId: expId },
+  });
+  return res.status(200).json({ ok: true, payoutExpenseId: expId, amount });
 }

@@ -24,10 +24,10 @@
 
 import {
   verifySession, requireRole, hasBranchAccess, resolveBranchId, DEFAULT_BRANCH_ID,
-  randomResetCode, hashResetCode, verifyResetCode, hashPin, getAdminUser,
+  getAdminUser, coachSessionFromToken,
 } from './_lib/admin-auth.js';
 import {
-  getAdminDb, serializeFsDoc, writeAuditLog,
+  getAdminDb, getAdminAuth, serializeFsDoc, writeAuditLog,
   BRANCH_STATUSES, statusFlags,
 } from './_lib/firebase-admin.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
@@ -42,9 +42,16 @@ const VALID_ACTIONS = [
   'slot_bulk_set', 'slot_close_unbooked', 'slot_toggle', 'holiday_set',
   'auth_metric',
   'coach_create', 'coach_list', 'coach_set_active', 'coach_my_bookings',
-  'coach_reset_code', 'coach_set_pin',
+  'coach_whoami', 'coach_update_profile', 'coach_link_line',
   'coach_availability_get', 'coach_availability_set', 'coach_update_rates',
   'shop_open_days', 'coach_delete',
+];
+
+// Coach V2: actions a coach may call with a LINE-derived Firebase ID token
+// (body.idToken) instead of an admin session cookie.
+const COACH_TOKEN_ACTIONS = [
+  'coach_my_bookings', 'coach_availability_get', 'coach_availability_set',
+  'coach_update_profile', 'shop_open_days',
 ];
 
 // Coach login name = coaches doc id = booking.coachName. Keep it Firestore-id
@@ -205,12 +212,17 @@ export default async function handler(req, res) {
   if (action === 'auth_metric') {
     return handleAuthMetric(req, res, body);
   }
-  if (action === 'coach_set_pin') {
-    return handleCoachSetPin(res, body);   // public — gated by admin-issued reset code
+  if (action === 'coach_whoami') {
+    return handleCoachWhoami(res, body);   // token-based; no token → isCoach:false
   }
 
-  // ── Everything else requires a valid admin session ─────────────────
-  const session = verifySession(req);
+  // ── Everything else requires an admin session OR (for the coach-scoped
+  //    actions) a LINE-derived Firebase ID token (Coach V2) ────────────
+  let session = verifySession(req);
+  if (!session && COACH_TOKEN_ACTIONS.includes(action) && typeof body.idToken === 'string') {
+    const db = getDbOr500(res); if (!db) return;
+    session = await coachSessionFromToken(body.idToken, { auth: getAdminAuth(), db });
+  }
   if (!session) return res.status(401).json({ ok: false, error: 'Unauthorized' });
 
   switch (action) {
@@ -232,7 +244,8 @@ export default async function handler(req, res) {
     case 'coach_list':             return handleCoachList(res, session, body);
     case 'coach_set_active':       return handleCoachSetActive(res, session, body);
     case 'coach_my_bookings':      return handleCoachMyBookings(res, session, body);
-    case 'coach_reset_code':       return handleCoachResetCode(res, session, body);
+    case 'coach_update_profile':   return handleCoachUpdateProfile(res, session, body);
+    case 'coach_link_line':        return handleCoachLinkLine(res, session, body);
     case 'coach_availability_get': return handleCoachAvailabilityGet(res, session, body);
     case 'coach_availability_set': return handleCoachAvailabilitySet(res, session, body);
     case 'coach_update_rates':     return handleCoachUpdateRates(res, session, body);
@@ -1110,28 +1123,20 @@ async function handleCoachMyBookings(res, session, body) {
   }
 
   const db = getDbOr500(res); if (!db) return;
-
-  // Coach 2A: enforce session revocation — a PIN reset bumps sessionVersion,
-  // invalidating older cookies. (Fail-open on read error; the cookie is still
-  // cryptographically valid, sv is an extra revocation layer.)
-  if (isCoach) {
-    try {
-      const a = await db.collection('coach_auth').doc(coachId).get();
-      const storedSv = a.exists ? (Number(a.data().sessionVersion) || 1) : 1;
-      if ((session.sv ?? 1) !== storedSv) {
-        return res.status(401).json({ ok: false, error: 'Session revoked — please log in again' });
-      }
-    } catch (e) { console.warn('[coach_my_bookings] sv check:', e.message); }
-  }
+  // Coach V2: revocation = coaches.active/lineUserId, enforced per-request by
+  // coachSessionFromToken — the old coach_auth sessionVersion check is gone.
 
   const nowBkk  = new Date(Date.now() + 7 * 3600 * 1000);
   const today   = nowBkk.toISOString().slice(0, 10);
   const horizon = new Date(nowBkk.getTime() + 60 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  // Coach V2 earnings tab: sinceMonthStart=true widens the window back to the
+  // 1st of the current month so completed lessons + payout states are visible.
+  const start = body.sinceMonthStart === true ? `${today.slice(0, 8)}01` : today;
 
   try {
     // Single-field date range (no composite index). coachId + branch filtered in memory.
     const snap = await db.collection('bookings')
-      .where('date', '>=', today).where('date', '<=', horizon).get();
+      .where('date', '>=', start).where('date', '<=', horizon).get();
     const items = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
       .filter(b => b.coachId === coachId)
@@ -1151,6 +1156,10 @@ async function handleCoachMyBookings(res, session, body) {
       coachCheckedInAt: b.coachCheckedInAt?.toMillis?.() ?? null,
       coachCompletedAt: b.coachCompletedAt?.toMillis?.() ?? null,
       coachNoShowAt:    b.coachNoShowAt?.toMillis?.() ?? null,
+      // Coach V2: the coach's OWN payout data (never customer payment info).
+      coachPayoutAmount: Number(b.coachPayoutAmount) > 0 ? Number(b.coachPayoutAmount) : null,
+      coachPayoutStatus: b.coachPayoutStatus ?? null,
+      serviceType:       b.serviceType ?? null,
     })).sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
 
     return res.status(200).json({ ok: true, coachId, today, bookings });
@@ -1160,103 +1169,121 @@ async function handleCoachMyBookings(res, session, body) {
   }
 }
 
-// coach_reset_code — branch_manager+. Generates a one-time setup/reset code for
-// an ACTIVE coach, stores only its HASH (+30min expiry), and returns the code
-// ONCE to the admin. Admin gives it to the coach out-of-band. Admin never sees
-// the coach's PIN; the code is only a setup token. Never logs the code.
-async function handleCoachResetCode(res, session, body) {
-  if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
-    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
-  }
-  const coachId = typeof body.coachId === 'string' ? body.coachId.trim() : '';
-  if (!coachId) return res.status(400).json({ ok: false, error: 'Missing coachId' });
+// ════════════════════════════════════════════════════════════════════
+// Coach V2 — LINE-linked identity (PIN system retired 2026-07)
+// ════════════════════════════════════════════════════════════════════
 
+// coach_whoami — PUBLIC + token. The customer app (index.html) and coach.html
+// call this after LIFF login to learn whether this LINE account is an active
+// coach. No token / not a coach → { isCoach:false } (never an error, so the
+// home card can fail closed silently).
+async function handleCoachWhoami(res, body) {
   const db = getDbOr500(res); if (!db) return;
-  try {
-    const cs = await db.collection('coaches').doc(coachId).get();
-    if (!cs.exists) return res.status(404).json({ ok: false, error: 'Coach not found' });
-    const coach = cs.data();
-    if (!hasBranchAccess(session, resolveBranchId(coach))) {
-      return res.status(403).json({ ok: false, error: 'No access to this branch' });
-    }
-    if (coach.active === false) {
-      return res.status(409).json({ ok: false, error: 'Coach is inactive' });
-    }
-
-    const code = randomResetCode();
-    const authRef  = db.collection('coach_auth').doc(coachId);
-    const authSnap = await authRef.get();
-    // Bump sessionVersion on issue → any existing coach session is revoked
-    // immediately (covers a compromised/lost-device reset).
-    const sv = (authSnap.exists ? (Number(authSnap.data().sessionVersion) || 1) : 0) + 1;
-
-    await authRef.set({
-      coachId,
-      resetTokenHash:      hashResetCode(code),
-      resetTokenExpiresAt: Timestamp.fromMillis(Date.now() + 30 * 60 * 1000),
-      resetFailedAttempts: 0,
-      sessionVersion:      sv,
-      updatedAt:           FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    await writeAuditLog(db, {
-      actor: session.name, actorRole: session.role, branchId: resolveBranchId(coach),
-      action: 'coach_reset_code', targetId: `coach_auth/${coachId}`,
-      after: { expiresInMinutes: 30 },   // never log the code
-    });
-    return res.status(200).json({ ok: true, coachId, code, expiresInMinutes: 30 });
-  } catch (e) {
-    console.error('[coach_reset_code]', e.message);
-    return res.status(500).json({ ok: false, error: 'Failed to generate reset code' });
-  }
+  const s = await coachSessionFromToken(body.idToken, { auth: getAdminAuth(), db });
+  if (!s) return res.status(200).json({ ok: true, isCoach: false });
+  return res.status(200).json({
+    ok: true, isCoach: true,
+    coachId:     s.name,
+    displayName: s.coach.displayName || s.name,
+    bio:         typeof s.coach.bio === 'string' ? s.coach.bio : '',
+    photoUrl:    s.coach.photoUrl ?? null,
+    lessonPrice: Number.isInteger(s.coach.lessonPrice) ? s.coach.lessonPrice : null,
+  });
 }
 
-// coach_set_pin — PUBLIC (coach isn't logged in yet). Gated by the one-time
-// admin-issued reset code. Sets pinHash (scrypt), clears the token, and bumps
-// sessionVersion to revoke older sessions. Never stores/returns plaintext.
-async function handleCoachSetPin(res, body) {
-  const coachId = typeof body.coachId === 'string' ? body.coachId.trim() : '';
-  const code    = typeof body.code    === 'string' ? body.code.trim()    : '';
-  const newPin  = typeof body.newPin  === 'string' ? body.newPin.trim()  : '';
-  if (!coachId || !code) return res.status(400).json({ ok: false, error: 'coachId and code are required' });
-  if (!/^\d{6}$/.test(newPin)) return res.status(400).json({ ok: false, error: 'PIN must be exactly 6 digits' });
-
+// coach_update_profile — coach (own, via token) or branch_manager+ (coachId).
+// PROFILE FIELDS ONLY (owner ruling): displayName / bio / photoUrl.
+// lessonPrice + payoutPerHour stay admin-only via coach_update_rates.
+async function handleCoachUpdateProfile(res, session, body) {
   const db = getDbOr500(res); if (!db) return;
-  const ref = db.collection('coach_auth').doc(coachId);
+  if (session.role !== 'coach' && !requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+  let actor;
+  try { actor = await resolveCoachActor(res, session, body, db); }
+  catch (e) { console.error('[coach_update_profile] actor:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+  if (!actor) return;
+  const { coachId, coach } = actor;
+
+  const update = {};
+  if (typeof body.displayName === 'string') {
+    const v = body.displayName.trim().slice(0, 60);
+    if (!v) return res.status(400).json({ ok: false, error: 'displayName must not be empty' });
+    update.displayName = v;
+  }
+  if (typeof body.bio === 'string') update.bio = body.bio.trim().slice(0, 500);
+  if (typeof body.photoUrl === 'string') {
+    const v = body.photoUrl.trim().slice(0, 500);
+    if (v && !/^https:\/\//.test(v)) return res.status(400).json({ ok: false, error: 'photoUrl must be https' });
+    update.photoUrl = v || null;
+  }
+  if (!Object.keys(update).length) return res.status(400).json({ ok: false, error: 'Nothing to update' });
+
   try {
-    const snap = await ref.get();
-    if (!snap.exists) return res.status(400).json({ ok: false, error: 'Invalid code' });
-    const auth = snap.data();
-    const exp  = auth.resetTokenExpiresAt?.toMillis?.() ?? 0;
-    if (!auth.resetTokenHash || exp < Date.now()) {
-      return res.status(400).json({ ok: false, error: 'Code expired or not set — ask admin to reissue' });
-    }
-    if (!verifyResetCode(code, auth.resetTokenHash)) {
-      // Rate guard: cap guesses per code, then invalidate → admin must reissue.
-      const attempts = (Number(auth.resetFailedAttempts) || 0) + 1;
-      const upd = { resetFailedAttempts: attempts, updatedAt: FieldValue.serverTimestamp() };
-      if (attempts >= 10) { upd.resetTokenHash = null; upd.resetTokenExpiresAt = null; }
-      try { await ref.update(upd); } catch { /* non-fatal */ }
-      return res.status(401).json({
-        ok: false,
-        error: attempts >= 10 ? 'Too many attempts — ask admin to reissue the code' : 'Invalid code',
-      });
-    }
-    const sv = (Number(auth.sessionVersion) || 1) + 1;   // bump → revoke old sessions
-    await ref.update({
-      pinHash:             hashPin(newPin),
-      pinSetAt:            FieldValue.serverTimestamp(),
-      resetTokenHash:      null,
-      resetTokenExpiresAt: null,
-      sessionVersion:      sv,
-      failedAttempts:      0,
-      lockedUntil:         null,
-      updatedAt:           FieldValue.serverTimestamp(),
+    update.profileUpdatedAt = FieldValue.serverTimestamp();
+    update.updatedAt        = FieldValue.serverTimestamp();
+    await db.collection('coaches').doc(coachId).update(update);
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: resolveBranchId(coach),
+      action: 'coach_update_profile', targetId: `coaches/${coachId}`,
+      before: { displayName: coach.displayName ?? null, bio: coach.bio ?? null, photoUrl: coach.photoUrl ?? null },
+      after:  { displayName: update.displayName ?? coach.displayName ?? null, bio: update.bio ?? coach.bio ?? null, photoUrl: update.photoUrl !== undefined ? update.photoUrl : (coach.photoUrl ?? null) },
     });
     return res.status(200).json({ ok: true });
   } catch (e) {
-    console.error('[coach_set_pin]', e.message);
-    return res.status(500).json({ ok: false, error: 'Failed to set PIN' });
+    console.error('[coach_update_profile]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to update profile' });
+  }
+}
+
+// coach_link_line — branch_manager+. Links (or unlinks with lineUserId:null)
+// a verified customer LINE account to a coach. The link IS the coach's login:
+// grant only to people the shop has actually talked to (owner rule).
+async function handleCoachLinkLine(res, session, body) {
+  if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+  const coachId    = typeof body.coachId === 'string' ? body.coachId.trim() : '';
+  const lineUserId = body.lineUserId === null ? null
+    : (typeof body.lineUserId === 'string' ? body.lineUserId.trim() : '');
+  if (!coachId) return res.status(400).json({ ok: false, error: 'Missing coachId' });
+  // LINE user ids are "U" + 32 hex chars. Reject placeholders outright.
+  if (lineUserId !== null && !/^U[0-9a-f]{32}$/i.test(lineUserId)) {
+    return res.status(400).json({ ok: false, error: 'lineUserId must be a real LINE userId (U + 32 hex)' });
+  }
+
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    const ref  = db.collection('coaches').doc(coachId);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ ok: false, error: 'Coach not found' });
+    const coach = snap.data();
+    if (!hasBranchAccess(session, resolveBranchId(coach))) {
+      return res.status(403).json({ ok: false, error: 'No access to this branch' });
+    }
+    // One LINE account ↔ one coach: block linking an id already on another coach.
+    if (lineUserId) {
+      const dup = await db.collection('coaches').where('lineUserId', '==', lineUserId).limit(1).get();
+      if (!dup.empty && dup.docs[0].id !== coachId) {
+        return res.status(409).json({ ok: false, error: `LINE account already linked to coach "${dup.docs[0].id}"` });
+      }
+    }
+    await ref.update({
+      lineUserId,
+      lineLinkedBy: session.name,
+      lineLinkedAt: lineUserId ? FieldValue.serverTimestamp() : null,
+      updatedAt:    FieldValue.serverTimestamp(),
+    });
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: resolveBranchId(coach),
+      action: 'coach_link_line', targetId: `coaches/${coachId}`,
+      before: { lineUserId: coach.lineUserId ?? null },
+      after:  { lineUserId },
+    });
+    return res.status(200).json({ ok: true, coachId, linked: !!lineUserId });
+  } catch (e) {
+    console.error('[coach_link_line]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to link LINE account' });
   }
 }
 
@@ -1275,14 +1302,15 @@ const HOUR_RE = /^\d{2}:\d{2}$/;
 const availDocId = (coachId, date, hour) => `${coachId}_${date}_${String(hour).replace(':', '')}`;
 const bangkokTodayISO = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
-// Coach session revocation check — same rule as coach_my_bookings (fail-open
-// on read error; mismatch = revoked).
-async function coachSessionRevoked(db, session) {
-  try {
-    const a = await db.collection('coach_auth').doc(session.name).get();
-    const storedSv = a.exists ? (Number(a.data().sessionVersion) || 1) : 1;
-    return (session.sv ?? 1) !== storedSv;
-  } catch (e) { console.warn('[coach sv]', e.message); return false; }
+// Coach V2 horizon (owner rule, calendar months): a coach may manage
+// availability up to the end of the CURRENT month; from the 25th the NEXT
+// month opens too. Returns the max editable date (YYYY-MM-DD, Bangkok).
+function coachAvailHorizonISO() {
+  const bkk = new Date(Date.now() + 7 * 3600 * 1000);
+  const y = bkk.getUTCFullYear(), m = bkk.getUTCMonth(), d = bkk.getUTCDate();
+  const monthsAhead = d >= 25 ? 2 : 1;
+  // Day 0 of month+N = last day of month+N-1.
+  return new Date(Date.UTC(y, m + monthsAhead, 0)).toISOString().slice(0, 10);
 }
 
 // A booking blocks its coach hour when it is confirmed/paid/pending_review,
@@ -1306,10 +1334,6 @@ async function resolveCoachActor(res, session, body, db) {
   const isStaff = requireRole(session, 'branch_staff');
   if (!isCoach && !isMgr && !isStaff) {
     res.status(403).json({ ok: false, error: 'Coach or admin only' });
-    return null;
-  }
-  if (isCoach && await coachSessionRevoked(db, session)) {
-    res.status(401).json({ ok: false, error: 'Session revoked — please log in again' });
     return null;
   }
   const coachId = isCoach ? session.name : (typeof body.coachId === 'string' ? body.coachId.trim() : '');
@@ -1390,13 +1414,27 @@ async function handleCoachAvailabilitySet(res, session, body) {
   const open = body.open === true;
   if (!DATE_RE.test(date)) return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
   if (!HOUR_RE.test(hour)) return res.status(400).json({ ok: false, error: 'hour must be HH:mm' });
-  if (date < bangkokTodayISO()) return res.status(400).json({ ok: false, error: 'วันที่ผ่านมาแล้ว' });
+  const todayISO = bangkokTodayISO();
+  if (date < todayISO) return res.status(400).json({ ok: false, error: 'วันที่ผ่านมาแล้ว' });
 
   const db = getDbOr500(res); if (!db) return;
 
   // Coaches manage their own; admins need branch_manager+ to edit others.
   if (session.role !== 'coach' && !requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
     return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+
+  // Coach V2 rules (owner 2026-07) — apply to COACHES only; admins override:
+  //  • horizon: current calendar month, + next month from the 25th
+  //  • closing a day is allowed only until midnight the day BEFORE
+  //    (close the 21st → must be done on/before the 20th, Bangkok time)
+  if (session.role === 'coach') {
+    if (date > coachAvailHorizonISO()) {
+      return res.status(400).json({ ok: false, error: 'ตั้งเวลาว่างได้ถึงสิ้นเดือนนี้ (เดือนหน้าเปิดให้ตั้งตั้งแต่วันที่ 25)' });
+    }
+    if (!open && date <= todayISO) {
+      return res.status(400).json({ ok: false, error: 'ปิดวันเดียวกันไม่ได้ — ต้องปิดล่วงหน้าอย่างน้อย 1 วัน (ติดต่อแอดมินหากจำเป็น)' });
+    }
   }
   let actor;
   try { actor = await resolveCoachActor(res, session, body, db); }
