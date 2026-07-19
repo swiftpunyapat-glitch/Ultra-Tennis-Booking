@@ -508,6 +508,16 @@
           <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="registerSub">Verify name/phone for passes</div>
         </div>
       </button>
+      <!-- Coach V2: visible ONLY when this LINE account is an active coach
+           (server-checked via coach_whoami — hidden card is cosmetic, the
+           real gate is on every coach API call). -->
+      <button class="hcard" id="btnCoachMode" style="display:none;flex-direction:row;align-items:center;gap:14px;padding:20px 18px;border-color:var(--brand)">
+        <div class="hcard-icon" style="font-size:2rem">🎾</div>
+        <div>
+          <div class="hcard-label" style="font-size:1rem">Coach Mode</div>
+          <div class="hcard-sub" id="coachModeSub" style="font-size:.8rem;margin-top:3px">เข้าหน้าโค้ช · ตารางสอน · เวลาว่าง · รายได้</div>
+        </div>
+      </button>
       <button class="hcard" id="btnPromotions" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
         <div class="hcard-icon" style="font-size:2rem">🎫</div>
         <div>
@@ -1636,6 +1646,8 @@ function setupNav() {
   $("ckName").addEventListener("input", updateCkConfirm);
   $("ckPhone").addEventListener("input", updateCkConfirm);
   initCoachHome();
+  initCoachModeCard();
+  $("btnCoachMode").addEventListener("click", ()=>{ location.href="/coach.html"; });
   initPassSelfPurchase();
   $("btnMyBookings").addEventListener("click",()=>{ activeMyNav="bookings"; openMyBookings(); });
   $("btnRegister").addEventListener("click", ()=>{ openRegisterView(); });
@@ -3551,6 +3563,25 @@ $("pbConfirmBtn").addEventListener("click", async()=>{
 // coach hour in one server transaction (create_coach_lesson). Payment/slip/
 // cancel then reuse the existing machinery unchanged.
 let ckCoaches=[], ckSel=null, ckDate=null, ckTime=null, ckBusy=false;
+
+// ── Coach V2: "Coach Mode" home card — shown only when the signed-in LINE
+// account is an active coach. Needs the Firebase custom-token sign-in to have
+// completed (uid = lineUserId); retries once shortly after in case auth was
+// still in flight when the home view bound. Fail-closed: any error = hidden.
+async function initCoachModeCard(attempt=0){
+  try{
+    const u = fbAuth.currentUser;
+    if(!u){ if(attempt<3) setTimeout(()=>initCoachModeCard(attempt+1), 2500); return; }
+    const idToken = await u.getIdToken();
+    const r = await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"coach_whoami",idToken})});
+    const d = await r.json().catch(()=>null);
+    if(r.ok&&d&&d.ok&&d.isCoach){
+      $("coachModeSub").textContent = `${d.displayName||""} · ตารางสอน · เวลาว่าง · รายได้`;
+      $("btnCoachMode").style.display = "flex";
+    }
+  }catch(e){ console.warn("[coachmode] whoami failed (card stays hidden):", e); }
+}
 
 async function initCoachHome(){
   try{

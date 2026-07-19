@@ -670,6 +670,13 @@
     </div>
     <div id="coachListBox" style="display:flex;flex-direction:column;gap:8px"></div>
 
+    <!-- Coach V2: per-lesson payouts awaiting transfer (complete → payable → paid) -->
+    <div class="smcard" style="margin-top:14px">
+      <h2>💸 ค้างโอนโค้ช (รายคาบ)</h2>
+      <p style="font-size:.74rem;color:var(--m);margin-bottom:10px">คาบที่โค้ชกด "สอนเสร็จ" แล้วรอร้านโอนค่าตัว — กด "บันทึกโอนแล้ว" หลังโอนจริง ระบบจะลงรายจ่าย (Staff) ใน Finance ให้อัตโนมัติ</p>
+      <div id="payoutListBox" style="display:flex;flex-direction:column;gap:8px"><div class="smempty">Loading...</div></div>
+    </div>
+
     <!-- Admin-managed coach availability (Stage A): open/close hours on a
          coach's behalf (e.g. coach calls in). Same server rules as coach.html:
          open only shop-open hours, cannot close an hour with a live booking. -->
@@ -1377,15 +1384,17 @@ async function renderCoachTab(){
     box.innerHTML = coachCache.map(c=>{
       const active = c.active !== false;
       const hasRates=Number(c.lessonPrice)>0;
+      const linked = !!c.lineUserId;
       return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--s1);border:1px solid var(--bd);border-radius:8px;padding:10px 12px">
         <div>
           <div style="font-weight:800;font-size:.85rem">${esc(c.displayName||c.name)} ${active?'':'<span style="color:var(--m);font-weight:400">(inactive)</span>'}</div>
-          <div style="font-size:.7rem;color:var(--m)">login: ${esc(c.name)} · branch: ${esc(c.branchId||"ladprao1")}</div>
+          <div style="font-size:.7rem;color:var(--m)">id: ${esc(c.name)} · branch: ${esc(c.branchId||"ladprao1")}</div>
           <div style="font-size:.7rem;color:${hasRates?'#2fbf76':'var(--warn)'}">${hasRates?`lesson ฿${Number(c.lessonPrice)}/ชม. (รวมห้อง) · payout ฿${Number(c.payoutPerHour)||500}/ชม.`:'⚠ ยังไม่ตั้งราคา — ลูกค้าจองโค้ชคนนี้ไม่ได้'}</div>
+          <div style="font-size:.7rem;color:${linked?'#2fbf76':'var(--warn)'}">${linked?'🔗 LINE linked — โค้ชเข้าระบบได้':'⚠ ยังไม่ผูก LINE — โค้ชล็อกอินไม่ได้'}</div>
         </div>
-        <div style="display:flex;gap:6px;flex-shrink:0">
+        <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">
           <button class="smbtn" data-coach-rates="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#0f2d1e;color:#2fbf76;border:1px solid #2fbf76">💰 Rates</button>
-          ${active?`<button class="smbtn" data-coach-reset="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#1e2f4d;color:#8fb8ff;border:1px solid #2d4a7a">🔑 Reset PIN</button>`:''}
+          <button class="smbtn" data-coach-line="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#1e2f4d;color:#8fb8ff;border:1px solid #2d4a7a">${linked?'🔗 เปลี่ยน/ถอน LINE':'🔗 ผูก LINE'}</button>
           <button class="smbtn ${active?'':'smg'}" data-coach-toggle="${esc(c.id)}" data-coach-active="${active?'1':'0'}" style="padding:6px 12px;font-size:.75rem">${active?'Deactivate':'Activate'}</button>
           ${!active?`<button class="smbtn" data-coach-del="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#5a0a0a;color:#ff9b9b;border:1px solid var(--dan)">🗑 Delete</button>`:''}
         </div>
@@ -1413,19 +1422,59 @@ async function renderCoachTab(){
         }catch(e){ console.error(e); showToast("Failed.",true); btn.disabled=false; }
       });
     });
-    box.querySelectorAll("[data-coach-reset]").forEach(btn=>{
+    // Coach V2: link a customer's LINE account to the coach — the link IS the
+    // coach's login. Search by phone against booking history (same client-read
+    // pattern as the manual-booking phone lookup).
+    box.querySelectorAll("[data-coach-line]").forEach(btn=>{
       btn.addEventListener("click", async ()=>{
-        const coachId = btn.dataset.coachReset;
-        if(!confirm(`สร้างโค้ดตั้ง/รีเซ็ต PIN สำหรับ ${coachId}?\n(โค้ดเดิมและ session เดิมจะใช้ไม่ได้หลังโค้ชตั้ง PIN ใหม่)`)) return;
+        const coachId = btn.dataset.coachLine;
+        const c = coachCache.find(x=>x.id===coachId)||{};
+        if(c.lineUserId && confirm(`${coachId} ผูก LINE อยู่แล้ว\n\nOK = ถอนการผูก (โค้ชจะล็อกอินไม่ได้)\nCancel = ผูกบัญชีใหม่แทน`)){
+          btn.disabled=true;
+          try{
+            const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_link_line",coachId,lineUserId:null})});
+            const data=await res.json().catch(()=>({}));
+            if(!res.ok||!data.ok){ showToast(data.error||"Failed.",true); }
+            else { showToast(`ถอน LINE ของ ${coachId} แล้ว`); renderCoachTab(); }
+          }catch(e){ console.error(e); showToast("Failed.",true); }
+          finally{ btn.disabled=false; }
+          return;
+        }
+        const phoneRaw = prompt(`ผูก LINE ให้โค้ช ${coachId}\n\nกรอกเบอร์โทรของโค้ช (ต้องเคย Register/จองผ่าน LINE ในระบบแล้ว):`);
+        if(phoneRaw===null) return;
+        const np = normalizePhone(phoneRaw);
+        if(np.length<9){ showToast("เบอร์โทรไม่ถูกต้อง",true); return; }
         btn.disabled=true;
         try{
-          const res = await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_reset_code",coachId})});
-          const data = await res.json().catch(()=>({}));
-          if(!res.ok||!data.ok){ showToast(data.error||"Failed.",true); btn.disabled=false; return; }
-          window.prompt(`โค้ดตั้ง/รีเซ็ต PIN ของ ${coachId} — หมดอายุใน ${data.expiresInMinutes} นาที\n\nให้โค้ชเปิด /coach.html → "ตั้ง/รีเซ็ต PIN" แล้วกรอกโค้ดนี้ (คัดลอกได้):`, data.code);
-          showToast("สร้างโค้ดแล้ว");
-        }catch(e){ console.error(e); showToast("Failed.",true); }
-        finally{ btn.disabled=false; }
+          const [snapNorm,snapRaw]=await Promise.all([
+            getDocs(query(collection(db,"bookings"),where("customerPhoneNormalized","==",np))),
+            getDocs(query(collection(db,"bookings"),where("customerPhone","==",phoneRaw.trim()))),
+          ]);
+          const cand={};
+          [...snapNorm.docs,...snapRaw.docs].forEach(d=>{
+            const b=d.data();
+            if(b.lineUserId&&b.lineUserId!=="guest"&&b.lineUserId!=="manual"&&/^U[0-9a-f]{32}$/i.test(b.lineUserId)){
+              cand[b.lineUserId]={name:b.customerName||"—",lineName:b.lineDisplayName||""};
+            }
+          });
+          const ids=Object.keys(cand);
+          if(!ids.length){ showToast("ไม่พบบัญชี LINE จากเบอร์นี้ — ให้โค้ชจอง/Register ผ่าน LINE ก่อน 1 ครั้ง",true); btn.disabled=false; return; }
+          let pick=ids[0];
+          if(ids.length>1){
+            const listing=ids.map((id,i)=>`${i+1}. ${cand[id].name}${cand[id].lineName?` (LINE: ${cand[id].lineName})`:""}`).join("\n");
+            const sel=prompt(`พบ ${ids.length} บัญชี เลือกหมายเลข:\n${listing}`, "1");
+            if(sel===null){ btn.disabled=false; return; }
+            const idx=parseInt(sel,10)-1;
+            if(!(idx>=0&&idx<ids.length)){ showToast("หมายเลขไม่ถูกต้อง",true); btn.disabled=false; return; }
+            pick=ids[idx];
+          }
+          if(!confirm(`ผูก LINE ของ "${cand[pick].name}"${cand[pick].lineName?` (${cand[pick].lineName})`:""} เข้ากับโค้ช ${coachId}?\n\nบัญชีนี้จะเข้า Coach Mode ได้ทันที`)){ btn.disabled=false; return; }
+          const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_link_line",coachId,lineUserId:pick})});
+          const data=await res.json().catch(()=>({}));
+          if(!res.ok||!data.ok){ showToast(data.error||"ผูกไม่สำเร็จ",true); btn.disabled=false; return; }
+          showToast(`✓ ผูก LINE ให้ ${coachId} แล้ว`);
+          renderCoachTab();
+        }catch(e){ console.error(e); showToast("ผูกไม่สำเร็จ",true); btn.disabled=false; }
       });
     });
     box.querySelectorAll("[data-coach-toggle]").forEach(btn=>{
@@ -1471,6 +1520,49 @@ async function renderCoachTab(){
       if(prev&&coachCache.some(c=>c.id===prev&&c.active!==false)){ cavSel.value=prev; }
     }
   }catch(e){ console.error(e); box.innerHTML = `<div class="smempty">❌ ${esc(e.message||"Failed")}</div>`; }
+  renderPayoutList();
+}
+
+// ── Coach V2: per-lesson payouts awaiting transfer ──────────────────
+// bookings where coachPayoutStatus == "payable" (set when the coach marks a
+// lesson completed). "บันทึกโอนแล้ว" → operation coach_payout_paid → the
+// server flips it to paid + auto-creates the Staff expense in Finance.
+async function renderPayoutList(){
+  const box=$("payoutListBox");
+  if(!box) return;
+  box.innerHTML=`<div class="smempty">Loading...</div>`;
+  try{
+    const snap=await getDocs(query(collection(db,"bookings"),where("coachPayoutStatus","==","payable")));
+    const items=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>`${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
+    if(!items.length){ box.innerHTML=`<div class="smempty">ไม่มีรายการค้างโอน 🎉</div>`; return; }
+    const total=items.reduce((s,b)=>s+(Number(b.coachPayoutAmount)||0),0);
+    box.innerHTML=`<div style="font-size:.74rem;color:var(--warn);font-weight:800">${items.length} คาบ · รวม ฿${total.toLocaleString("en-US")}</div>`+
+      items.map(b=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--s1);border:1px solid var(--bd);border-radius:8px;padding:10px 12px">
+        <div>
+          <div style="font-weight:800;font-size:.82rem">${esc(b.coachName||b.coachId||"—")} · ฿${Number(b.coachPayoutAmount||0).toLocaleString("en-US")}</div>
+          <div style="font-size:.7rem;color:var(--m)">${esc(b.bookingCode||"—")} · ${esc(b.date||"—")} ${esc(b.startTime||"")}–${esc(b.endTime||"")} · ลูกค้า ${esc(b.customerName||"—")}</div>
+        </div>
+        <button class="smbtn smg" data-payout-paid="${esc(b.id)}" style="padding:7px 12px;font-size:.75rem;flex-shrink:0">✓ บันทึกโอนแล้ว</button>
+      </div>`).join("");
+    box.querySelectorAll("[data-payout-paid]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        const bk=items.find(x=>x.id===btn.dataset.payoutPaid);
+        if(!bk) return;
+        if(!confirm(`ยืนยันว่าโอนค่าสอนแล้ว?\n\nโค้ช: ${bk.coachName||bk.coachId}\nยอด: ฿${Number(bk.coachPayoutAmount||0).toLocaleString("en-US")}\nคาบ: ${bk.date} ${bk.startTime}–${bk.endTime}\n\nระบบจะลงรายจ่าย Staff ใน Finance อัตโนมัติ`)) return;
+        const note=prompt("โน้ต (ไม่บังคับ เช่น เลขอ้างอิงโอน):","")||"";
+        btn.disabled=true; btn.textContent="กำลังบันทึก...";
+        try{
+          const res=await fetch("/api/admin-edit-booking-accounting",{method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({operation:"coach_payout_paid",bookingId:bk.id,note})});
+          const data=await res.json().catch(()=>({}));
+          if(!res.ok||!data.ok){ showToast(data.error||"บันทึกไม่สำเร็จ",true); btn.disabled=false; btn.textContent="✓ บันทึกโอนแล้ว"; return; }
+          showToast(`✓ บันทึกโอน ฿${data.amount.toLocaleString("en-US")} แล้ว (ลง Finance อัตโนมัติ)`);
+          renderPayoutList();
+        }catch(e){ console.error(e); showToast("บันทึกไม่สำเร็จ",true); btn.disabled=false; btn.textContent="✓ บันทึกโอนแล้ว"; }
+      });
+    });
+  }catch(e){ console.error(e); box.innerHTML=`<div class="smempty">❌ โหลดไม่สำเร็จ</div>`; }
 }
 
 $("coachCreateBtn").addEventListener("click", async ()=>{

@@ -89,35 +89,27 @@
 </head>
 <body>
 <div class="wrap">
-  <!-- LOGIN -->
+  <!-- LOGIN (Coach V2 — LINE only; the PIN system is retired) -->
   <div id="loginView" class="login">
     <div class="logo" style="justify-content:center;color:var(--brand)">
       <div class="mark">🎾</div>
       <div><div class="name" style="color:var(--brand)">COURTLINE ACADEMY</div><div class="sub" style="color:var(--muted)">Coach Terminal</div></div>
     </div>
     <h1>เข้าสู่ระบบโค้ช</h1>
-    <p>ใช้ชื่อและ PIN ที่ได้รับจากแอดมิน</p>
-    <input id="liName" type="text" placeholder="ชื่อโค้ช (login name)" autocomplete="username"/>
-    <input id="liPin" type="password" inputmode="numeric" placeholder="PIN" autocomplete="current-password"/>
+    <p id="liMsg">กำลังเชื่อมต่อ LINE...</p>
     <div class="err" id="liErr"></div>
-    <button id="liBtn">เข้าสู่ระบบ</button>
-    <button id="toSetup" style="background:none;border:none;color:var(--brand);font-weight:700;font-size:.82rem;cursor:pointer;margin-top:2px">🔑 ตั้ง / รีเซ็ต PIN ครั้งแรก</button>
+    <button id="liBtn" style="display:none;background:#06c755">เข้าสู่ระบบด้วย LINE</button>
   </div>
 
-  <!-- SETUP PIN -->
-  <div id="setupView" class="login hidden">
+  <!-- NO ACCESS -->
+  <div id="noAccessView" class="login hidden">
     <div class="logo" style="justify-content:center;color:var(--brand)">
-      <div class="mark">🔑</div>
-      <div><div class="name" style="color:var(--brand)">ตั้ง / รีเซ็ต PIN</div><div class="sub" style="color:var(--muted)">Courtline Academy</div></div>
+      <div class="mark">🔒</div>
+      <div><div class="name" style="color:var(--brand)">COURTLINE ACADEMY</div><div class="sub" style="color:var(--muted)">Coach Terminal</div></div>
     </div>
-    <p>ใช้โค้ดที่ได้รับจากแอดมิน + ตั้ง PIN 6 หลักของคุณเอง</p>
-    <input id="suName" type="text" placeholder="ชื่อโค้ช (login name)" autocomplete="username"/>
-    <input id="suCode" type="text" placeholder="โค้ดจากแอดมิน" autocomplete="one-time-code" style="text-transform:uppercase"/>
-    <input id="suPin" type="password" inputmode="numeric" maxlength="6" placeholder="PIN ใหม่ (6 หลัก)"/>
-    <input id="suPin2" type="password" inputmode="numeric" maxlength="6" placeholder="ยืนยัน PIN อีกครั้ง"/>
-    <div class="err" id="suErr"></div>
-    <button id="suBtn">บันทึก PIN</button>
-    <button id="toLogin" style="background:none;border:none;color:var(--muted);font-weight:700;font-size:.82rem;cursor:pointer;margin-top:2px">← กลับหน้าเข้าสู่ระบบ</button>
+    <h1>บัญชีนี้ยังไม่มีสิทธิ์โค้ช</h1>
+    <p>หากคุณเป็นโค้ชของร้าน กรุณาติดต่อแอดมินเพื่อผูกบัญชี LINE ของคุณเข้ากับระบบ</p>
+    <button id="naRetry" style="background:var(--brand)">ลองอีกครั้ง</button>
   </div>
 
   <!-- APP -->
@@ -134,10 +126,24 @@
     </header>
     <main>
       <div class="tabs">
-        <button id="tabSchedule" class="on">📅 ตารางสอน</button>
-        <button id="tabAvail">🕐 วันว่างของฉัน</button>
+        <button id="tabSchedule" class="on">📅 สอน</button>
+        <button id="tabAvail">🕐 ว่าง</button>
+        <button id="tabEarn">💰 รายได้</button>
+        <button id="tabProfile">👤 โปรไฟล์</button>
       </div>
       <div id="schedule"><div class="empty">กำลังโหลด...</div></div>
+      <div id="earnView" class="hidden"><div class="empty">กำลังโหลด...</div></div>
+      <div id="profileView" class="hidden">
+        <div class="card">
+          <div class="sec-title" style="margin-top:0">โปรไฟล์โค้ช</div>
+          <label style="display:block;font-size:.72rem;font-weight:700;color:var(--muted);margin-bottom:4px">ชื่อที่แสดงให้ลูกค้า</label>
+          <input id="pfName" type="text" maxlength="60" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:.9rem;margin-bottom:10px"/>
+          <label style="display:block;font-size:.72rem;font-weight:700;color:var(--muted);margin-bottom:4px">แนะนำตัว (ลูกค้าเห็นตอนเลือกโค้ช)</label>
+          <textarea id="pfBio" maxlength="500" rows="4" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:.85rem;font-family:inherit;resize:vertical;margin-bottom:10px"></textarea>
+          <button id="pfSave" style="background:var(--brand);color:#fff;border:none;border-radius:9px;padding:11px 18px;font-weight:800;cursor:pointer;width:100%">💾 บันทึกโปรไฟล์</button>
+          <p style="font-size:.68rem;color:var(--muted);margin-top:8px">ราคาสอนและค่าตอบแทนกำหนดโดยร้าน — ติดต่อแอดมินหากต้องการปรับ</p>
+        </div>
+      </div>
       <div id="availView" class="hidden">
         <div class="card" style="margin-bottom:10px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -163,11 +169,29 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script type="module">
+// ════════════════════════════════════════════════════════════════════
+// Coach V2 — LINE login (PIN retired). Flow: liff.init → LINE id_token →
+// /api/auth-line mints a Firebase custom token (uid = lineUserId) →
+// signInWithCustomToken → every API call carries the Firebase ID token;
+// the server resolves the coach by coaches.lineUserId.
+// ════════════════════════════════════════════════════════════════════
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
+import { getAuth, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
+
+const LIFF_ID = "2010034901-ClPr9N5v";   // same LIFF app as index.html
+const fbApp  = initializeApp({
+  apiKey:"AIzaSyBhJSJszidFge4fKQqExLM2cB2Sx6z2lPY",
+  authDomain:"ultra-tennis-booking.firebaseapp.com",
+  projectId:"ultra-tennis-booking",
+});
+const fbAuth = getAuth(fbApp);
+
 const $ = id => document.getElementById(id);
 const API_OPS = "/api/admin-ops";
 const API_BK  = "/api/admin-edit-booking-accounting";
-let me = null;   // { name, role }
+let me = null;   // { name: coachId, role:'coach', displayName, bio }
 
 function toast(msg, err){ const t=$("toast"); t.textContent=msg; t.className="toast show"+(err?" err":""); setTimeout(()=>t.className="toast",1900); }
 function esc(s){ return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
@@ -179,94 +203,166 @@ const LESSON = {
   no_show:    {th:"ไม่มา",        cls:"b-no_show"},
 };
 
-// ── Session ─────────────────────────────────────────────────────────
-async function checkSession(){
-  try{
-    const r = await fetch("/api/admin-session", { method:"GET" });
-    if(!r.ok) return null;
-    const d = await r.json();
-    return d.ok ? d : null;
-  }catch{ return null; }
+// Firebase ID token for API auth — the SDK refreshes it automatically.
+async function apiToken(){
+  const u = fbAuth.currentUser;
+  if(!u) throw new Error("not signed in");
+  return u.getIdToken();
 }
-function isCoachOrAdmin(role){ return role==="coach" || ["owner","ultra_admin","branch_manager","branch_staff"].includes(role); }
+// POST helper: attaches idToken to the body.
+async function apiPost(url, payload){
+  const idToken = await apiToken();
+  const r = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ ...payload, idToken }) });
+  const d = await r.json().catch(()=>({}));
+  return { ok: r.ok && d.ok, d };
+}
 
+// ── Boot: LIFF → Firebase → whoami ─────────────────────────────────
 async function boot(){
-  const s = await checkSession();
-  if(s && isCoachOrAdmin(s.role)){ me = s; showApp(); }
-  else showLogin();
+  showLogin("กำลังเชื่อมต่อ LINE...");
+  try{
+    await Promise.race([
+      liff.init({ liffId: LIFF_ID }),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF init timeout")),10000)),
+    ]);
+  }catch(e){
+    console.error("[coach] liff.init:", e);
+    showLogin("เชื่อมต่อ LINE ไม่สำเร็จ", true); return;
+  }
+  if(!liff.isLoggedIn()){
+    // Show the manual button (auto-redirect loops are hostile in some browsers).
+    $("liMsg").textContent = "กดปุ่มด้านล่างเพื่อเข้าสู่ระบบด้วยบัญชี LINE ของคุณ";
+    $("liBtn").style.display = "block";
+    return;
+  }
+  await afterLineLogin();
 }
-function showLogin(){ $("appView").classList.add("hidden"); $("setupView").classList.add("hidden"); $("loginView").classList.remove("hidden"); }
-function showSetup(){ $("appView").classList.add("hidden"); $("loginView").classList.add("hidden"); $("setupView").classList.remove("hidden"); $("suErr").textContent=""; }
+async function afterLineLogin(){
+  $("liMsg").textContent = "กำลังยืนยันตัวตน...";
+  $("liBtn").style.display = "none";
+  try{
+    const lineIdToken = liff.getIDToken();
+    if(!lineIdToken) throw new Error("no LINE id_token (openid scope required)");
+    const r = await fetch("/api/auth-line",{ method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ idToken: lineIdToken }) });
+    const d = await r.json().catch(()=>({}));
+    if(!r.ok || !d.ok || !d.customToken) throw new Error(d.error || "auth-line failed");
+    await signInWithCustomToken(fbAuth, d.customToken);
+  }catch(e){
+    console.error("[coach] sign-in:", e);
+    showLogin("ยืนยันตัวตนไม่สำเร็จ ลองปิดแล้วเปิดใหม่", true); return;
+  }
+  // Am I a coach?
+  try{
+    const { ok, d } = await apiPost(API_OPS, { action:"coach_whoami" });
+    if(ok && d.isCoach){
+      me = { name:d.coachId, role:"coach", displayName:d.displayName, bio:d.bio||"" };
+      showApp(); return;
+    }
+  }catch(e){ console.error("[coach] whoami:", e); }
+  $("loginView").classList.add("hidden");
+  $("appView").classList.add("hidden");
+  $("noAccessView").classList.remove("hidden");
+}
+function showLogin(msg, isErr){
+  $("appView").classList.add("hidden");
+  $("noAccessView").classList.add("hidden");
+  $("loginView").classList.remove("hidden");
+  if(msg){ $(isErr?"liErr":"liMsg").textContent = msg; }
+}
 function showApp(){
-  $("loginView").classList.add("hidden"); $("setupView").classList.add("hidden"); $("appView").classList.remove("hidden");
-  $("whoName").textContent = me.name + (me.role!=="coach" ? ` (${me.role})` : "");
+  $("loginView").classList.add("hidden");
+  $("noAccessView").classList.add("hidden");
+  $("appView").classList.remove("hidden");
+  $("whoName").textContent = me.displayName || me.name;
   switchTab("schedule");
 }
+$("liBtn").addEventListener("click", ()=>liff.login({ redirectUri: location.href }));
+$("naRetry").addEventListener("click", ()=>location.reload());
+$("logoutBtn").addEventListener("click", ()=>{
+  try{ liff.logout(); }catch{}
+  location.reload();
+});
 
 // ── Tabs ────────────────────────────────────────────────────────────
 function switchTab(tab){
-  const isAvail = tab==="avail";
-  $("tabSchedule").classList.toggle("on", !isAvail);
-  $("tabAvail").classList.toggle("on", isAvail);
-  $("schedule").classList.toggle("hidden", isAvail);
-  $("availView").classList.toggle("hidden", !isAvail);
-  if(isAvail){ initAvailStrip(); loadAvail(); loadShopMonth(); } else { loadSchedule(); }
+  const views = { schedule:"schedule", avail:"availView", earn:"earnView", profile:"profileView" };
+  const tabs  = { schedule:"tabSchedule", avail:"tabAvail", earn:"tabEarn", profile:"tabProfile" };
+  Object.keys(views).forEach(k=>{
+    $(views[k]).classList.toggle("hidden", k!==tab);
+    $(tabs[k]).classList.toggle("on", k===tab);
+  });
+  if(tab==="avail"){ initAvailStrip(); loadAvail(); loadShopMonth(); }
+  else if(tab==="earn"){ loadEarnings(); }
+  else if(tab==="profile"){ loadProfile(); }
+  else { loadSchedule(); }
 }
 $("tabSchedule").addEventListener("click", ()=>switchTab("schedule"));
 $("tabAvail").addEventListener("click",   ()=>switchTab("avail"));
+$("tabEarn").addEventListener("click",    ()=>switchTab("earn"));
+$("tabProfile").addEventListener("click", ()=>switchTab("profile"));
 
-// ── Setup / reset PIN ───────────────────────────────────────────────
-$("toSetup").addEventListener("click", ()=>{ $("suName").value = $("liName").value.trim(); showSetup(); });
-$("toLogin").addEventListener("click", showLogin);
-$("suBtn").addEventListener("click", doSetPin);
-$("suPin2").addEventListener("keydown", e=>{ if(e.key==="Enter") doSetPin(); });
-async function doSetPin(){
-  const coachId=$("suName").value.trim(), code=$("suCode").value.trim().toUpperCase(), pin=$("suPin").value, pin2=$("suPin2").value;
-  $("suErr").textContent="";
-  if(!coachId||!code){ $("suErr").textContent="กรอกชื่อและโค้ด"; return; }
-  if(!/^\d{6}$/.test(pin)){ $("suErr").textContent="PIN ต้องเป็นตัวเลข 6 หลัก"; return; }
-  if(pin!==pin2){ $("suErr").textContent="PIN ไม่ตรงกัน"; return; }
-  $("suBtn").disabled=true; $("suBtn").textContent="กำลังบันทึก...";
-  try{
-    const r=await fetch(API_OPS,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_set_pin",coachId,code,newPin:pin})});
-    const d=await r.json().catch(()=>({}));
-    if(!r.ok||!d.ok){ $("suErr").textContent=d.error||"ตั้ง PIN ไม่สำเร็จ"; return; }
-    toast("✓ ตั้ง PIN สำเร็จ เข้าสู่ระบบได้เลย");
-    $("suCode").value=""; $("suPin").value=""; $("suPin2").value="";
-    $("liName").value=coachId; showLogin();
-  }catch(e){ $("suErr").textContent="เครือข่ายมีปัญหา"; }
-  finally{ $("suBtn").disabled=false; $("suBtn").textContent="บันทึก PIN"; }
+// ── Profile (Coach V2 — profile fields only; rates are admin-set) ──
+function loadProfile(){
+  $("pfName").value = me.displayName || me.name;
+  $("pfBio").value  = me.bio || "";
 }
-
-// ── Login ───────────────────────────────────────────────────────────
-$("liBtn").addEventListener("click", doLogin);
-$("liPin").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
-async function doLogin(){
-  const name=$("liName").value.trim(), pin=$("liPin").value;
-  $("liErr").textContent="";
-  if(!name||!pin){ $("liErr").textContent="กรอกชื่อและ PIN"; return; }
-  $("liBtn").disabled=true; $("liBtn").textContent="กำลังเข้าสู่ระบบ...";
+$("pfSave").addEventListener("click", async ()=>{
+  const displayName = $("pfName").value.trim();
+  const bio = $("pfBio").value.trim();
+  if(!displayName){ toast("กรอกชื่อที่แสดง", true); return; }
+  $("pfSave").disabled = true; $("pfSave").textContent = "กำลังบันทึก...";
   try{
-    const r = await fetch("/api/admin-session", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"login",name,pin}) });
-    const d = await r.json().catch(()=>({}));
-    if(!r.ok || !d.ok){ $("liErr").textContent = d.error || "เข้าสู่ระบบไม่สำเร็จ"; return; }
-    if(!isCoachOrAdmin(d.role)){ $("liErr").textContent="บัญชีนี้ไม่ใช่โค้ช"; await fetch("/api/admin-session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"logout"})}); return; }
-    me = d; $("liPin").value=""; showApp();
-  }catch(e){ $("liErr").textContent="เครือข่ายมีปัญหา"; }
-  finally{ $("liBtn").disabled=false; $("liBtn").textContent="เข้าสู่ระบบ"; }
-}
-$("logoutBtn").addEventListener("click", async ()=>{
-  try{ await fetch("/api/admin-session",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"logout"})}); }catch{}
-  me=null; showLogin();
+    const { ok, d } = await apiPost(API_OPS, { action:"coach_update_profile", displayName, bio });
+    if(!ok){ toast(d.error||"บันทึกไม่สำเร็จ", true); return; }
+    me.displayName = displayName; me.bio = bio;
+    $("whoName").textContent = displayName;
+    toast("✓ บันทึกโปรไฟล์แล้ว");
+  }catch(e){ toast("เครือข่ายมีปัญหา", true); }
+  finally{ $("pfSave").disabled = false; $("pfSave").textContent = "💾 บันทึกโปรไฟล์"; }
 });
+
+// ── Earnings (Coach V2 — this month, per-lesson payout states) ─────
+async function loadEarnings(){
+  $("earnView").innerHTML = `<div class="empty">กำลังโหลด...</div>`;
+  try{
+    const { ok, d } = await apiPost(API_OPS, { action:"coach_my_bookings", sinceMonthStart:true });
+    if(!ok){ $("earnView").innerHTML=`<div class="empty">❌ ${esc(d.error||"โหลดไม่สำเร็จ")}</div>`; return; }
+    const today = d.today || "";
+    const monthLabel = today.slice(0,7);
+    const lessons = (d.bookings||[]).filter(b=>b.coachPayoutAmount>0 && b.date && b.date<=today);
+    const completed = lessons.filter(b=>b.lessonStatus==="completed");
+    const payable = completed.filter(b=>b.coachPayoutStatus==="payable" || b.coachPayoutStatus==="pending");
+    const paid    = completed.filter(b=>b.coachPayoutStatus==="paid");
+    const sum = arr => arr.reduce((s,b)=>s+(Number(b.coachPayoutAmount)||0),0);
+    const row = b => `<div class="card" style="padding:10px 13px">
+      <div class="c-top">
+        <div>
+          <div style="font-weight:800;font-size:.86rem">${esc(b.date)} · ${esc(b.startTime||"")}–${esc(b.endTime||"")}</div>
+          <div class="c-type">${esc(b.customerName||"—")}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-weight:900">฿${Number(b.coachPayoutAmount).toLocaleString("en-US")}</div>
+          <span class="badge ${b.coachPayoutStatus==="paid"?"b-completed":"b-checked_in"}">${b.coachPayoutStatus==="paid"?"โอนแล้ว":"รอโอน"}</span>
+        </div>
+      </div>
+    </div>`;
+    $("earnView").innerHTML = `
+      <div class="card" style="display:flex;gap:14px;justify-content:space-around;text-align:center">
+        <div><div style="font-size:.68rem;color:var(--muted);font-weight:700">สอนแล้ว (เดือน ${esc(monthLabel)})</div><div style="font-weight:900;font-size:1.1rem">${completed.length} คาบ</div></div>
+        <div><div style="font-size:.68rem;color:var(--muted);font-weight:700">รอโอน</div><div style="font-weight:900;font-size:1.1rem;color:var(--blue)">฿${sum(payable).toLocaleString("en-US")}</div></div>
+        <div><div style="font-size:.68rem;color:var(--muted);font-weight:700">โอนแล้ว</div><div style="font-weight:900;font-size:1.1rem;color:var(--ok)">฿${sum(paid).toLocaleString("en-US")}</div></div>
+      </div>
+      ${completed.length ? completed.slice().reverse().map(row).join("") : `<div class="empty">ยังไม่มีคาบสอนที่เสร็จในเดือนนี้</div>`}
+      <p style="font-size:.68rem;color:var(--muted);margin:8px 2px 0">ร้านโอนค่าสอนเป็นรายคาบหลังสอนเสร็จ · ยอดอิงตามที่ตกลงกับร้าน ณ วันที่ลูกค้าจอง</p>`;
+  }catch(e){ $("earnView").innerHTML=`<div class="empty">❌ เครือข่ายมีปัญหา</div>`; }
+}
 
 // ── Schedule ────────────────────────────────────────────────────────
 async function loadSchedule(){
   $("schedule").innerHTML = `<div class="empty">กำลังโหลดตาราง...</div>`;
   try{
-    const r = await fetch(API_OPS, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"coach_my_bookings"}) });
-    const d = await r.json().catch(()=>({}));
-    if(!r.ok || !d.ok){ $("schedule").innerHTML=`<div class="empty">❌ ${esc(d.error||"โหลดไม่สำเร็จ")}</div>`; return; }
+    const { ok, d } = await apiPost(API_OPS, { action:"coach_my_bookings" });
+    if(!ok){ $("schedule").innerHTML=`<div class="empty">❌ ${esc(d.error||"โหลดไม่สำเร็จ")}</div>`; return; }
     renderSchedule(d.bookings||[], d.today);
   }catch(e){ $("schedule").innerHTML=`<div class="empty">❌ เครือข่ายมีปัญหา</div>`; }
 }
@@ -326,9 +422,8 @@ async function saveNote(bookingId){
 }
 async function postLesson(bookingId, extra){
   try{
-    const r = await fetch(API_BK, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ operation:"coach_lesson_update", bookingId, ...extra }) });
-    const d = await r.json().catch(()=>({}));
-    if(!r.ok || !d.ok){ toast(d.error||"บันทึกไม่สำเร็จ", true); return; }
+    const { ok, d } = await apiPost(API_BK, { operation:"coach_lesson_update", bookingId, ...extra });
+    if(!ok){ toast(d.error||"บันทึกไม่สำเร็จ", true); return; }
     toast("✓ บันทึกแล้ว");
     loadSchedule();
   }catch(e){ toast("เครือข่ายมีปัญหา", true); }
@@ -373,10 +468,8 @@ async function loadAvail(){
   if(!availDate) return;
   $("availGrid").innerHTML = `<div class="empty">กำลังโหลด...</div>`;
   try{
-    const r = await fetch(API_OPS,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"coach_availability_get",date:availDate})});
-    const d = await r.json().catch(()=>({}));
-    if(!r.ok||!d.ok){ $("availGrid").innerHTML=`<div class="empty">❌ ${esc(d.error||"โหลดไม่สำเร็จ")}</div>`; return; }
+    const { ok, d } = await apiPost(API_OPS, { action:"coach_availability_get", date:availDate });
+    if(!ok){ $("availGrid").innerHTML=`<div class="empty">❌ ${esc(d.error||"โหลดไม่สำเร็จ")}</div>`; return; }
     renderAvail(d);
   }catch(e){ $("availGrid").innerHTML=`<div class="empty">❌ เครือข่ายมีปัญหา</div>`; }
 }
@@ -434,10 +527,8 @@ async function loadShopMonth(){
   if(!smMonth) smMonth=new Date(Date.now()+7*3600*1000).toISOString().slice(0,7);
   $("smLabel").textContent="กำลังโหลด...";
   try{
-    const r=await fetch(API_OPS,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"shop_open_days",month:smMonth})});
-    const d=await r.json().catch(()=>({}));
-    if(!r.ok||!d.ok){ $("smLabel").textContent="โหลดปฏิทินไม่สำเร็จ"; $("smGrid").innerHTML=""; return; }
+    const { ok, d } = await apiPost(API_OPS, { action:"shop_open_days", month:smMonth });
+    if(!ok){ $("smLabel").textContent="โหลดปฏิทินไม่สำเร็จ"; $("smGrid").innerHTML=""; return; }
     smLastData=d;
     renderShopMonth(d);
   }catch(e){ $("smLabel").textContent="เครือข่ายมีปัญหา"; }
@@ -480,18 +571,32 @@ function renderShopMonth(d){
     grid.appendChild(b);
   }
 }
-$("smPrev").addEventListener("click",()=>{ smMonth=shiftMonth(smMonth||new Date(Date.now()+7*3600*1000).toISOString().slice(0,7),-1); loadShopMonth(); });
-$("smNext").addEventListener("click",()=>{ smMonth=shiftMonth(smMonth||new Date(Date.now()+7*3600*1000).toISOString().slice(0,7),1); loadShopMonth(); });
+// Coach V2 horizon: browse current month only, + next month from the 25th
+// (mirrors the server rule in coach_availability_set).
+const bkkMonthNow = () => new Date(Date.now()+7*3600*1000).toISOString().slice(0,7);
+function maxCoachMonth(){
+  const bkk = new Date(Date.now()+7*3600*1000);
+  const ahead = bkk.getUTCDate() >= 25 ? 1 : 0;
+  return new Date(Date.UTC(bkk.getUTCFullYear(), bkk.getUTCMonth()+ahead, 1)).toISOString().slice(0,7);
+}
+$("smPrev").addEventListener("click",()=>{
+  const next = shiftMonth(smMonth||bkkMonthNow(),-1);
+  if(next < bkkMonthNow()){ toast("ย้อนหลังไม่ได้", true); return; }
+  smMonth = next; loadShopMonth();
+});
+$("smNext").addEventListener("click",()=>{
+  const next = shiftMonth(smMonth||bkkMonthNow(),1);
+  if(next > maxCoachMonth()){ toast("เดือนหน้าเปิดให้ตั้งตั้งแต่วันที่ 25", true); return; }
+  smMonth = next; loadShopMonth();
+});
 
 async function toggleAvail(hour, open, btn){
   if(availBusy) return;
-  if(!open && !confirm(`ปิดรับสอนเวลา ${hour} วันที่ ${availDate}?`)) return;
+  if(!open && !confirm(`ปิดรับสอนเวลา ${hour} วันที่ ${availDate}?\n(ปิดได้ล่วงหน้าอย่างน้อย 1 วัน — วันเดียวกันต้องติดต่อแอดมิน)`)) return;
   availBusy = true; if(btn) btn.disabled = true;
   try{
-    const r = await fetch(API_OPS,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"coach_availability_set",date:availDate,hour,open})});
-    const d = await r.json().catch(()=>({}));
-    if(!r.ok||!d.ok){ toast(d.error||"บันทึกไม่สำเร็จ", true); }
+    const { ok, d } = await apiPost(API_OPS, { action:"coach_availability_set", date:availDate, hour, open });
+    if(!ok){ toast(d.error||"บันทึกไม่สำเร็จ", true); }
     else toast(open?`✓ เปิดรับสอน ${hour}`:`✓ ปิดรับสอน ${hour}`);
   }catch(e){ toast("เครือข่ายมีปัญหา", true); }
   finally{ availBusy = false; loadAvail(); }
