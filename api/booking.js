@@ -34,49 +34,138 @@ const nextHourEnd = (startTime) => {
   return n >= 24 ? '00:00' : `${String(n).padStart(2, '0')}:00`;
 };
 
-// ── Multi-hour (Phase A) helpers — bookings may span 1–3 consecutive hours ──
-const MAX_DURATION_HOURS = 3;
-function parseDurationHours(raw) {
-  if (raw === undefined || raw === null || raw === '') return 1;
+// ════════════════════════════════════════════════════════════════════
+// Phase B — 30-minute granularity (owner rules 2026-07):
+//   • duration 30–180 min, step 30. Whole-hour durations start at :00 only;
+//     x.5 durations may start at :00 (half at the end) or :30 (half first).
+//   • every 30-min "half segment" costs a FLAT ฿200 — never promo, never
+//     voucher. A booking containing a half prices its full hours with the
+//     special promo DISABLED (single MAIN-account QR, no receiver mixing).
+//   • Late Night (00:00–06:00) sells whole hours only; bookings containing a
+//     half must sit entirely within 06:00–24:00.
+//   • no half segment at/after 23:00 (the 23:00 round sells as 1 h only, so
+//     no stranded 23:30–00:00 orphan). Nothing crosses midnight.
+//   • slot docs: one per segment. Fully-covered clock hours keep the Phase A
+//     hourly doc (`_HH00`, slotSpanMinutes 60 implied); halves write a
+//     `slotSpanMinutes: 30` doc at `_HHMM`. Legacy docs (no field) = 60 min.
+//   • kill switch: system_settings/features.enableHalfHourBooking (missing =
+//     OFF → only Phase A whole-hour bookings are accepted).
+// ════════════════════════════════════════════════════════════════════
+const HALF_HOUR_PRICE     = 200;
+const MAX_DURATION_MIN    = 180;
+const HALF_EARLIEST_MIN   = 6 * 60;    // halves exist only from 06:00…
+const HALF_LATEST_MIN     = 23 * 60;   // …and never start at/after 23:00
+
+const toMin  = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
+const toHHMM = min => min >= 1440 ? '00:00' : `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+
+// durationMinutes from the request. Accepts legacy durationHours (×60) so old
+// clients keep working. Default 60. Null = invalid.
+function parseDurationMinutes(body) {
+  let raw = body.durationMinutes;
+  if (raw === undefined || raw === null || raw === '') {
+    const h = body.durationHours;
+    if (h === undefined || h === null || h === '') return 60;
+    raw = Number(h) * 60;
+  }
   const n = Number(raw);
-  return (Number.isInteger(n) && n >= 1 && n <= MAX_DURATION_HOURS) ? n : null;
+  return (Number.isInteger(n) && n >= 30 && n <= MAX_DURATION_MIN && n % 30 === 0) ? n : null;
 }
-// Hourly start times covered by [startTime, startTime + n hours). Null when the
-// range would cross midnight — a booking must stay within one calendar date.
-function hourListOf(startTime, n) {
-  const h0 = parseInt(String(startTime).slice(0, 2), 10);
-  if (!Number.isFinite(h0) || h0 + n > 24) return null;
-  return Array.from({ length: n }, (_, i) => `${String(h0 + i).padStart(2, '0')}:00`);
+
+// Segment a booking range into slot docs: span-60 for fully covered clock
+// hours, span-30 for the half. Null when the shape is invalid.
+function segmentsOf(startTime, durMin) {
+  const s = toMin(startTime);
+  const m0 = s % 60;
+  if (m0 !== 0 && m0 !== 30) return null;
+  const end = s + durMin;
+  if (end > 1440) return null;                     // never cross midnight
+  if (durMin % 60 === 0 && m0 !== 0) return null;  // whole hours start :00
+  const segs = [];
+  let t = s;
+  while (t < end) {
+    if (t % 60 === 0 && t + 60 <= end) { segs.push({ start: toHHMM(t), span: 60 }); t += 60; }
+    else                               { segs.push({ start: toHHMM(t), span: 30 }); t += 30; }
+  }
+  return segs;
 }
-const endTimeAfter = (startTime, n) => {
-  const h = parseInt(String(startTime).slice(0, 2), 10) + n;
-  return h >= 24 ? '00:00' : `${String(h).padStart(2, '0')}:00`;
-};
+const endTimeAfterMin = (startTime, durMin) => toHHMM(toMin(startTime) + durMin);
+
+// Owner placement rules for bookings that contain a half segment.
+// Returns a customer-facing error string, or null when the shape is fine.
+function halfPlacementError(segs) {
+  const halves = segs.filter(x => x.span === 30);
+  if (!halves.length) return null;
+  const first = toMin(segs[0].start);
+  const last  = segs[segs.length - 1];
+  if (first < HALF_EARLIEST_MIN) return 'ช่วง Late Night จองเป็นชั่วโมงเต็มเท่านั้น';
+  if (halves.some(x => toMin(x.start) >= HALF_LATEST_MIN)) return 'รอบ 23:00 ขายเป็นชั่วโมงเต็มเท่านั้น';
+  if (toMin(last.start) + last.span > 1440) return 'เกินเที่ยงคืน — เลือกเวลาเริ่มให้เร็วขึ้น';
+  return null;
+}
+
+// Half-hour feature flag — missing doc/field = OFF (safe default).
+async function halfHourEnabled(db) {
+  try {
+    const snap = await db.collection('system_settings').doc('features').get();
+    return snap.exists && snap.data().enableHalfHourBooking === true;
+  } catch (e) {
+    console.warn('[half flag] read failed → OFF:', e.message);
+    return false;
+  }
+}
+
 // PromptPay receiver for a qrType — special promo pays the ALT account; all
-// other types pay MAIN. Hours in one booking must share ONE receiver (one QR).
+// other types pay MAIN. Segments in one booking must share ONE receiver.
 const receiverOf = qrType => (qrType === 'special' ? 'alt' : 'main');
 
-// Sum per-hour quotes into one multi-hour quote. Throws {code:'MIXED_RECEIVER'}
-// when hours would need different PromptPay accounts (can't pay with one QR).
-function combineQuotes(hourQuotes) {
-  const receivers = new Set(hourQuotes.map(q => receiverOf(q.qrType)));
+// Quote-shaped object for one flat-฿200 half segment.
+const halfSegQuote = start => ({
+  pricingType: 'half_hour', originalPrice: HALF_HOUR_PRICE, finalPrice: HALF_HOUR_PRICE,
+  price: HALF_HOUR_PRICE, amount: HALF_HOUR_PRICE, qrAmount: HALF_HOUR_PRICE,
+  qrType: 'normal', promoCode: null, voucherCode: null, discountAmount: 0,
+  voucherApplied: false, voucherReason: null,
+  startTime: start, span: 30,
+});
+
+// Sum per-segment quotes into one quote. Throws {code:'MIXED_RECEIVER'} when
+// segments would need different PromptPay accounts (can't pay with one QR).
+function combineQuotes(segQuotes) {
+  const receivers = new Set(segQuotes.map(q => receiverOf(q.qrType)));
   if (receivers.size > 1) {
     const err = new Error('MIXED_RECEIVER'); err.code = 'MIXED_RECEIVER'; throw err;
   }
-  const total     = hourQuotes.reduce((s, q) => s + q.finalPrice, 0);
-  const totalOrig = hourQuotes.reduce((s, q) => s + q.originalPrice, 0);
-  const allSame   = hourQuotes.every(q => q.qrType === hourQuotes[0].qrType);
+  const total     = segQuotes.reduce((s, q) => s + q.finalPrice, 0);
+  const totalOrig = segQuotes.reduce((s, q) => s + q.originalPrice, 0);
+  const allSame   = segQuotes.every(q => q.qrType === segQuotes[0].qrType);
   return {
     finalPrice: total, originalPrice: totalOrig, qrAmount: total,
     price: total, amount: total,
-    qrType: allSame ? hourQuotes[0].qrType : 'normal',
-    pricingType: hourQuotes.every(q => q.pricingType === hourQuotes[0].pricingType)
-      ? hourQuotes[0].pricingType : 'multi_rate',
-    breakdown: hourQuotes.map(q => ({
-      startTime: q.startTime, endTime: nextHourEnd(q.startTime),
+    qrType: allSame ? segQuotes[0].qrType : 'normal',
+    pricingType: segQuotes.every(q => q.pricingType === segQuotes[0].pricingType)
+      ? segQuotes[0].pricingType : 'multi_rate',
+    breakdown: segQuotes.map(q => ({
+      startTime: q.startTime, endTime: toHHMM(toMin(q.startTime) + (q.span || 60)),
       price: q.finalPrice, pricingType: q.pricingType, qrType: q.qrType,
     })),
   };
+}
+
+// Segments a stored booking occupies — durationMinutes when present (Phase B),
+// else legacy hourly docs from durationHours (Phase A / older).
+function bookingSegments(booking) {
+  if (!booking?.date || !booking?.startTime) return [];
+  const dm = Number(booking.durationMinutes);
+  if (Number.isInteger(dm) && dm >= 30 && dm % 30 === 0) {
+    return segmentsOf(booking.startTime, Math.min(dm, 360)) || [];
+  }
+  const n  = parseInt(booking.durationHours, 10);
+  const nH = (Number.isInteger(n) && n >= 1 && n <= 6) ? n : 1;
+  const h0 = parseInt(String(booking.startTime).slice(0, 2), 10);
+  if (!Number.isFinite(h0)) return [];
+  const segs = [];
+  for (let i = 0; i < nH && h0 + i < 24; i++) segs.push({ start: `${String(h0 + i).padStart(2, '0')}:00`, span: 60 });
+  return segs;
 }
 function genBookingCode() {
   const t = Date.now().toString(36).toUpperCase().slice(-5);
@@ -102,6 +191,7 @@ export default async function handler(req, res) {
   if (body.action === 'price_quote')   return handlePriceQuote(res, body);
   if (body.action === 'create')        return handleCreate(res, body);
   if (body.action === 'cancel_pending') return handleCancelPending(res, body);
+  if (body.action === 'features')      return handleFeatures(res);
   // Coach lesson booking (Stage 3) — customer-facing, feature-flagged OFF by
   // default via system_settings/features.enableCoachBookingCustomer.
   if (body.action === 'coach_options')       return handleCoachOptions(res);
@@ -157,21 +247,33 @@ async function coachBookingEnabled(db) {
 const coachAvailDocId = (coachId, date, hour) => `${coachId}_${date}_${String(hour).replace(':', '')}`;
 
 // ── price_quote — READ-ONLY. No writes anywhere. ────────────────────
+// features — PUBLIC read of customer-facing feature flags (Firestore rules
+// only expose system_settings/pricing to clients, so the UI asks us).
+async function handleFeatures(res) {
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[features] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+  return res.status(200).json({ ok: true, enableHalfHourBooking: await halfHourEnabled(db) });
+}
+
 async function handlePriceQuote(res, body) {
   const date        = typeof body.date === 'string' ? body.date.trim() : '';
   const startTime   = typeof body.startTime === 'string' ? body.startTime.trim() : '';
   const payType     = typeof body.payType === 'string' && body.payType ? body.payType : 'single';
   const voucherCode = typeof body.voucherCode === 'string' && body.voucherCode.trim() ? body.voucherCode.trim() : null;
   const lineUserId  = typeof body.lineUserId === 'string' ? body.lineUserId : null;
-  const durationHours = parseDurationHours(body.durationHours);
+  const durationMinutes = parseDurationMinutes(body);
 
   if (!DATE_RE.test(date))      return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
   if (!TIME_RE.test(startTime)) return res.status(400).json({ ok: false, error: 'startTime must be HH:mm' });
-  if (durationHours === null)   return res.status(400).json({ ok: false, error: `durationHours must be an integer 1-${MAX_DURATION_HOURS}` });
-  const hours = hourListOf(startTime, durationHours);
-  if (!hours) return res.status(400).json({ ok: false, error: 'Booking cannot cross midnight' });
-  // Vouchers stay single-hour only (rule: one voucher = one standard hour).
-  if (voucherCode && durationHours > 1) {
+  if (durationMinutes === null) return res.status(400).json({ ok: false, error: `durationMinutes must be 30-${MAX_DURATION_MIN} in steps of 30` });
+  const segs = segmentsOf(startTime, durationMinutes);
+  if (!segs) return res.status(400).json({ ok: false, error: 'Invalid start/duration (whole hours start at :00; nothing crosses midnight)' });
+  const hasHalf = segs.some(x => x.span === 30);
+  const placeErr = halfPlacementError(segs);
+  if (placeErr) return res.status(409).json({ ok: false, code: 'SHAPE', error: placeErr });
+  // Vouchers stay single-hour only (Phase A rule; halves never join promos).
+  if (voucherCode && (durationMinutes !== 60 || hasHalf)) {
     return res.status(409).json({ ok: false, code: 'VOUCHER', error: 'โค้ดส่วนลดใช้ได้กับการจอง 1 ชั่วโมงเท่านั้น' });
   }
 
@@ -179,31 +281,40 @@ async function handlePriceQuote(res, body) {
   try { db = getAdminDb(); }
   catch (e) { console.error('[price_quote] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
 
+  if (hasHalf && !(await halfHourEnabled(db))) {
+    return res.status(409).json({ ok: false, code: 'SHAPE', error: 'ยังไม่เปิดจองครึ่งชั่วโมง' });
+  }
+
   try {
     const [pricingSnap, holidaySnap, voucherSnap] = await Promise.all([
       db.collection('system_settings').doc('pricing').get(),
       db.collection('holidays').doc(date).get(),
       voucherCode ? db.collection('vouchers').doc(voucherCode).get() : Promise.resolve(null),
     ]);
+    // Owner rule: a booking containing a half joins NO promotions — full hours
+    // price with the special promo disabled (single MAIN-account QR).
+    const promoConfig = (!hasHalf && pricingSnap.exists) ? pricingSnap.data() : null;
     const quoteInput = h => ({
       date, startTime: h, nowMs: Date.now(),
       isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true,
-      promoConfig: pricingSnap.exists ? pricingSnap.data() : null,
-      payType, voucherCode,
+      promoConfig, payType, voucherCode,
       voucher: voucherSnap && voucherSnap.exists ? voucherSnap.data() : null,
       lineUserId,
     });
-    if (durationHours === 1) {
+    if (durationMinutes === 60) {
       return res.status(200).json({ ok: true, quote: computeQuote(quoteInput(startTime)) });
     }
-    const hourQuotes = hours.map(h => ({ ...computeQuote(quoteInput(h)), startTime: h }));
-    const combined   = combineQuotes(hourQuotes);
+    const segQuotes = segs.map(x => x.span === 30
+      ? halfSegQuote(x.start)
+      : { ...computeQuote(quoteInput(x.start)), startTime: x.start, span: 60 });
+    const combined  = combineQuotes(segQuotes);
     return res.status(200).json({
       ok: true,
       quote: {
-        ...hourQuotes[0],                    // base flags from the first hour
-        ...combined,                         // totals + breakdown override
-        durationHours, endTime: endTimeAfter(startTime, durationHours),
+        ...segQuotes.find(q => q.span === 60) || segQuotes[0],  // base flags from an hour seg
+        ...combined,                                            // totals + breakdown override
+        durationMinutes, durationHours: durationMinutes / 60,
+        endTime: endTimeAfterMin(startTime, durationMinutes),
         voucherApplied: false, voucherCode: null, discountAmount: 0,
       },
     });
@@ -226,17 +337,20 @@ async function handleCreate(res, body) {
   const lineDisplayName = typeof body.lineDisplayName === 'string' ? body.lineDisplayName : '';
   const customerNote = typeof body.customerNote === 'string' ? body.customerNote.slice(0, 500) : '';
   const voucherCode  = typeof body.voucherCode === 'string' && body.voucherCode.trim() ? body.voucherCode.trim() : null;
-  const durationHours = parseDurationHours(body.durationHours);
+  const durationMinutes = parseDurationMinutes(body);
 
   // Client NEVER sends price — it is recomputed below. Validate inputs only.
   if (!DATE_RE.test(date))      return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'date must be YYYY-MM-DD' });
   if (!TIME_RE.test(startTime)) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'startTime must be HH:mm' });
   if (!customerName)  return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerName is required' });
   if (!customerPhone) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerPhone is required' });
-  if (durationHours === null) return res.status(400).json({ ok: false, code: 'VALIDATION', error: `durationHours must be an integer 1-${MAX_DURATION_HOURS}` });
-  const hours = hourListOf(startTime, durationHours);
-  if (!hours) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Booking cannot cross midnight' });
-  if (voucherCode && durationHours > 1) {
+  if (durationMinutes === null) return res.status(400).json({ ok: false, code: 'VALIDATION', error: `durationMinutes must be 30-${MAX_DURATION_MIN} in steps of 30` });
+  const segs = segmentsOf(startTime, durationMinutes);
+  if (!segs) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Invalid start/duration (whole hours start at :00; nothing crosses midnight)' });
+  const hasHalf = segs.some(x => x.span === 30);
+  const placeErr = halfPlacementError(segs);
+  if (placeErr) return res.status(409).json({ ok: false, code: 'SHAPE', error: placeErr });
+  if (voucherCode && (durationMinutes !== 60 || hasHalf)) {
     return res.status(409).json({ ok: false, code: 'VOUCHER', error: 'โค้ดส่วนลดใช้ได้กับการจอง 1 ชั่วโมงเท่านั้น' });
   }
 
@@ -244,28 +358,36 @@ async function handleCreate(res, body) {
   try { db = getAdminDb(); }
   catch (e) { console.error('[create] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
 
+  if (hasHalf && !(await halfHourEnabled(db))) {
+    return res.status(409).json({ ok: false, code: 'SHAPE', error: 'ยังไม่เปิดจองครึ่งชั่วโมง' });
+  }
+
   const nowMs = Date.now();
-  let quote, hourQuotes;
+  let quote, segQuotes;
   try {
     const [pricingSnap, holidaySnap, voucherSnap] = await Promise.all([
       db.collection('system_settings').doc('pricing').get(),
       db.collection('holidays').doc(date).get(),
       voucherCode ? db.collection('vouchers').doc(voucherCode).get() : Promise.resolve(null),
     ]);
-    hourQuotes = hours.map(h => ({
-      ...computeQuote({
-        date, startTime: h, nowMs,
-        isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true,
-        promoConfig: pricingSnap.exists ? pricingSnap.data() : null,
-        payType: 'single', voucherCode,
-        voucher: voucherSnap && voucherSnap.exists ? voucherSnap.data() : null,
-        lineUserId,
-      }),
-      startTime: h,
-    }));
-    quote = durationHours === 1
-      ? hourQuotes[0]
-      : { ...hourQuotes[0], ...combineQuotes(hourQuotes),
+    // Owner rule: bookings containing a half join NO promotions (promo off).
+    const promoConfig = (!hasHalf && pricingSnap.exists) ? pricingSnap.data() : null;
+    segQuotes = segs.map(x => x.span === 30
+      ? halfSegQuote(x.start)
+      : {
+          ...computeQuote({
+            date, startTime: x.start, nowMs,
+            isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true,
+            promoConfig,
+            payType: 'single', voucherCode,
+            voucher: voucherSnap && voucherSnap.exists ? voucherSnap.data() : null,
+            lineUserId,
+          }),
+          startTime: x.start, span: 60,
+        });
+    quote = durationMinutes === 60
+      ? segQuotes[0]
+      : { ...(segQuotes.find(q => q.span === 60) || segQuotes[0]), ...combineQuotes(segQuotes),
           voucherApplied: false, voucherCode: null, discountAmount: 0 };
   } catch (e) {
     if (e.code === 'MIXED_RECEIVER') {
@@ -281,42 +403,61 @@ async function handleCreate(res, body) {
   }
 
   const finalPrice        = quote.finalPrice;
-  const endTime           = endTimeAfter(startTime, durationHours);
+  const endTime           = endTimeAfterMin(startTime, durationMinutes);
   const bookingCode       = genBookingCode();
   const paymentExpiresAt  = Timestamp.fromMillis(nowMs + PAY_MINS * 60 * 1000);
-  const allLateNight      = hourQuotes.every(q => q.qrType === 'late_night');
+  const allLateNight      = segQuotes.every(q => q.qrType === 'late_night');
   const bookingType       = allLateNight ? 'Late Night Session' : 'Single Use';
   const pricingMode       = allLateNight             ? 'late_night'
                           : quote.qrType === 'special' ? 'special_promotion'
                           : 'normal_single_use';
 
-  const bookingRef = db.collection('bookings').doc();
-  const slotRefs   = hours.map(h => db.collection('booking_slots').doc(slotIdOf(date, h)));
-  const availRefs  = hours.map(h => db.collection('available_slots').doc(slotIdOf(date, h)));
-  const voucherRef = quote.voucherApplied ? db.collection('vouchers').doc(voucherCode) : null;
+  // ── Cell-level conflict model (Phase B) ─────────────────────────────
+  // needCells: every 30-min cell the booking covers. A booking conflicts when
+  // ANY live slot doc (span 60 legacy/hour, span 30 half) overlaps a needed
+  // cell — so we read BOTH cell docs of every touched clock hour, plus the
+  // hourly available_slots doc (admin opens whole hours; an open hour opens
+  // both halves).
+  const startMin  = toMin(startTime);
+  const needCells = []; for (let m = startMin; m < startMin + durationMinutes; m += 30) needCells.push(m);
+  const touchedHours = [...new Set(needCells.map(m => Math.floor(m / 60)))];
+
+  const bookingRef  = db.collection('bookings').doc();
+  const segRefs     = segs.map(x => db.collection('booking_slots').doc(slotIdOf(date, x.start)));
+  const cellRefs    = touchedHours.flatMap(H => [
+    db.collection('booking_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:00`)),
+    db.collection('booking_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:30`)),
+  ]);
+  const availRefs   = touchedHours.map(H => db.collection('available_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:00`)));
+  const voucherRef  = quote.voucherApplied ? db.collection('vouchers').doc(voucherCode) : null;
 
   try {
     await db.runTransaction(async (t) => {
-      const reads = [...slotRefs.map(r => t.get(r)), ...availRefs.map(r => t.get(r))];
+      const reads = [...cellRefs.map(r => t.get(r)), ...availRefs.map(r => t.get(r))];
       if (voucherRef) reads.push(t.get(voucherRef));
       const snaps = await Promise.all(reads);
-      const slotSnaps  = snaps.slice(0, hours.length);
-      const availSnaps = snaps.slice(hours.length, hours.length * 2);
-      const voucherSnap = voucherRef ? snaps[hours.length * 2] : null;
+      const cellSnaps  = snaps.slice(0, cellRefs.length);
+      const availSnaps = snaps.slice(cellRefs.length, cellRefs.length + availRefs.length);
+      const voucherSnap = voucherRef ? snaps[cellRefs.length + availRefs.length] : null;
 
-      // ── Double-booking guard on EVERY hour (mirrors the 1-hour rules) ──
-      for (let i = 0; i < hours.length; i++) {
-        const availSnap = availSnaps[i], slotSnap = slotSnaps[i];
+      // ── Room-open guard: every touched hour must be admin-open ────────
+      for (const availSnap of availSnaps) {
         if (!availSnap.exists || availSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
-        if (slotSnap.exists) {
-          const sd = slotSnap.data();
-          if (sd.bookingStatus === 'confirmed') throw new Error('SLOT_TAKEN');
-          if (sd.bookingStatus === 'pending_payment') {
-            const exp = sd.expiresAt?.toMillis?.() ?? 0;
-            if (!exp || exp > nowMs) throw new Error('SLOT_HELD');
-          }
-        }
       }
+      // ── Double-booking guard on EVERY covered 30-min cell ─────────────
+      cellSnaps.forEach((snap, i) => {
+        if (!snap.exists) return;
+        const sd = snap.data();
+        const docMin  = touchedHours[Math.floor(i / 2)] * 60 + (i % 2) * 30;
+        const docSpan = sd.slotSpanMinutes === 30 ? 30 : 60;   // legacy docs = full hour
+        const overlaps = needCells.some(c => c >= docMin && c < docMin + docSpan);
+        if (!overlaps) return;
+        if (sd.bookingStatus === 'confirmed') throw new Error('SLOT_TAKEN');
+        if (sd.bookingStatus === 'pending_payment') {
+          const exp = sd.expiresAt?.toMillis?.() ?? 0;
+          if (!exp || exp > nowMs) throw new Error('SLOT_HELD');
+        }
+      });
 
       // ── Voucher re-validate + mark used (same transaction) ──────────
       if (voucherRef) {
@@ -335,15 +476,16 @@ async function handleCreate(res, body) {
         });
       }
 
-      // ── Write booking (server price) + one slot lock per hour ───────
+      // ── Write booking (server price) + one slot lock per segment ─────
       t.set(bookingRef, {
         bookingCode, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
         bookingType,
         lineUserId, lineDisplayName,
         customerName, customerPhone, customerPhoneNormalized: normalizePhone(customerPhone),
         customerNote,
-        date, startTime, endTime, durationHours,
-        ...(durationHours > 1 ? { priceBreakdown: quote.breakdown } : {}),
+        date, startTime, endTime,
+        durationMinutes, durationHours: durationMinutes / 60,
+        ...(durationMinutes !== 60 ? { priceBreakdown: quote.breakdown } : {}),
         // Pricing v2 metadata (server-authoritative)
         price: finalPrice, amount: finalPrice,
         originalPrice: quote.originalPrice, finalPrice,
@@ -361,10 +503,10 @@ async function handleCreate(res, body) {
         createdVia: 'server',
         createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
       });
-      hours.forEach((h, i) => {
-        t.set(slotRefs[i], {
+      segs.forEach((x, i) => {
+        t.set(segRefs[i], {
           bookingCode, bookingId: bookingRef.id, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
-          date, hour: h,
+          date, hour: x.start, slotSpanMinutes: x.span,
           bookingStatus: 'pending_payment', paymentStatus: 'unpaid',
           expiresAt: paymentExpiresAt,
         });
@@ -383,17 +525,18 @@ async function handleCreate(res, body) {
     return res.status(500).json({ ok: false, error: 'Failed to create booking' }); // no code → client may fall back
   }
 
-  console.log(`[create] ${bookingCode} ${quote.pricingType} ${durationHours}h ฿${finalPrice}${quote.voucherApplied ? ' voucher=' + voucherCode : ''}`);
+  console.log(`[create] ${bookingCode} ${quote.pricingType} ${durationMinutes}min ฿${finalPrice}${quote.voucherApplied ? ' voucher=' + voucherCode : ''}`);
   return res.status(200).json({
     ok: true,
     paymentExpiresAt: paymentExpiresAt.toDate().toISOString(),
     booking: {
-      id: bookingRef.id, bookingCode, date, startTime, endTime, durationHours,
+      id: bookingRef.id, bookingCode, date, startTime, endTime,
+      durationMinutes, durationHours: durationMinutes / 60,
       bookingType,
       finalPrice, price: finalPrice, originalPrice: quote.originalPrice,
       qrType: quote.qrType, qrAmount: quote.qrAmount, paymentQrType: quote.qrType,
       pricingType: quote.pricingType, discountAmount: quote.discountAmount, voucherCode: quote.voucherCode,
-      ...(durationHours > 1 ? { priceBreakdown: quote.breakdown } : {}),
+      ...(durationMinutes !== 60 ? { priceBreakdown: quote.breakdown } : {}),
       lineUserId, customerName, customerPhone, customerNote,
     },
   });
@@ -454,11 +597,9 @@ async function handleCancelPending(res, body) {
     return res.status(409).json({ ok: false, error: 'การจองหมดเวลาแล้ว' });
   }
 
-  // Multi-hour (Phase A): release EVERY hourly slot the booking holds.
-  const heldHours = (booking.date && booking.startTime)
-    ? (hourListOf(booking.startTime, parseDurationHours(booking.durationHours) || 1) || [booking.startTime])
-    : [];
-  const slotRefs = heldHours.map(h => db.collection('booking_slots').doc(`${RESOURCE_ID}_${booking.date}_${String(h).replace(':', '')}`));
+  // Release EVERY slot segment the booking holds (Phase B: hour + half docs).
+  const slotRefs = bookingSegments(booking)
+    .map(x => db.collection('booking_slots').doc(`${RESOURCE_ID}_${booking.date}_${String(x.start).replace(':', '')}`));
   // Coach lesson: the coach hour was locked in the create transaction —
   // release it here (ownership-checked below).
   const coachAvailRef = (booking.serviceType === 'coach_lesson' && booking.coachId && booking.date && booking.startTime)

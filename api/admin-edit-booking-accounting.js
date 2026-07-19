@@ -86,36 +86,55 @@ function nextHourEnd(startTime) {
   return h >= 24 ? '00:00' : `${String(h).padStart(2, '0')}:00`;
 }
 
-// ── Multi-hour (Phase A) helpers ──────────────────────────────────
-// A booking may hold 1–3 consecutive hourly slots (durationHours; legacy docs
-// without the field = 1). Every slot release/update/delete must cover ALL of
-// them, so handlers iterate these ids instead of a single reschedSlotId.
-function bookingDurationHours(booking) {
+// ── Multi-hour / half-hour (Phase A + B) helpers ──────────────────
+// A booking may hold several slot docs: span-60 docs for fully covered clock
+// hours and span-30 docs for the 30-min segment (Phase B). Legacy docs have
+// no slotSpanMinutes field → 60 min. Every slot release/update/delete must
+// cover ALL segments, so handlers iterate these instead of one reschedSlotId.
+const toMin  = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
+const toHHMM = min => min >= 1440 ? '00:00' : `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+
+// Segment a range into {start, span} slot docs (span-60 whole hours + span-30
+// halves). Null when the shape is invalid (bad alignment / crosses midnight).
+function segmentsOfRange(startTime, durMin) {
+  const s = toMin(startTime);
+  if (!Number.isFinite(s) || (s % 30 !== 0)) return null;
+  if (!Number.isInteger(durMin) || durMin < 30 || durMin % 30 !== 0) return null;
+  const end = s + durMin;
+  if (end > 1440) return null;
+  if (durMin % 60 === 0 && s % 60 !== 0) return null;
+  const segs = [];
+  let t = s;
+  while (t < end) {
+    if (t % 60 === 0 && t + 60 <= end) { segs.push({ start: toHHMM(t), span: 60 }); t += 60; }
+    else                               { segs.push({ start: toHHMM(t), span: 30 }); t += 30; }
+  }
+  return segs;
+}
+
+// Duration of a stored booking in minutes — durationMinutes when present
+// (Phase B), else legacy integer durationHours (Phase A / older) × 60.
+function bookingDurationMin(booking) {
+  const dm = Number(booking?.durationMinutes);
+  if (Number.isInteger(dm) && dm >= 30 && dm <= 360 && dm % 30 === 0) return dm;
   const n = parseInt(booking?.durationHours, 10);
-  return (Number.isInteger(n) && n >= 1 && n <= 6) ? n : 1;
+  return ((Number.isInteger(n) && n >= 1 && n <= 6) ? n : 1) * 60;
 }
-// Hourly "HH:00" starts for a start time + duration (clamped at midnight).
-function hourStartsOf(startTime, n) {
-  const h0 = parseInt(String(startTime || '').slice(0, 2), 10);
-  if (!Number.isFinite(h0)) return [];
-  const out = [];
-  for (let i = 0; i < n && h0 + i < 24; i++) out.push(`${String(h0 + i).padStart(2, '0')}:00`);
-  return out;
+
+// Segments a booking occupies at (date, startTime). Defaults to the booking's
+// own date/startTime; reschedule handlers pass the original/new position.
+function bookingSegmentsAt(booking, { startTime } = {}) {
+  const st = startTime || booking?.startTime;
+  if (!st) return [];
+  return segmentsOfRange(st, bookingDurationMin(booking)) || [];
 }
-// All booking_slots ids a booking occupies at (date, startTime). Defaults to
-// the booking's own date/startTime; reschedule handlers pass the original slot.
 function bookingSlotIds(booking, { resourceId, date, startTime } = {}) {
   const rid = resourceId || booking?.resourceId || RESOURCE_ID;
   const d   = date       || booking?.date;
-  const st  = startTime  || booking?.startTime;
-  if (!d || !st) return [];
-  return hourStartsOf(st, bookingDurationHours(booking)).map(h => reschedSlotId(rid, d, h));
+  if (!d) return [];
+  return bookingSegmentsAt(booking, { startTime }).map(x => reschedSlotId(rid, d, x.start));
 }
-// End time n hours after an "HH:00" start; midnight-crossing → "00:00".
-function endAfterHours(startTime, n) {
-  const h = Number(String(startTime).split(':')[0]) + n;
-  return h >= 24 ? '00:00' : `${String(h).padStart(2, '0')}:00`;
-}
+const endAfterMin = (startTime, durMin) => toHHMM(toMin(startTime) + durMin);
 
 // Ported 1:1 from admin.html:927-935. A booking_slots doc blocks its hour only
 // when confirmed, or pending_payment that has not yet expired. Expiry field is
@@ -1257,39 +1276,56 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
     return res.status(400).json({ ok: false, error: 'newStartTime must be HH:mm' });
   }
 
-  const durationHours = bookingDurationHours(booking);
-  const newHours      = hourStartsOf(newStartTime, durationHours);
-  if (newHours.length < durationHours) {
-    return res.status(400).json({ ok: false, error: `New time cannot fit ${durationHours} hours before midnight` });
+  const durMin   = bookingDurationMin(booking);
+  const newSegs  = segmentsOfRange(newStartTime, durMin);
+  if (!newSegs) {
+    return res.status(400).json({ ok: false, error: `New time cannot fit ${durMin} minutes before midnight (whole hours start at :00)` });
   }
-  const newEndTime  = endAfterHours(newStartTime, durationHours);
+  const newEndTime  = endAfterMin(newStartTime, durMin);
   const resourceId  = booking.resourceId || RESOURCE_ID;
   const oldSlotIds  = bookingSlotIds(booking);
-  const newSlotIds  = newHours.map(h => reschedSlotId(resourceId, newDate, h));
-  const avRefs      = newSlotIds.map(id => db.collection('available_slots').doc(id));
+  const newSlotIds  = newSegs.map(x => reschedSlotId(resourceId, newDate, x.start));
+
+  // Cell-level conflict model (Phase B): read BOTH 30-min cell docs of every
+  // touched clock hour on the target date, plus the hourly available_slots doc.
+  const startMinNew = toMin(newStartTime);
+  const needCells   = []; for (let m = startMinNew; m < startMinNew + durMin; m += 30) needCells.push(m);
+  const touchedHours = [...new Set(needCells.map(m => Math.floor(m / 60)))];
+  const cellIds   = touchedHours.flatMap(H => [
+    reschedSlotId(resourceId, newDate, `${String(H).padStart(2, '0')}:00`),
+    reschedSlotId(resourceId, newDate, `${String(H).padStart(2, '0')}:30`),
+  ]);
+  const cellRefs    = cellIds.map(id => db.collection('booking_slots').doc(id));
+  const avRefs      = touchedHours.map(H => db.collection('available_slots').doc(reschedSlotId(resourceId, newDate, `${String(H).padStart(2, '0')}:00`)));
   const newSlotRefs = newSlotIds.map(id => db.collection('booking_slots').doc(id));
   const oldSlotRefs = oldSlotIds.map(id => db.collection('booking_slots').doc(id));
 
   let meta;
   try {
     meta = await db.runTransaction(async (t) => {
-      const [avSnaps, newSnaps, oldSnaps, bSnap] = await Promise.all([
+      const [avSnaps, cellSnaps, oldSnaps, bSnap] = await Promise.all([
         Promise.all(avRefs.map(r => t.get(r))),
-        Promise.all(newSlotRefs.map(r => t.get(r))),
+        Promise.all(cellRefs.map(r => t.get(r))),
         Promise.all(oldSlotRefs.map(r => t.get(r))),
         t.get(bookingRef),
       ]);
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       const bNow = bSnap.data();
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
-      for (let i = 0; i < newSlotIds.length; i++) {
-        if (!avSnaps[i].exists || avSnaps[i].data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
-        if (newSnaps[i].exists && !oldSlotIds.includes(newSlotIds[i])) {
-          const nd = newSnaps[i].data();
-          const ownsNew = nd.bookingId === bookingId || nd.bookingCode === booking.bookingCode;
-          if (!ownsNew && isLiveBookedSlot(nd)) throw new Error('SLOT_TAKEN');
-        }
+      for (const avSnap of avSnaps) {
+        if (!avSnap.exists || avSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
       }
+      cellSnaps.forEach((snap, i) => {
+        if (!snap.exists) return;
+        // A doc this booking already owns (same-date overlap moves) is fine.
+        if (oldSlotIds.includes(cellIds[i])) return;
+        const nd = snap.data();
+        const ownsNew = nd.bookingId === bookingId || nd.bookingCode === booking.bookingCode;
+        if (ownsNew || !isLiveBookedSlot(nd)) return;
+        const docMin  = touchedHours[Math.floor(i / 2)] * 60 + (i % 2) * 30;
+        const docSpan = nd.slotSpanMinutes === 30 ? 30 : 60;   // legacy docs = full hour
+        if (needCells.some(c => c >= docMin && c < docMin + docSpan)) throw new Error('SLOT_TAKEN');
+      });
 
       const wasPending = isPendingRescheduleBooking(bNow);
       const nextStatus = wasPending ? 'confirmed' : bNow.bookingStatus;
@@ -1328,7 +1364,8 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
           bookingId,
           resourceId,
           date:          newDate,
-          hour:          newHours[i],
+          hour:          newSegs[i].start,
+          slotSpanMinutes: newSegs[i].span,
           bookingStatus: slotNextStatus,
           paymentStatus: booking.paymentStatus,
           expiresAt:     null,
@@ -1385,38 +1422,51 @@ async function handleRescheduleCancel({ res, adminName, session, db, booking, bo
   const origStart = booking.pendingRescheduleFromStartTime || booking.previousStartTime || booking.startTime;
   const origEnd   = booking.pendingRescheduleFromEndTime   || booking.previousEndTime   || booking.endTime;
   const resourceId = booking.resourceId || RESOURCE_ID;
-  const durationHours = bookingDurationHours(booking);
-  const origHours  = hourStartsOf(origStart, durationHours);
-  const slotIds  = origHours.map(h => reschedSlotId(resourceId, origDate, h));
-  const slotRefs = slotIds.map(id => db.collection('booking_slots').doc(id));
-  const avRefs   = slotIds.map(id => db.collection('available_slots').doc(id));
+  const durMin   = bookingDurationMin(booking);
+  const origSegs = segmentsOfRange(origStart, durMin) || [];
+  const slotRefs = origSegs.map(x => db.collection('booking_slots').doc(reschedSlotId(resourceId, origDate, x.start)));
+  // Cell-level restorability: both 30-min cell docs of every touched hour +
+  // the hourly available_slots doc (admin opens whole hours).
+  const startMinOrig = origSegs.length ? toMin(origStart) : 0;
+  const needCells    = []; for (let m = startMinOrig; m < startMinOrig + durMin; m += 30) needCells.push(m);
+  const touchedHours = [...new Set(needCells.map(m => Math.floor(m / 60)))];
+  const cellIds  = touchedHours.flatMap(H => [
+    reschedSlotId(resourceId, origDate, `${String(H).padStart(2, '0')}:00`),
+    reschedSlotId(resourceId, origDate, `${String(H).padStart(2, '0')}:30`),
+  ]);
+  const cellRefs = cellIds.map(id => db.collection('booking_slots').doc(id));
+  const avRefs   = touchedHours.map(H => db.collection('available_slots').doc(reschedSlotId(resourceId, origDate, `${String(H).padStart(2, '0')}:00`)));
 
   let restored;
   try {
     restored = await db.runTransaction(async (t) => {
-      const [avSnaps, slotSnaps, bSnap] = await Promise.all([
+      const [avSnaps, cellSnaps, bSnap] = await Promise.all([
         Promise.all(avRefs.map(r => t.get(r))),
-        Promise.all(slotRefs.map(r => t.get(r))),
+        Promise.all(cellRefs.map(r => t.get(r))),
         t.get(bookingRef),
       ]);
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       if (!isPendingRescheduleBooking(bSnap.data())) throw new Error('NOT_PENDING');
 
-      // Every original hour must be open and not live-held by another booking.
-      const allRestorable = slotIds.length === durationHours &&
-        slotIds.every((_, i) => {
-          const slotOpen = avSnaps[i].exists && avSnaps[i].data().status === 'open';
-          const sd = slotSnaps[i].exists ? slotSnaps[i].data() : null;
-          const notOccupiedByOther = !sd || !isLiveBookedSlot(sd) ||
-            sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode;
-          return slotOpen && notOccupiedByOther;
-        });
+      // Every touched hour must be open; every needed cell must be free of
+      // OTHER bookings' live docs (span-aware; this booking's own docs are ok).
+      const hoursOpen = avSnaps.length > 0 && avSnaps.every(s => s.exists && s.data().status === 'open');
+      const cellsFree = cellSnaps.every((snap, i) => {
+        if (!snap.exists) return true;
+        const sd = snap.data();
+        if (sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode) return true;
+        if (!isLiveBookedSlot(sd)) return true;
+        const docMin  = touchedHours[Math.floor(i / 2)] * 60 + (i % 2) * 30;
+        const docSpan = sd.slotSpanMinutes === 30 ? 30 : 60;
+        return !needCells.some(c => c >= docMin && c < docMin + docSpan);
+      });
+      const allRestorable = origSegs.length > 0 && hoursOpen && cellsFree;
 
       if (origDate && origStart && origEnd && allRestorable) {
         slotRefs.forEach((r, i) => {
           t.set(r, {
             bookingCode: booking.bookingCode, bookingId, resourceId,
-            date: origDate, hour: origHours[i],
+            date: origDate, hour: origSegs[i].start, slotSpanMinutes: origSegs[i].span,
             bookingStatus: 'confirmed', paymentStatus: booking.paymentStatus,
             expiresAt: null, updatedAt: FieldValue.serverTimestamp(),
           });
