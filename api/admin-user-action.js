@@ -267,7 +267,7 @@ export default async function handler(req, res) {
 // (moved verbatim from the former /api/admin-pricing-action route)
 // ════════════════════════════════════════════════════════════════════
 async function handlePricingAction({ req, res, adminName, session, action }) {
-  const { promoActive, promoName, promoPrice, promoLabel, startsAt, endsAt, morningPromoActive } = req.body || {};
+  const { promoActive, promoName, promoPrice, promoLabel, startsAt, endsAt, morningPromoActive, halfHourPrice } = req.body || {};
 
   try {
     const db = getAdminDb();
@@ -293,6 +293,17 @@ async function handlePricingAction({ req, res, adminName, session, action }) {
     const price = Number(promoPrice);
     if (!Number.isInteger(price) || price <= 0) {
       return res.status(400).json({ ok: false, error: 'Price must be a valid positive integer' });
+    }
+
+    // Half-hour price (Phase B): optional — written only when the client sends
+    // it, so an older admin.html can't silently reset it. Bounds keep a typo
+    // from selling half hours at ฿1 or ฿9999; server fallback stays ฿200.
+    let halfPrice;
+    if (halfHourPrice !== undefined && halfHourPrice !== null && halfHourPrice !== '') {
+      halfPrice = Number(halfHourPrice);
+      if (!Number.isInteger(halfPrice) || halfPrice < 100 || halfPrice > 1000) {
+        return res.status(400).json({ ok: false, error: 'Half-hour price must be an integer 100-1000 THB' });
+      }
     }
 
     let startTS = null;
@@ -337,6 +348,7 @@ async function handlePricingAction({ req, res, adminName, session, action }) {
       // Morning 330/320 kill-switch. Written only when the client sends it, so
       // an older admin.html can't silently flip the promo off.
       ...(typeof morningPromoActive === 'boolean' ? { morningPromoActive } : {}),
+      ...(halfPrice !== undefined ? { halfHourPrice: halfPrice } : {}),
       specialPromoActive: Boolean(promoActive),
       specialPromoName: String(promoName || "").trim(),
       specialPromoPrice: price,
@@ -354,7 +366,7 @@ async function handlePricingAction({ req, res, adminName, session, action }) {
     await writeAuditLog(db, {
       actor: adminName, actorRole: session.role,
       action: 'save_special_promotion', targetId: 'system_settings/pricing',
-      after: { specialPromoActive: Boolean(promoActive), specialPromoName: String(promoName || '').trim(), specialPromoPrice: price },
+      after: { specialPromoActive: Boolean(promoActive), specialPromoName: String(promoName || '').trim(), specialPromoPrice: price, ...(halfPrice !== undefined ? { halfHourPrice: halfPrice } : {}) },
     });
     return res.status(200).json({ ok: true });
   } catch (err) {

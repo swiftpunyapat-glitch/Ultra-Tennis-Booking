@@ -119,10 +119,17 @@ async function halfHourEnabled(db) {
 // other types pay MAIN. Segments in one booking must share ONE receiver.
 const receiverOf = qrType => (qrType === 'special' ? 'alt' : 'main');
 
-// Quote-shaped object for one flat-฿200 half segment.
-const halfSegQuote = start => ({
-  pricingType: 'half_hour', originalPrice: HALF_HOUR_PRICE, finalPrice: HALF_HOUR_PRICE,
-  price: HALF_HOUR_PRICE, amount: HALF_HOUR_PRICE, qrAmount: HALF_HOUR_PRICE,
+// Admin-configurable half price (system_settings/pricing.halfHourPrice) with
+// the flat ฿200 default. Bounds mirror admin-user-action's save validation.
+function halfPriceFrom(pricingData) {
+  const n = Number(pricingData?.halfHourPrice);
+  return (Number.isInteger(n) && n >= 100 && n <= 1000) ? n : HALF_HOUR_PRICE;
+}
+
+// Quote-shaped object for one flat-price half segment.
+const halfSegQuote = (start, price = HALF_HOUR_PRICE) => ({
+  pricingType: 'half_hour', originalPrice: price, finalPrice: price,
+  price, amount: price, qrAmount: price,
   qrType: 'normal', promoCode: null, voucherCode: null, discountAmount: 0,
   voucherApplied: false, voucherReason: null,
   startTime: start, span: 30,
@@ -249,11 +256,17 @@ const coachAvailDocId = (coachId, date, hour) => `${coachId}_${date}_${String(ho
 // ── price_quote — READ-ONLY. No writes anywhere. ────────────────────
 // features — PUBLIC read of customer-facing feature flags (Firestore rules
 // only expose system_settings/pricing to clients, so the UI asks us).
+// Includes the current half-hour price so the UI note shows the real number.
 async function handleFeatures(res) {
   let db;
   try { db = getAdminDb(); }
   catch (e) { console.error('[features] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
-  return res.status(200).json({ ok: true, enableHalfHourBooking: await halfHourEnabled(db) });
+  let halfHourPrice = HALF_HOUR_PRICE;
+  try {
+    const p = await db.collection('system_settings').doc('pricing').get();
+    halfHourPrice = halfPriceFrom(p.exists ? p.data() : null);
+  } catch (e) { console.warn('[features] pricing read failed → default half price:', e.message); }
+  return res.status(200).json({ ok: true, enableHalfHourBooking: await halfHourEnabled(db), halfHourPrice });
 }
 
 async function handlePriceQuote(res, body) {
@@ -294,6 +307,7 @@ async function handlePriceQuote(res, body) {
     // Owner rule: a booking containing a half joins NO promotions — full hours
     // price with the special promo disabled (single MAIN-account QR).
     const promoConfig = (!hasHalf && pricingSnap.exists) ? pricingSnap.data() : null;
+    const halfPrice   = halfPriceFrom(pricingSnap.exists ? pricingSnap.data() : null);
     const quoteInput = h => ({
       date, startTime: h, nowMs: Date.now(),
       isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true,
@@ -305,7 +319,7 @@ async function handlePriceQuote(res, body) {
       return res.status(200).json({ ok: true, quote: computeQuote(quoteInput(startTime)) });
     }
     const segQuotes = segs.map(x => x.span === 30
-      ? halfSegQuote(x.start)
+      ? halfSegQuote(x.start, halfPrice)
       : { ...computeQuote(quoteInput(x.start)), startTime: x.start, span: 60 });
     const combined  = combineQuotes(segQuotes);
     return res.status(200).json({
@@ -372,8 +386,9 @@ async function handleCreate(res, body) {
     ]);
     // Owner rule: bookings containing a half join NO promotions (promo off).
     const promoConfig = (!hasHalf && pricingSnap.exists) ? pricingSnap.data() : null;
+    const halfPrice   = halfPriceFrom(pricingSnap.exists ? pricingSnap.data() : null);
     segQuotes = segs.map(x => x.span === 30
-      ? halfSegQuote(x.start)
+      ? halfSegQuote(x.start, halfPrice)
       : {
           ...computeQuote({
             date, startTime: x.start, nowMs,
