@@ -96,9 +96,10 @@
       <div><div class="name" style="color:var(--brand)">COURTLINE ACADEMY</div><div class="sub" style="color:var(--muted)">Coach Terminal</div></div>
     </div>
     <h1>เข้าสู่ระบบโค้ช</h1>
-    <p id="liMsg">กำลังเชื่อมต่อ LINE...</p>
+    <p id="liMsg">กำลังตรวจสอบสิทธิ์...</p>
     <div class="err" id="liErr"></div>
     <button id="liBtn" style="display:none;background:#06c755">เข้าสู่ระบบด้วย LINE</button>
+    <button id="goBookingBtn" style="display:none;background:var(--brand)">เปิดหน้าจอง (กดการ์ด Coach Mode)</button>
   </div>
 
   <!-- NO ACCESS -->
@@ -217,8 +218,26 @@ async function apiPost(url, payload){
   return { ok: r.ok && d.ok, d };
 }
 
-// ── Boot: LIFF → Firebase → whoami ─────────────────────────────────
+// ── Boot ────────────────────────────────────────────────────────────
+// PRIMARY path: index.html already signed this browser into Firebase (custom
+// token, uid = LINE userId) and that session persists per-origin — coach.html
+// simply restores it and checks coach rights. NO LIFF needed. The LIFF flow
+// is only a FALLBACK for opening coach.html directly without ever visiting
+// the booking page (and may be limited by the LIFF endpoint config — the
+// reliable route is always the Coach Mode card).
+let _bootDone = false;
 async function boot(){
+  showLogin("กำลังตรวจสอบสิทธิ์...");
+  onAuthStateChanged(fbAuth, async (u)=>{
+    if(_bootDone || !u) return;
+    _bootDone = true;
+    await afterSignedIn();
+  });
+  // No restored session after a short wait → try the LIFF fallback.
+  setTimeout(()=>{ if(!_bootDone && !fbAuth.currentUser) liffFallback(); }, 2500);
+}
+
+async function liffFallback(){
   showLogin("กำลังเชื่อมต่อ LINE...");
   try{
     await Promise.race([
@@ -227,42 +246,46 @@ async function boot(){
     ]);
   }catch(e){
     console.error("[coach] liff.init:", e);
-    showLogin("เชื่อมต่อ LINE ไม่สำเร็จ", true); return;
+    showLogin("เชื่อมต่อ LINE ไม่สำเร็จ", true); showGoBooking(); return;
   }
+  if(_bootDone || fbAuth.currentUser) return;   // Firebase restored meanwhile
   if(!liff.isLoggedIn()){
-    // Show the manual button (auto-redirect loops are hostile in some browsers).
-    $("liMsg").textContent = "กดปุ่มด้านล่างเพื่อเข้าสู่ระบบด้วยบัญชี LINE ของคุณ";
+    $("liMsg").textContent = "เข้าสู่ระบบด้วย LINE หรือเปิดผ่านหน้าจองแล้วกดการ์ด Coach Mode";
     $("liBtn").style.display = "block";
+    showGoBooking();
     return;
   }
-  await afterLineLogin();
-}
-async function afterLineLogin(){
   $("liMsg").textContent = "กำลังยืนยันตัวตน...";
-  $("liBtn").style.display = "none";
   try{
     const lineIdToken = liff.getIDToken();
-    if(!lineIdToken) throw new Error("no LINE id_token (openid scope required)");
+    if(!lineIdToken) throw new Error("no LINE id_token");
     const r = await fetch("/api/auth-line",{ method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ idToken: lineIdToken }) });
     const d = await r.json().catch(()=>({}));
     if(!r.ok || !d.ok || !d.customToken) throw new Error(d.error || "auth-line failed");
-    await signInWithCustomToken(fbAuth, d.customToken);
+    await signInWithCustomToken(fbAuth, d.customToken);   // → onAuthStateChanged → afterSignedIn
   }catch(e){
     console.error("[coach] sign-in:", e);
-    showLogin("ยืนยันตัวตนไม่สำเร็จ ลองปิดแล้วเปิดใหม่", true); return;
+    showLogin("ยืนยันตัวตนไม่สำเร็จ — เปิดผ่านหน้าจองแล้วกดการ์ด Coach Mode แทน", true);
+    showGoBooking();
   }
-  // Am I a coach?
+}
+
+async function afterSignedIn(){
+  showLogin("กำลังตรวจสอบสิทธิ์โค้ช...");
   try{
     const { ok, d } = await apiPost(API_OPS, { action:"coach_whoami" });
     if(ok && d.isCoach){
       me = { name:d.coachId, role:"coach", displayName:d.displayName, bio:d.bio||"" };
       showApp(); return;
     }
+    console.log("[coach] whoami: not a coach (uid=", fbAuth.currentUser?.uid, ")");
   }catch(e){ console.error("[coach] whoami:", e); }
   $("loginView").classList.add("hidden");
   $("appView").classList.add("hidden");
   $("noAccessView").classList.remove("hidden");
 }
+
+function showGoBooking(){ $("goBookingBtn").style.display = "block"; }
 function showLogin(msg, isErr){
   $("appView").classList.add("hidden");
   $("noAccessView").classList.add("hidden");
@@ -277,6 +300,7 @@ function showApp(){
   switchTab("schedule");
 }
 $("liBtn").addEventListener("click", ()=>liff.login({ redirectUri: location.href }));
+$("goBookingBtn").addEventListener("click", ()=>{ location.href = "/index.html"; });
 $("naRetry").addEventListener("click", ()=>location.reload());
 $("logoutBtn").addEventListener("click", ()=>{
   try{ liff.logout(); }catch{}
