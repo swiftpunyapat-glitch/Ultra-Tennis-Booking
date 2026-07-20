@@ -99,7 +99,8 @@
     <p id="liMsg">กำลังตรวจสอบสิทธิ์...</p>
     <div class="err" id="liErr"></div>
     <button id="liBtn" style="display:none;background:#06c755">เข้าสู่ระบบด้วย LINE</button>
-    <button id="goBookingBtn" style="display:none;background:var(--brand)">เปิดหน้าจอง (กดการ์ด Coach Mode)</button>
+    <button id="liRetry" style="display:none;background:var(--brand)">ลองอีกครั้ง</button>
+    <button id="goBookingBtn" style="display:none;background:var(--muted)">เปิดหน้าจอง (กดการ์ด Coach Mode)</button>
   </div>
 
   <!-- NO ACCESS -->
@@ -170,7 +171,6 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <script type="module">
 // ════════════════════════════════════════════════════════════════════
 // Coach V2 — LINE login (PIN retired). Flow: liff.init → LINE id_token →
@@ -178,16 +178,16 @@
 // signInWithCustomToken → every API call carries the Firebase ID token;
 // the server resolves the coach by coaches.lineUserId.
 // ════════════════════════════════════════════════════════════════════
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
-import { getAuth, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
-
 const LIFF_ID = "2010034901-ClPr9N5v";   // same LIFF app as index.html
-const fbApp  = initializeApp({
+const FIREBASE_CONFIG = {
   apiKey:"AIzaSyBhJSJszidFge4fKQqExLM2cB2Sx6z2lPY",
   authDomain:"ultra-tennis-booking.firebaseapp.com",
   projectId:"ultra-tennis-booking",
-});
-const fbAuth = getAuth(fbApp);
+};
+let fbAuth = null;
+let signInWithCustomToken = null;
+let onAuthStateChanged = null;
+let liffLoadPromise = null;
 
 const $ = id => document.getElementById(id);
 const API_OPS = "/api/admin-ops";
@@ -204,16 +204,67 @@ const LESSON = {
   no_show:    {th:"ไม่มา",        cls:"b-no_show"},
 };
 
-// Firebase ID token for API auth — the SDK refreshes it automatically.
+// Timeout guard — webviews can silently hang a network call; every await in
+// the login path must fail loudly instead of freezing the screen.
+const withTimeout = (p, ms, what) => Promise.race([
+  p, new Promise((_,rej)=>setTimeout(()=>rej(new Error(`${what} timeout ${ms/1000}s`)), ms)),
+]);
+
+// Load external auth dependencies from inside a guarded promise. Static
+// imports/scripts fail before any of our UI error handling can run, leaving
+// the page frozen forever on the initial "checking access" message.
+async function initFirebase(){
+  const [appSdk, authSdk] = await withTimeout(Promise.all([
+    import("https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js"),
+    import("https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js"),
+  ]), 12000, "Firebase SDK");
+  const fbApp = appSdk.initializeApp(FIREBASE_CONFIG);
+  fbAuth = authSdk.getAuth(fbApp);
+  signInWithCustomToken = authSdk.signInWithCustomToken;
+  onAuthStateChanged = authSdk.onAuthStateChanged;
+}
+
+function loadLiffSdk(){
+  if(window.liff) return Promise.resolve(window.liff);
+  if(liffLoadPromise) return liffLoadPromise;
+  liffLoadPromise = new Promise((resolve, reject)=>{
+    const script = document.createElement("script");
+    const timer = setTimeout(()=>{
+      script.remove();
+      reject(new Error("LINE SDK timeout 10s"));
+    }, 10000);
+    script.src = "https://static.line-scdn.net/liff/edge/2/sdk.js";
+    script.async = true;
+    script.onload = ()=>{
+      clearTimeout(timer);
+      if(window.liff) resolve(window.liff);
+      else reject(new Error("LINE SDK loaded without LIFF"));
+    };
+    script.onerror = ()=>{
+      clearTimeout(timer);
+      reject(new Error("LINE SDK load failed"));
+    };
+    document.head.appendChild(script);
+  }).catch(e=>{
+    // Permit a genuine retry if the first CDN request was only temporarily
+    // unavailable (the Retry button reloads, but this also protects callers).
+    liffLoadPromise = null;
+    throw e;
+  });
+  return liffLoadPromise;
+}
+
+// Firebase ID token for API auth — the SDK refreshes it automatically (the
+// refresh itself is a network call → timeboxed).
 async function apiToken(){
   const u = fbAuth.currentUser;
   if(!u) throw new Error("not signed in");
-  return u.getIdToken();
+  return withTimeout(u.getIdToken(), 8000, "token refresh");
 }
 // POST helper: attaches idToken to the body.
 async function apiPost(url, payload){
   const idToken = await apiToken();
-  const r = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ ...payload, idToken }) });
+  const r = await withTimeout(fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ ...payload, idToken }) }), 12000, "API call");
   const d = await r.json().catch(()=>({}));
   return { ok: r.ok && d.ok, d };
 }
@@ -239,9 +290,11 @@ async function boot(){
 
 async function liffFallback(){
   showLogin("กำลังเชื่อมต่อ LINE...");
+  let liffClient;
   try{
+    liffClient = await loadLiffSdk();
     await Promise.race([
-      liff.init({ liffId: LIFF_ID }),
+      liffClient.init({ liffId: LIFF_ID }),
       new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF init timeout")),10000)),
     ]);
   }catch(e){
@@ -249,7 +302,7 @@ async function liffFallback(){
     showLogin("เชื่อมต่อ LINE ไม่สำเร็จ", true); showGoBooking(); return;
   }
   if(_bootDone || fbAuth.currentUser) return;   // Firebase restored meanwhile
-  if(!liff.isLoggedIn()){
+  if(!liffClient.isLoggedIn()){
     $("liMsg").textContent = "เข้าสู่ระบบด้วย LINE หรือเปิดผ่านหน้าจองแล้วกดการ์ด Coach Mode";
     $("liBtn").style.display = "block";
     showGoBooking();
@@ -257,7 +310,7 @@ async function liffFallback(){
   }
   $("liMsg").textContent = "กำลังยืนยันตัวตน...";
   try{
-    const lineIdToken = liff.getIDToken();
+    const lineIdToken = liffClient.getIDToken();
     if(!lineIdToken) throw new Error("no LINE id_token");
     const r = await fetch("/api/auth-line",{ method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ idToken: lineIdToken }) });
     const d = await r.json().catch(()=>({}));
@@ -271,15 +324,30 @@ async function liffFallback(){
 }
 
 async function afterSignedIn(){
-  showLogin("กำลังตรวจสอบสิทธิ์โค้ช...");
+  showLogin("เข้าสู่ระบบแล้ว · กำลังตรวจสอบสิทธิ์โค้ช...");
   try{
     const { ok, d } = await apiPost(API_OPS, { action:"coach_whoami" });
     if(ok && d.isCoach){
       me = { name:d.coachId, role:"coach", displayName:d.displayName, bio:d.bio||"" };
       showApp(); return;
     }
+    if(!ok){
+      // Server reachable but errored — surface the real reason on screen
+      // (mobile users can't open a console).
+      console.error("[coach] whoami error:", d);
+      showLogin(`เช็กสิทธิ์ไม่สำเร็จ: ${d.error||"server error"} — กด "ลองอีกครั้ง"`, true);
+      $("liRetry").style.display="block"; showGoBooking();
+      _bootDone=false;
+      return;
+    }
     console.log("[coach] whoami: not a coach (uid=", fbAuth.currentUser?.uid, ")");
-  }catch(e){ console.error("[coach] whoami:", e); }
+  }catch(e){
+    console.error("[coach] whoami:", e);
+    showLogin(`เช็กสิทธิ์ไม่สำเร็จ: ${e.message||e} — กด "ลองอีกครั้ง"`, true);
+    $("liRetry").style.display="block"; showGoBooking();
+    _bootDone=false;
+    return;
+  }
   $("loginView").classList.add("hidden");
   $("appView").classList.add("hidden");
   $("noAccessView").classList.remove("hidden");
@@ -290,7 +358,10 @@ function showLogin(msg, isErr){
   $("appView").classList.add("hidden");
   $("noAccessView").classList.add("hidden");
   $("loginView").classList.remove("hidden");
-  if(msg){ $(isErr?"liErr":"liMsg").textContent = msg; }
+  if(msg){
+    $("liMsg").textContent = isErr ? "" : msg;
+    $("liErr").textContent = isErr ? msg : "";
+  }
 }
 function showApp(){
   $("loginView").classList.add("hidden");
@@ -299,11 +370,22 @@ function showApp(){
   $("whoName").textContent = me.displayName || me.name;
   switchTab("schedule");
 }
-$("liBtn").addEventListener("click", ()=>liff.login({ redirectUri: location.href }));
+$("liBtn").addEventListener("click", async ()=>{
+  try{
+    const liffClient = await loadLiffSdk();
+    await liffClient.init({ liffId: LIFF_ID });
+    liffClient.login({ redirectUri: location.href });
+  }catch(e){
+    console.error("[coach] LINE login:", e);
+    showLogin("เปิด LINE Login ไม่สำเร็จ — กรุณาลองใหม่", true);
+    $("liRetry").style.display="block"; showGoBooking();
+  }
+});
+$("liRetry").addEventListener("click", ()=>location.reload());
 $("goBookingBtn").addEventListener("click", ()=>{ location.href = "/index.html"; });
 $("naRetry").addEventListener("click", ()=>location.reload());
 $("logoutBtn").addEventListener("click", ()=>{
-  try{ liff.logout(); }catch{}
+  try{ window.liff?.logout(); }catch{}
   location.reload();
 });
 
@@ -626,7 +708,19 @@ async function toggleAvail(hour, open, btn){
   finally{ availBusy = false; loadAvail(); }
 }
 
-boot();
+async function start(){
+  showLogin("กำลังเริ่มระบบยืนยันตัวตน...");
+  try{
+    await initFirebase();
+    await boot();
+  }catch(e){
+    console.error("[coach] startup:", e);
+    showLogin(`โหลดระบบยืนยันตัวตนไม่สำเร็จ: ${e.message||e}`, true);
+    $("liRetry").style.display="block";
+    showGoBooking();
+  }
+}
+start();
 </script>
 </body>
 </html>
