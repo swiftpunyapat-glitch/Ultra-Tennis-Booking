@@ -241,6 +241,11 @@ function genPurchaseCode() {
   return `PP${t}${r}`;
 }
 
+// Coach V2.1: 2nd student surcharge (owner rule: +฿100, hard max 2 people)
+// and the coaching package types redeemable for a lesson (คล้าย Pass).
+const COACH_EXTRA_PERSON_FEE = 100;
+const COACH_PACKAGE_TYPES = ['beginner_coaching_5'];
+
 // ── Coach booking feature flag — missing doc/field = OFF (safe default) ──
 async function coachBookingEnabled(db) {
   try {
@@ -906,12 +911,21 @@ async function handleCreateCoachLesson(res, body) {
   const lineUserId    = typeof body.lineUserId === 'string' && body.lineUserId ? body.lineUserId : 'guest';
   const lineDisplayName = typeof body.lineDisplayName === 'string' ? body.lineDisplayName : '';
   const customerNote  = typeof body.customerNote === 'string' ? body.customerNote.slice(0, 500) : '';
+  // Coach V2.1: group size (owner rule: 2nd student +฿100, hard max 2) and
+  // optional coaching-package redemption (คล้าย Pass แต่ With Coach).
+  const students   = body.students === 2 || body.students === '2' ? 2 : 1;
+  const usePackage = body.payType === 'coach_package';
+  const packageId  = typeof body.packageId === 'string' ? body.packageId.trim() : '';
 
   if (!DATE_RE.test(date))      return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'date must be YYYY-MM-DD' });
   if (!TIME_RE.test(startTime)) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'startTime must be HH:mm' });
   if (!coachId)       return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'coachId is required' });
   if (!customerName)  return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerName is required' });
   if (!customerPhone) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerPhone is required' });
+  if (usePackage && !packageId) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'packageId is required' });
+  if (usePackage && students === 2) {
+    return res.status(409).json({ ok: false, code: 'VALIDATION', error: 'ใช้แพ็คเกจ + เรียน 2 คน กรุณาแจ้งที่ร้าน (ชำระค่าคนที่ 2 หน้าร้าน)' });
+  }
 
   let db;
   try { db = getAdminDb(); }
@@ -931,9 +945,40 @@ async function handleCreateCoachLesson(res, body) {
   if (coach.active === false || !Number.isInteger(coach.lessonPrice) || coach.lessonPrice <= 0) {
     return res.status(409).json({ ok: false, error: 'โค้ชคนนี้ยังไม่เปิดรับจองผ่านระบบ' });
   }
-  const customerPrice = coach.lessonPrice;   // one clear total, INCLUDES room
+  const extraPersonFee = students === 2 ? COACH_EXTRA_PERSON_FEE : 0;
+  const customerPrice  = usePackage ? 0 : coach.lessonPrice + extraPersonFee;   // QR total INCLUDES room (+2nd student)
   const coachPayoutAmount = (Number.isInteger(coach.payoutPerHour) && coach.payoutPerHour >= 500)
     ? coach.payoutPerHour : 500;             // business minimum 500 THB/hour
+
+  // ── Package redemption guards (identity REQUIRED via Firebase ID token —
+  //    minted by /api/auth-line, uid = verified LINE userId) ─────────────
+  let pkg = null;
+  if (usePackage) {
+    let uid = null;
+    try {
+      if (typeof body.idToken === 'string' && body.idToken.trim()) {
+        uid = (await getAdminAuth().verifyIdToken(body.idToken.trim())).uid;
+      }
+    } catch { /* fall through to the 403 below */ }
+    if (!uid) return res.status(403).json({ ok: false, error: 'กรุณาเข้าสู่ระบบผ่าน LINE เพื่อใช้แพ็คเกจ' });
+    try {
+      const ps = await db.collection('customer_packages').doc(packageId).get();
+      if (!ps.exists) return res.status(404).json({ ok: false, error: 'ไม่พบแพ็คเกจ' });
+      pkg = ps.data();
+    } catch (e) { console.error('[create_coach_lesson] pkg read:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+    if (pkg.lineUserId !== uid) return res.status(403).json({ ok: false, error: 'แพ็คเกจนี้ไม่ใช่ของบัญชีนี้' });
+    if (!COACH_PACKAGE_TYPES.includes(pkg.packageType)) {
+      return res.status(409).json({ ok: false, error: 'แพ็คเกจนี้ใช้จองคาบสอนโค้ชไม่ได้' });
+    }
+    if (pkg.status !== 'active') return res.status(409).json({ ok: false, error: 'แพ็คเกจไม่พร้อมใช้งาน' });
+    if ((Number(pkg.remainingMinutes) || 0) < 60) {
+      return res.status(409).json({ ok: false, error: 'ชั่วโมงในแพ็คเกจไม่พอ (ต้องมีอย่างน้อย 1 ชั่วโมง)' });
+    }
+    const validUntil = pkg.validUntil?.toDate?.()?.toISOString?.()?.slice(0, 10) ?? null;
+    if (validUntil && date > validUntil) {
+      return res.status(409).json({ ok: false, error: `แพ็คเกจหมดอายุ ${validUntil} — เลือกวันก่อนหมดอายุ` });
+    }
+  }
 
   const nowMs = Date.now();
   const startMs = new Date(`${date}T${startTime}:00+07:00`).getTime();
@@ -949,12 +994,26 @@ async function handleCreateCoachLesson(res, body) {
   const slotRef       = db.collection('booking_slots').doc(slotIdOf(date, startTime));
   const availRef      = db.collection('available_slots').doc(slotIdOf(date, startTime));
   const coachAvailRef = db.collection('coach_availability').doc(coachAvailDocId(coachId, date, startTime));
+  const pkgRef        = usePackage ? db.collection('customer_packages').doc(packageId) : null;
+
+  // Package bookings are confirmed instantly (no payment window, no QR).
+  const bkStatus  = usePackage ? 'confirmed' : 'pending_payment';
+  const payStatus = usePackage ? 'package'   : 'unpaid';
+  const holdExp   = usePackage ? null        : paymentExpiresAt;
 
   try {
     await db.runTransaction(async (t) => {
-      const [slotSnap, availSnap, caSnap] = await Promise.all([
+      const [slotSnap, availSnap, caSnap, pkgSnap] = await Promise.all([
         t.get(slotRef), t.get(availRef), t.get(coachAvailRef),
+        pkgRef ? t.get(pkgRef) : Promise.resolve(null),
       ]);
+
+      // ── Package re-validation INSIDE the transaction (atomic deduct) ──
+      if (pkgRef) {
+        if (!pkgSnap.exists) throw new Error('PKG_GONE');
+        const p = pkgSnap.data();
+        if (p.status !== 'active' || (Number(p.remainingMinutes) || 0) < 60) throw new Error('PKG_EMPTY');
+      }
 
       // ── Room guards (identical rules to handleCreate) ───────────────
       if (!availSnap.exists || availSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
@@ -980,18 +1039,19 @@ async function handleCreateCoachLesson(res, body) {
         throw new Error('COACH_NOT_OPEN');
       }
 
-      // ── Writes: booking + room lock + coach lock (one commit) ───────
+      // ── Writes: booking + room lock + coach lock (+ package deduct) ──
       t.set(bookingRef, {
         bookingCode, resourceId: RESOURCE_ID, branchId: ca.branchId || DEFAULT_BRANCH_ID,
         bookingType: 'Coach Lesson',
         serviceType: 'coach_lesson',
         coachId, coachName: coach.displayName || coachId,
         customerPrice, coachPayoutAmount, coachPayoutStatus: 'pending',
+        studentCount: students, extraPersonFee,
         lessonStatus: 'scheduled',
         lineUserId, lineDisplayName,
         customerName, customerPhone, customerPhoneNormalized: normalizePhone(customerPhone),
         customerNote,
-        date, startTime, endTime, durationHours: 1,
+        date, startTime, endTime, durationHours: 1, durationMinutes: 60,
         price: customerPrice, amount: customerPrice,
         originalPrice: customerPrice, finalPrice: customerPrice,
         basePrice: customerPrice, effectivePrice: customerPrice,
@@ -999,8 +1059,14 @@ async function handleCreateCoachLesson(res, body) {
         promoCode: null, voucherCode: null, discountAmount: 0,
         qrAmount: customerPrice, qrType: 'normal', paymentQrType: 'normal',
         promoApplied: false,
-        bookingStatus: 'pending_payment', paymentStatus: 'unpaid',
-        paymentExpiresAt,
+        bookingStatus: bkStatus, paymentStatus: payStatus,
+        paymentExpiresAt: holdExp,
+        ...(usePackage ? {
+          packageId, packageType: pkg.packageType, packageName: pkg.packageName || pkg.packageType,
+          usedPackageId: packageId, usedPackageType: pkg.packageType, usedPackageName: pkg.packageName || pkg.packageType,
+          packageLessonValue: coach.lessonPrice,   // reference value of the redeemed lesson
+          confirmedAt: FieldValue.serverTimestamp(),
+        } : {}),
         slipUrl: null, slipUploadedAt: null, cancelReason: null,
         createdVia: 'server',
         createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
@@ -1009,8 +1075,8 @@ async function handleCreateCoachLesson(res, body) {
         bookingCode, bookingId: bookingRef.id, resourceId: RESOURCE_ID,
         branchId: ca.branchId || DEFAULT_BRANCH_ID,
         date, hour: startTime,
-        bookingStatus: 'pending_payment', paymentStatus: 'unpaid',
-        expiresAt: paymentExpiresAt,
+        bookingStatus: bkStatus, paymentStatus: payStatus,
+        expiresAt: holdExp,
         coachId,
       });
       t.set(coachAvailRef, {
@@ -1018,9 +1084,18 @@ async function handleCreateCoachLesson(res, body) {
         date, hour: startTime,
         status: 'booked',
         bookingId: bookingRef.id, bookingCode,
-        holdExpiresAt: paymentExpiresAt,
+        holdExpiresAt: holdExp,
         updatedAt: FieldValue.serverTimestamp(),
       });
+      if (pkgRef) {
+        const p = pkgSnap.data();
+        t.update(pkgRef, {
+          remainingMinutes: (Number(p.remainingMinutes) || 0) - 60,
+          lastUsedAt: FieldValue.serverTimestamp(),
+          lastUsedBooking: bookingCode,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
     });
   } catch (e) {
     const msg = e.message || '';
@@ -1030,24 +1105,30 @@ async function handleCreateCoachLesson(res, body) {
       SLOT_HELD:      'ช่องเวลานี้ถูกจองค้างอยู่ ลองใหม่อีกครั้ง',
       COACH_NOT_OPEN: 'โค้ชไม่ได้เปิดรับสอนช่วงเวลานี้แล้ว',
       COACH_HELD:     'ช่วงเวลานี้ของโค้ชเพิ่งถูกจอง',
+      PKG_GONE:       'ไม่พบแพ็คเกจ กรุณารีเฟรช',
+      PKG_EMPTY:      'ชั่วโมงในแพ็คเกจไม่พอแล้ว กรุณารีเฟรช',
     };
     if (m[msg]) return res.status(409).json({ ok: false, code: 'SLOT', error: m[msg] });
     console.error('[create_coach_lesson] tx:', msg);
     return res.status(500).json({ ok: false, error: 'Failed to create coach lesson booking' });
   }
 
-  console.log(`[create_coach_lesson] ${bookingCode} coach:${coachId} ฿${customerPrice} payout:฿${coachPayoutAmount}`);
+  console.log(`[create_coach_lesson] ${bookingCode} coach:${coachId} ${usePackage ? `PKG:${packageId}` : `฿${customerPrice}`} students:${students} payout:฿${coachPayoutAmount}`);
   return res.status(200).json({
     ok: true,
-    paymentExpiresAt: paymentExpiresAt.toDate().toISOString(),
+    usedPackage: usePackage,
+    paymentExpiresAt: usePackage ? null : paymentExpiresAt.toDate().toISOString(),
     booking: {
       id: bookingRef.id, bookingCode, date, startTime, endTime,
       bookingType: 'Coach Lesson', serviceType: 'coach_lesson',
       coachId, coachName: coach.displayName || coachId,
+      studentCount: students, extraPersonFee,
       finalPrice: customerPrice, price: customerPrice, originalPrice: customerPrice,
       qrType: 'normal', qrAmount: customerPrice, paymentQrType: 'normal',
       pricingType: 'coach_lesson', discountAmount: 0, voucherCode: null,
+      bookingStatus: bkStatus, paymentStatus: payStatus,
       lineUserId, customerName, customerPhone, customerNote,
+      ...(usePackage ? { packageName: pkg.packageName || pkg.packageType } : {}),
     },
   });
 }
