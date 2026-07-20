@@ -553,7 +553,7 @@
                 <option value="ultra_pass_20">⚡ Ultra Pass 20 Hours (20 Hours · ฿5,900)</option>
                 <option value="beginner_coaching_5">🎓 Beginner Coaching (5 Hours · เริ่มต้น ฿4,000)</option>
                 <option value="offpeak">🕐 Off-Peak Pass (16 Hours · ฿3,600 · ≤4 ชม./สัปดาห์ · 30 วัน)</option>
-                <option value="coach_at_ultra_10">🎾 Coaching at Ultra (10 Hours · ฿3,000)</option>
+                <option value="coach_at_ultra_10">🎾 Coaching at Ultra (5 Hours · ฿3,000)</option>
                 <option value="monstr_event_pass">🎟️ MONSTR Event Pass (1 Hour · single-use · Mon–Fri)</option>
               </select>
             </div>
@@ -2742,7 +2742,9 @@ const PACKAGES = {
   ultra_pass_10:        { packageType: "ultra_pass_10",        packageName: "Ultra Pass 10 Hours",  totalMinutes: 600,  validityDays: 90 },
   ultra_pass_20:        { packageType: "ultra_pass_20",        packageName: "Ultra Pass 20 Hours",  totalMinutes: 1200, validityDays: 180 },
   beginner_coaching_5:  { packageType: "beginner_coaching_5",  packageName: "Beginner Coaching",    totalMinutes: 300,  validityDays: 60 },
-  coach_at_ultra_10:    { packageType: "coach_at_ultra_10",    packageName: "Coaching at Ultra",    totalMinutes: 600,  validityDays: 60 },
+  // Keep the legacy packageType key for existing Firestore documents; the
+  // corrected entitlement is 5 hours (300 minutes), not 10 hours.
+  coach_at_ultra_10:    { packageType: "coach_at_ultra_10",    packageName: "Coaching at Ultra",    totalMinutes: 300,  validityDays: 60 },
   // Legacy
   ultra_10:             { packageType: "ultra_10",             packageName: "Ultra Pass 10 Hours",  totalMinutes: 600,  validityDays: 90 },
   ultra_20:             { packageType: "ultra_20",             packageName: "Ultra Pass 20 Hours",  totalMinutes: 1200, validityDays: 180 },
