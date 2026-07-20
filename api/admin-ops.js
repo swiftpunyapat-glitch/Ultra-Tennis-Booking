@@ -217,12 +217,17 @@ export default async function handler(req, res) {
   }
 
   // ── Everything else requires an admin session OR (for the coach-scoped
-  //    actions) a LINE-derived Firebase ID token (Coach V2) ────────────
-  let session = verifySession(req);
-  if (!session && COACH_TOKEN_ACTIONS.includes(action) && typeof body.idToken === 'string') {
+  //    actions) a LINE-derived Firebase ID token (Coach V2).
+  // ORDER MATTERS: for coach actions carrying an idToken, resolve the COACH
+  // identity FIRST — an owner/admin testing coach.html in a browser that also
+  // holds the adminSession cookie must act as the coach, not the admin
+  // (the cookie used to hijack these calls → "coachId required" errors). ──
+  let session = null;
+  if (COACH_TOKEN_ACTIONS.includes(action) && typeof body.idToken === 'string') {
     const db = getDbOr500(res); if (!db) return;
     session = await coachSessionFromToken(body.idToken, { auth: getAdminAuth(), db });
   }
+  if (!session) session = verifySession(req);
   if (!session) return res.status(401).json({ ok: false, error: 'Unauthorized' });
 
   switch (action) {

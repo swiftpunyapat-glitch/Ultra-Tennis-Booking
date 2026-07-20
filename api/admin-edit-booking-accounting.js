@@ -298,13 +298,16 @@ export default async function handler(req, res) {
   }
 
   // ── Auth: admin session cookie, or (coach_lesson_update only) a LINE-
-  //    derived Firebase ID token — Coach V2 replaces the PIN cookie. ──
-  let session = verifySession(req);
-  if (!session && operation === 'coach_lesson_update' && typeof body.idToken === 'string') {
+  //    derived Firebase ID token — Coach V2 replaces the PIN cookie.
+  // Token FIRST for coach_lesson_update: an admin's cookie in the same
+  // browser must not hijack the coach's own action (see admin-ops note). ──
+  let session = null;
+  if (operation === 'coach_lesson_update' && typeof body.idToken === 'string') {
     try {
       session = await coachSessionFromToken(body.idToken, { auth: getAdminAuth(), db: getAdminDb() });
     } catch (e) { console.error('[coach token]', e.message); }
   }
+  if (!session) session = verifySession(req);
   if (!session) return res.status(401).json({ ok: false, error: 'Unauthorized' });
   const adminName = session.name;
 
