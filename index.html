@@ -639,12 +639,29 @@
         <div class="tgrid" id="ckTimeGrid"></div>
       </div>
 
+      <!-- Coach V2.1: pay by QR or redeem a coaching package (คล้าย Pass) -->
+      <div class="card" id="ckPayCard" style="display:none">
+        <div class="slabel">วิธีชำระ</div>
+        <div class="ptgrid" style="grid-template-columns:1fr 1fr">
+          <button class="ptbtn on" id="ckPayQr"><span class="pt-name">จ่าย QR</span><small class="pt-sub">ราคารวมค่าคอร์ท</small></button>
+          <button class="ptbtn" id="ckPayPkg"><span class="pt-name">ใช้แพ็คเกจโค้ช</span><small class="pt-sub" id="ckPayPkgSub">—</small></button>
+        </div>
+      </div>
+
       <div class="card" id="ckInfoCard" style="display:none">
         <div class="slabel" data-i18n="yourInfo">Your Info</div>
         <div class="fgrid">
           <label><span data-i18n="name">Name</span><input type="text" id="ckName" autocomplete="name" placeholder="Full name"/></label>
           <label><span data-i18n="phone">Phone</span><input type="tel" id="ckPhone" autocomplete="tel" placeholder="Phone number"/></label>
           <label class="full"><span data-i18n="noteOptional">Note (optional)</span><textarea id="ckNote" rows="2"></textarea></label>
+        </div>
+        <div style="margin-top:12px">
+          <div class="slabel" style="margin-bottom:6px">จำนวนผู้เรียน (สูงสุด 2 คน)</div>
+          <div class="ptgrid" style="grid-template-columns:1fr 1fr">
+            <button class="ptbtn on" id="ckStu1"><span class="pt-name">1 คน</span></button>
+            <button class="ptbtn" id="ckStu2"><span class="pt-name">2 คน</span><small class="pt-sub">+฿100</small></button>
+          </div>
+          <p id="ckStuNote" style="display:none;font-size:.68rem;color:var(--muted);margin-top:6px">ใช้แพ็คเกจ + เรียน 2 คน: แจ้งที่ร้าน (ชำระค่าคนที่ 2 ฿100 หน้าร้าน)</p>
         </div>
         <p style="font-size:.68rem;color:var(--muted);line-height:1.8;margin:10px 2px 0">
           📌 <strong>นโยบายคาบสอนโค้ช</strong> · ยกเลิก/เลื่อนล่วงหน้าอย่างน้อย 48 ชั่วโมง
@@ -658,7 +675,7 @@
           <div>
             <div class="eyebrow">ราคารวม (รวมค่าคอร์ทแล้ว)</div>
             <h2 id="ckPrice">฿—</h2>
-            <p>ชำระภายใน 15 นาที · QR ตามยอดจริง</p>
+            <p id="ckPayNote">ชำระภายใน 15 นาที · QR ตามยอดจริง</p>
           </div>
           <button class="btn-go" id="ckConfirmBtn" disabled>ยืนยันจองพร้อมโค้ช</button>
         </div>
@@ -880,7 +897,7 @@ import {
   getStorage, ref as sRef, uploadBytes, getDownloadURL
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-storage.js";
 import {
-  getAuth, signInWithCustomToken
+  getAuth, signInWithCustomToken, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
 
 // ── FIREBASE ────────────────────────────────────────────────────
@@ -3563,24 +3580,33 @@ $("pbConfirmBtn").addEventListener("click", async()=>{
 // coach hour in one server transaction (create_coach_lesson). Payment/slip/
 // cancel then reuse the existing machinery unchanged.
 let ckCoaches=[], ckSel=null, ckDate=null, ckTime=null, ckBusy=false;
+// Coach V2.1: payment mode (QR vs coaching package) + group size (max 2).
+let ckPayMode="qr", ckPkg=null, ckStudents=1;
+const CK_EXTRA_FEE=100;
+const CK_PKG_TYPES=["beginner_coaching_5"];
 
 // ── Coach V2: "Coach Mode" home card — shown only when the signed-in LINE
-// account is an active coach. Needs the Firebase custom-token sign-in to have
-// completed (uid = lineUserId); retries once shortly after in case auth was
-// still in flight when the home view bound. Fail-closed: any error = hidden.
-async function initCoachModeCard(attempt=0){
-  try{
-    const u = fbAuth.currentUser;
-    if(!u){ if(attempt<3) setTimeout(()=>initCoachModeCard(attempt+1), 2500); return; }
-    const idToken = await u.getIdToken();
-    const r = await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"coach_whoami",idToken})});
-    const d = await r.json().catch(()=>null);
-    if(r.ok&&d&&d.ok&&d.isCoach){
-      $("coachModeSub").textContent = `${d.displayName||""} · ตารางสอน · เวลาว่าง · รายได้`;
-      $("btnCoachMode").style.display = "flex";
-    }
-  }catch(e){ console.warn("[coachmode] whoami failed (card stays hidden):", e); }
+// account is an active coach. Subscribes to onAuthStateChanged so the check
+// runs EXACTLY when the Firebase custom-token sign-in completes, however slow
+// the network is (the old timed retries missed slow sign-ins after deploy).
+// Fail-closed: any error = hidden.
+let _coachCardChecked = false;
+function initCoachModeCard(){
+  onAuthStateChanged(fbAuth, async (u)=>{
+    if(!u || _coachCardChecked) return;
+    _coachCardChecked = true;
+    try{
+      const idToken = await u.getIdToken();
+      const r = await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"coach_whoami",idToken})});
+      const d = await r.json().catch(()=>null);
+      console.log("[coachmode] whoami:", d && d.isCoach ? `coach ${d.coachId}` : "not a coach");
+      if(r.ok&&d&&d.ok&&d.isCoach){
+        $("coachModeSub").textContent = `${d.displayName||""} · ตารางสอน · เวลาว่าง · รายได้`;
+        $("btnCoachMode").style.display = "flex";
+      }
+    }catch(e){ console.warn("[coachmode] whoami failed (card stays hidden):", e); _coachCardChecked = false; }
+  });
 }
 
 async function initCoachHome(){
@@ -3597,8 +3623,10 @@ async function initCoachHome(){
 
 function openCoachView(){
   ckSel=null; ckDate=null; ckTime=null;
-  ["ckDateCard","ckTimeCard","ckInfoCard","ckConfirmCard"].forEach(id=>{$(id).style.display="none";});
+  ckPayMode="qr"; ckStudents=1;
+  ["ckDateCard","ckTimeCard","ckPayCard","ckInfoCard","ckConfirmCard"].forEach(id=>{$(id).style.display="none";});
   renderCkCoaches();
+  loadCkPackage();   // async — shows the package pay option when eligible
   if(!$("ckName").value.trim()){
     const n=$("bkName")?.value?.trim();
     $("ckName").value=n||((state.lineProfile&&state.lineProfile.displayName!=="Guest")?state.lineProfile.displayName:"");
@@ -3621,7 +3649,7 @@ function renderCkCoaches(){
       renderCkCoaches();
       buildCkDates();
       $("ckDateCard").style.display="block";
-      $("ckPrice").textContent=`฿${Number(c.lessonPrice).toLocaleString("en-US")}`;
+      updateCkPrice();
       if(ckDate) loadCkHours(); else { $("ckTimeCard").style.display="none"; }
       updateCkConfirm();
     });
@@ -3675,8 +3703,10 @@ async function loadCkHours(){
         ckTime=h;
         grid.querySelectorAll(".tbtn").forEach(b=>b.classList.remove("on"));
         btn.classList.add("on");
+        if(ckPkg) $("ckPayCard").style.display="block";   // package option exists
         $("ckInfoCard").style.display="block";
         $("ckConfirmCard").style.display="block";
+        updateCkPrice();
         updateCkConfirm();
       });
       grid.appendChild(btn);
@@ -3691,13 +3721,77 @@ function updateCkConfirm(){
   $("ckConfirmBtn").disabled=!(ckSel&&ckDate&&ckTime&&$("ckName").value.trim()&&$("ckPhone").value.trim())||ckBusy;
 }
 
+// ── Coach V2.1: coaching-package eligibility (คล้าย Pass แต่ With Coach) ──
+// Client-direct read like the pass eligibility flow; the server re-validates
+// ownership (Firebase token), remaining minutes, and expiry on create.
+async function loadCkPackage(){
+  ckPkg=null;
+  try{
+    const uid=state.lineProfile?.userId;
+    if(!uid||uid==="guest") return;
+    const snap=await getDocs(query(collection(db,"customer_packages"),
+      where("lineUserId","==",uid),where("status","==","active")));
+    const now=Date.now();
+    const cands=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .filter(p=>CK_PKG_TYPES.includes(p.packageType))
+      .filter(p=>(Number(p.remainingMinutes)||0)>=60)
+      .filter(p=>{ const vu=p.validUntil?.toDate?.(); return !vu||vu.getTime()>=now; })
+      .sort((a,b)=>{ const av=a.validUntil?.toDate?.()?.getTime()||Infinity, bv=b.validUntil?.toDate?.()?.getTime()||Infinity; return av-bv; });
+    if(cands.length){
+      ckPkg=cands[0];
+      $("ckPayPkgSub").textContent=`${ckPkg.packageName||ckPkg.packageType} · เหลือ ${Math.floor((Number(ckPkg.remainingMinutes)||0)/60)} ชม.`;
+      if(ckTime) $("ckPayCard").style.display="block";
+    }
+  }catch(e){ console.warn("[coach] package check failed (QR only):",e); }
+}
+
+// Price + note reflect pay mode and group size. Package locks students to 1
+// (2nd student is arranged and paid at the shop — owner rule).
+function updateCkPrice(){
+  const pkgMode = ckPayMode==="pkg" && ckPkg;
+  $("ckPayQr").classList.toggle("on", !pkgMode);
+  $("ckPayPkg").classList.toggle("on", !!pkgMode);
+  $("ckStu1").classList.toggle("on", ckStudents===1);
+  $("ckStu2").classList.toggle("on", ckStudents===2);
+  $("ckStu2").disabled = !!pkgMode;
+  $("ckStuNote").style.display = pkgMode ? "block" : "none";
+  const note=$("ckPayNote");
+  if(pkgMode){
+    $("ckPrice").textContent="฿0";
+    if(note) note.textContent=`ตัดจากแพ็คเกจ ${ckPkg.packageName||ckPkg.packageType} 1 ชั่วโมง · ยืนยันทันที ไม่ต้องโอน`;
+  }else{
+    const total=(ckSel?Number(ckSel.lessonPrice):0)+(ckStudents===2?CK_EXTRA_FEE:0);
+    $("ckPrice").textContent=ckSel?`฿${total.toLocaleString("en-US")}`:"฿—";
+    if(note) note.textContent=`ชำระภายใน 15 นาที · QR ตามยอดจริง${ckStudents===2?" · รวมค่าคนที่ 2 แล้ว (+฿100)":""}`;
+  }
+}
+$("ckPayQr").addEventListener("click",()=>{ ckPayMode="qr"; updateCkPrice(); });
+$("ckPayPkg").addEventListener("click",()=>{
+  if(!ckPkg) return;
+  ckPayMode="pkg"; ckStudents=1;
+  updateCkPrice();
+});
+$("ckStu1").addEventListener("click",()=>{ ckStudents=1; updateCkPrice(); });
+$("ckStu2").addEventListener("click",()=>{
+  if(ckPayMode==="pkg"){ showToast("ใช้แพ็คเกจ + เรียน 2 คน กรุณาแจ้งที่ร้าน",true); return; }
+  ckStudents=2; updateCkPrice();
+});
+
 $("ckConfirmBtn").addEventListener("click", async()=>{
   if(ckBusy||!ckSel||!ckDate||!ckTime) return;
   const name=$("ckName").value.trim(), phone=$("ckPhone").value.trim();
   if(!name||!phone){ showToast(currentLang==="th"?"กรอกชื่อและเบอร์โทร":"Please fill in name and phone",true); return; }
+  const pkgMode = ckPayMode==="pkg" && ckPkg;
   ckBusy=true;
   const btn=$("ckConfirmBtn"); btn.disabled=true; btn.textContent="กำลังจอง...";
   try{
+    // Package redemption requires the Firebase ID token (server verifies the
+    // package really belongs to this LINE account before deducting).
+    let pkgToken;
+    if(pkgMode){
+      pkgToken = fbAuth.currentUser ? await fbAuth.currentUser.getIdToken().catch(()=>null) : null;
+      if(!pkgToken){ showToast("กรุณาเปิดผ่าน LINE เพื่อใช้แพ็คเกจ",true); return; }
+    }
     const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({
         action:"create_coach_lesson",
@@ -3706,6 +3800,8 @@ $("ckConfirmBtn").addEventListener("click", async()=>{
         customerNote:$("ckNote").value.trim(),
         lineUserId:state.lineProfile?.userId||"guest",
         lineDisplayName:state.lineProfile?.displayName||"",
+        students: ckStudents,
+        ...(pkgMode ? { payType:"coach_package", packageId:ckPkg.id, idToken:pkgToken } : {}),
       })});
     const d=await r.json().catch(()=>null);
     if(!r.ok||!d||!d.ok){
@@ -3714,6 +3810,17 @@ $("ckConfirmBtn").addEventListener("click", async()=>{
       return;
     }
     const b=d.booking;
+    // ── Package path: confirmed instantly — success screen, no QR ─────
+    if(d.usedPackage){
+      if(window.notifyAdmins){
+        window.notifyAdmins({ type:"new_booking_admin", bookingCode:b.bookingCode, customerName:name, customerPhone:phone, date:ckDate, startTime:ckTime, endTime:b.endTime, coachName:b.coachName, bookingType:`Coach Lesson (แพ็คเกจ ${b.packageName||""})` });
+      }
+      showSuccess("✅","จองคาบสอนสำเร็จ",b.bookingCode,
+        `${name} · ${ckDate} · ${ckTime}–${b.endTime} · โค้ช ${b.coachName}\nตัดจากแพ็คเกจ ${b.packageName||""} 1 ชั่วโมง — ไม่ต้องชำระเงิน`);
+      showView("viewSuccess");
+      loadCkPackage();   // refresh remaining hours
+      return;
+    }
     const expiresAt=new Date(d.paymentExpiresAt);
     state.paymentMode="booking";
     state.currentBookingCode=b.bookingCode;
