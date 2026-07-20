@@ -311,14 +311,18 @@ async function liffFallback(){
   $("liMsg").textContent = "กำลังยืนยันตัวตน...";
   try{
     const lineIdToken = liffClient.getIDToken();
-    if(!lineIdToken) throw new Error("no LINE id_token");
-    const r = await fetch("/api/auth-line",{ method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ idToken: lineIdToken }) });
+    const lineAccessToken = liffClient.getAccessToken();
+    if(!lineIdToken && !lineAccessToken) throw new Error("LINE ไม่ได้ส่ง token สำหรับยืนยันตัวตน");
+    const r = await fetch("/api/auth-line",{ method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
+      idToken: lineIdToken || undefined,
+      accessToken: lineAccessToken || undefined,
+    }) });
     const d = await r.json().catch(()=>({}));
     if(!r.ok || !d.ok || !d.customToken) throw new Error(d.error || "auth-line failed");
     await signInWithCustomToken(fbAuth, d.customToken);   // → onAuthStateChanged → afterSignedIn
   }catch(e){
     console.error("[coach] sign-in:", e);
-    showLogin("ยืนยันตัวตนไม่สำเร็จ — เปิดผ่านหน้าจองแล้วกดการ์ด Coach Mode แทน", true);
+    showLogin(`ยืนยันตัวตนไม่สำเร็จ: ${e.message||e}`, true);
     showGoBooking();
   }
 }

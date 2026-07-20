@@ -944,10 +944,11 @@ async function ensureFirebaseAuth(lineUserId){
     if(fbAuth.currentUser && fbAuth.currentUser.uid === lineUserId) return true; // already signed in
     authMetric("auth_attempt");
     const idToken = liff.getIDToken();
-    if(!idToken){ authMetric("auth_skip_no_id_token"); console.warn("[auth] no LIFF id_token (enable 'openid' scope on the LIFF app)"); return false; }
+    const accessToken = liff.getAccessToken();
+    if(!idToken && !accessToken){ authMetric("auth_skip_no_id_token"); console.warn("[auth] no LIFF identity token available"); return false; }
     const r = await fetch("/api/auth-line",{
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ idToken })
+      body: JSON.stringify({ idToken: idToken||undefined, accessToken: accessToken||undefined })
     });
     const d = await r.json().catch(()=>({}));
     if(!r.ok || !d.ok || !d.customToken){ authMetric("auth_failed"); console.warn("[auth] mint failed:", d.error || r.status); return false; }
