@@ -67,7 +67,8 @@ const ACTIVE_PACKAGES = {
     packageType: "coach_at_ultra_10",
     packageName: "Coaching at Ultra",
     price: 3000,
-    totalMinutes: 600,
+    // Legacy key retained for compatibility; product entitlement is 5 hours.
+    totalMinutes: 300,
     validityDays: 60,
     ownerRole: "coach",
     requireStudentInfo: true
