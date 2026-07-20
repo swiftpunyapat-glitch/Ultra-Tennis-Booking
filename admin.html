@@ -204,8 +204,23 @@
     .toast.err{background:var(--dan);}
 
     /* Daily View — Phase 2.3 (reuses existing theme vars; no color additions) */
-    .dvrow{display:grid;grid-template-columns:108px auto 1fr auto;align-items:center;gap:9px;padding:8px 10px;background:var(--s2);border:1px solid var(--bd);border-radius:7px;margin-bottom:5px;}
-    .dvrow .stime{font-size:.78rem;font-weight:700;color:var(--mid);}
+    .dvrow{padding:9px 10px;background:var(--s2);border:1px solid var(--bd);border-radius:9px;margin-bottom:7px;}
+    .dv-head{display:grid;grid-template-columns:54px minmax(0,1fr);align-items:stretch;gap:8px;}
+    .dv-hour{display:flex;align-items:center;justify-content:center;font-size:.78rem;font-weight:900;color:var(--t);background:var(--s);border:1px solid var(--bd);border-radius:7px;}
+    .dv-track{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-width:0;border:1px solid var(--bd);border-radius:7px;overflow:hidden;background:var(--s);}
+    .dv-half{min-width:0;min-height:46px;padding:5px 7px;display:flex;flex-direction:column;justify-content:center;gap:1px;}
+    .dv-half+.dv-half{border-left:2px solid var(--bg);}
+    .dv-half-time{font-size:.59rem;font-weight:800;opacity:.78;white-space:nowrap;}
+    .dv-half-label{font-size:.7rem;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .dv-half-open{background:#0d3320;color:var(--g);}
+    .dv-half-booked{background:#4a1820;color:#ff9aa7;}
+    .dv-half-pending{background:#3d2e00;color:var(--warn);}
+    .dv-half-closed{background:var(--s);color:var(--m);}
+    .dv-half-not_set{background:repeating-linear-gradient(135deg,var(--s),var(--s) 6px,var(--s2) 6px,var(--s2) 12px);color:var(--m);}
+    .dv-body{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:9px;margin:8px 0 0 62px;}
+    .dv-legend{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:9px;padding:7px 9px;border:1px solid var(--bd);border-radius:8px;background:var(--s);font-size:.65rem;color:var(--m);}
+    .dv-legend strong{color:var(--t);margin-right:auto;}
+    .dv-legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px;}
     .dvrow .dv-info{font-size:.74rem;color:var(--mid);min-width:0;overflow:hidden;}
     .dvrow .dv-info strong{color:var(--t);font-weight:700;font-size:.78rem;display:block;}
     .dvrow .dv-info .dv-meta{color:var(--m);font-size:.7rem;margin-top:1px;}
@@ -296,6 +311,16 @@
       .activity-grid{grid-template-columns:105px 90px minmax(130px,1fr);}
       .activity-grid .activity-head:nth-child(4),.activity-grid .activity-head:nth-child(5),
       .activity-grid .activity-cell:nth-child(5n+4),.activity-grid .activity-cell:nth-child(5n+5){display:none;}
+      .dvrow{padding:8px;}
+      .dv-head{grid-template-columns:48px minmax(0,1fr);gap:6px;}
+      .dv-hour{font-size:.72rem;}
+      .dv-half{min-height:48px;padding:5px 6px;}
+      .dv-half-time{font-size:.56rem;}
+      .dv-half-label{font-size:.66rem;}
+      .dv-body{grid-template-columns:1fr;margin:8px 0 0;gap:7px;}
+      .dv-body>.sstatus{justify-self:start;}
+      .dv-actions{justify-content:stretch!important;display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));}
+      .dv-actions .stoggle{width:100%;min-height:34px;}
     }
   </style>
 </head>
@@ -3186,7 +3211,21 @@ async function loadDailyView(){
       else  if(av && av.status==="closed"){ status="closed"; countClosed++; }
       else  { status="not_set"; }
 
-      rows.push({h,time,endT,status,booking,booking2,partial});
+      // The visual timeline is cell-based: every hour is always split into
+      // two explicit 30-minute halves. A legacy/full-hour HH:00 document owns
+      // both halves; a span-30 HH:00 document owns only the first half, while
+      // an HH:30 document owns the second half independently.
+      const baseHalfStatus = av?.status==="open" ? "open" : av?.status==="closed" ? "closed" : "not_set";
+      const bookingFor = bs => bs ? (bookingByCode[bs.bookingCode]||null) : null;
+      const half00 = firstBusy
+        ? { status:"booked", booking:bookingFor(bs00), slot:bs00 }
+        : { status:baseHalfStatus, booking:null, slot:null };
+      const secondSlot = live30 ? bs30 : (firstBusy && bs00.slotSpanMinutes!==30 ? bs00 : null);
+      const half30 = secondBusy
+        ? { status:"booked", booking:bookingFor(secondSlot), slot:secondSlot }
+        : { status:baseHalfStatus, booking:null, slot:null };
+
+      rows.push({h,time,endT,status,booking,booking2,partial,half00,half30});
     }
 
     $("dvStTotal").textContent     = countConfirmed+countPending;
@@ -3196,7 +3235,13 @@ async function loadDailyView(){
     $("dvStOpen").textContent      = countOpen;
     $("dvStClosed").textContent    = countClosed;
 
-    $("dvList").innerHTML = `<div>${rows.map(r=>renderDailyRow(r,lookupHistory)).join("")}</div>`;
+    $("dvList").innerHTML = `<div class="dv-legend">
+      <strong>แต่ละแถบ = 30 นาที</strong>
+      <span><i style="background:#0d3320"></i>ว่าง</span>
+      <span><i style="background:#4a1820"></i>จองแล้ว</span>
+      <span><i style="background:#3d2e00"></i>รอชำระ</span>
+      <span><i style="background:var(--s2);border:1px solid var(--bd)"></i>ปิด/ยังไม่เปิด</span>
+    </div><div>${rows.map(r=>renderDailyRow(r,lookupHistory)).join("")}</div>`;
 
     // Wire row actions
     $("dvList").querySelectorAll("[data-dv-manual]").forEach(b=>{
@@ -3289,7 +3334,31 @@ function renderDailyRow(r,lookupHistory){
     actions = `<div class="dv-actions"></div>`;
   }
 
-  return `<div class="dvrow"><span class="stime">${esc(time)} – ${esc(endT)}</span>${pill}${info}${actions}</div>`;
+  const renderHalf=(half,start,end)=>{
+    const b=half.booking;
+    const pending=half.slot?.bookingStatus==="pending_payment" || b?.bookingStatus==="pending_payment";
+    const cls=half.status==="booked" ? (pending?"pending":"booked") : half.status;
+    let label;
+    if(half.status==="booked") label=b?.customerName||b?.bookingCode||"Reserved";
+    else if(half.status==="open") label="ว่าง";
+    else if(half.status==="closed") label="ปิด";
+    else label="ยังไม่เปิด";
+    return `<div class="dv-half dv-half-${cls}" title="${esc(start)}–${esc(end)} · ${esc(label)}">
+      <span class="dv-half-time">${esc(start)}–${esc(end)}</span>
+      <span class="dv-half-label">${half.status==="booked"?(pending?"⏳ ":"● "):""}${esc(label)}</span>
+    </div>`;
+  };
+  const mid=`${String(r.h).padStart(2,"0")}:30`;
+  return `<div class="dvrow">
+    <div class="dv-head">
+      <div class="dv-hour">${esc(time)}</div>
+      <div class="dv-track">
+        ${renderHalf(r.half00,time,mid)}
+        ${renderHalf(r.half30,mid,endT)}
+      </div>
+    </div>
+    <div class="dv-body">${pill}${info}${actions}</div>
+  </div>`;
 }
 
 // Date controls
