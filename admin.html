@@ -1001,7 +1001,7 @@ const DEFAULT_BRANCH_ID="ladprao1";
 const OPEN_HOUR=6,CLOSE_HOUR=24;
 const LN_HOURS=[0,1,2,3,4,5]; // Late Night 00:00–06:00 — opened manually only, never by Open This Day/Week
 const LATE_NIGHT_PRICE=450;   // ฿/hr for Late Night Session
-const BUILD_VERSION="2026-07-22-p0.2";
+const BUILD_VERSION="2026-07-22-daily-alert1";
 const BANGKOK_TZ="Asia/Bangkok";
 
 const firebaseConfig={
@@ -3202,8 +3202,8 @@ document.querySelector("[data-tab='passes']").addEventListener("click",()=>{
 let dvLastLoad=null,dvSlotAlertData=null;
 
 function todayISOString(){
-  const d=new Date(),pad=n=>String(n).padStart(2,"0");
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const p=bangkokDebugParts();
+  return `${p.year}-${p.month}-${p.day}`;
 }
 function shiftDate(iso,days){
   const [y,m,d]=iso.split("-").map(Number);
@@ -3215,7 +3215,13 @@ function shiftDate(iso,days){
 async function loadDailyView(){
   if(!$("dvDate").value) $("dvDate").value=todayISOString();
   const date=$("dvDate").value;
+  const alertIsToday=date===todayISOString();
+  $("dvGenerateSlotAlert").disabled=!alertIsToday;
+  $("dvCopySlotAlert").disabled=!alertIsToday;
+  $("dvGenerateSlotAlert").title=alertIsToday?"สร้างข้อความเวลาว่างของวันนี้":"Daily Slot Alert สร้างได้เฉพาะวันนี้";
+  $("dvCopySlotAlert").title=$("dvGenerateSlotAlert").title;
   dvLastLoad=date;
+  dvSlotAlertData=null;
   $("dvList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading ${esc(date)}...</p></div>`;
   $("dvSlotAlertText").value="";
 
@@ -3475,44 +3481,58 @@ function isActiveBookingSlot(bs,now=new Date()){
   return isLiveBookedSlot(bs,now);
 }
 
+const dailyAlertHHMM=min=>min>=1440?"00:00":`${String(Math.floor(min/60)).padStart(2,"0")}:${String(min%60).padStart(2,"0")}`;
+
+function mergeDailyAlertCells(cellStarts){
+  const cells=[...new Set(cellStarts)].sort((a,b)=>a-b);
+  if(!cells.length) return [];
+  const ranges=[];
+  let start=cells[0],last=cells[0];
+  for(let i=1;i<cells.length;i++){
+    if(cells[i]===last+30){ last=cells[i]; continue; }
+    ranges.push({start,end:last+30});
+    start=cells[i]; last=cells[i];
+  }
+  ranges.push({start,end:last+30});
+  return ranges.map(range=>`${dailyAlertHHMM(range.start)}–${dailyAlertHHMM(range.end)} น.`);
+}
+
+function dailyAlertAvailableCells(data,date,now=new Date()){
+  if(!data || data.date!==date || date!==todayISOString()) return [];
+  const p=bangkokDebugParts();
+  // Match the customer Booking rule: the current clock hour is not bookable.
+  const pastCutoff=(Number(p.hour)+1)*60;
+  const cells=[];
+  for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
+    const time=fH(h),av=data.avByTime[time]||null;
+    if(av?.status!=="open") continue;
+    const bs00=data.bsByHour[time]||null;
+    const bs30=data.bsByHour[`${String(h).padStart(2,"0")}:30`]||null;
+    const active00=isActiveBookingSlot(bs00,now);
+    const active30=isActiveBookingSlot(bs30,now);
+    const firstFree=!active00;
+    const secondFree=!active30 && !(active00 && bs00?.slotSpanMinutes!==30);
+    if(firstFree && h*60>=pastCutoff) cells.push(h*60);
+    if(secondFree && h*60+30>=pastCutoff) cells.push(h*60+30);
+  }
+  return cells;
+}
+
 function buildDailySlotAlertText(){
   const date=$("dvDate").value||todayISOString();
   if(!dvSlotAlertData || dvSlotAlertData.date!==date) return null;
-
-  const now=new Date();
-  const slots=[];
-  for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
-    const time=fH(h),av=dvSlotAlertData.avByTime[time]||null,bs=dvSlotAlertData.bsByHour[time]||null;
-    if(av?.status==="open" && !isActiveBookingSlot(bs,now)){
-      slots.push({h,label:`${time}–${fEnd(h)}`});
-    }
-  }
-
-  if(!slots.length){
-    return `🎾 Ultra Tennis วันที่ ${date} เต็มแล้วทุกช่วงเวลา\n\nสามารถเช็กวันถัดไป หรือทักสอบถามคิวหลุดได้ครับ`;
-  }
-
-  const offPeak=slots.filter(s=>s.h>=9&&s.h<=15).map(s=>s.label);
-  const prime=slots.filter(s=>s.h>=18&&s.h<22).map(s=>s.label);
-  const lines=[
-    "🎾 Ultra Tennis วันนี้ยังมีช่วงว่าง!",
-    "",
-    `วันที่: ${date}`,
-    "",
-    `ยังจองได้ ${slots.length} ช่วงเวลา:`,
-    ...slots.map(s=>`• ${s.label}`),
-    ""
-  ];
-  if(offPeak.length) lines.push(`ช่วง Off-Peak ยังว่าง: ${offPeak.join(", ")}`);
-  if(prime.length) lines.push(`ช่วงเย็น/หลังเลิกงานยังว่าง: ${prime.join(", ")}`);
-  if(offPeak.length||prime.length) lines.push("");
-  lines.push("เหมาะสำหรับซ้อมตี ซ้อมฟุตเวิร์ก หรือมาเก็บชั่วโมงแบบส่วนตัว","จองผ่าน LINE ได้เลยครับ");
-  return lines.join("\n");
+  if(date!==todayISOString()) return "";
+  const ranges=mergeDailyAlertCells(dailyAlertAvailableCells(dvSlotAlertData,date));
+  if(!ranges.length) return "";
+  return ["วันนี้ Ultra ยังมีเวลาว่าง","",...ranges,"","จองเลยที่ LINE"].join("\n");
 }
 
 function generateDailySlotAlert(){
+  const date=$("dvDate").value||todayISOString();
+  if(date!==todayISOString()){ showToast("Daily Slot Alert สร้างได้เฉพาะวันนี้",true); return ""; }
   const text=buildDailySlotAlertText();
   if(text==null){ showToast("Load Daily View first.",true); return ""; }
+  if(!text){ $("dvSlotAlertText").value=""; showToast("วันนี้ไม่มีช่วงเวลาว่างสำหรับสร้าง Alert",true); return ""; }
   $("dvSlotAlertText").value=text;
   return text;
 }
