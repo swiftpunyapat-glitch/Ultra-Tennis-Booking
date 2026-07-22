@@ -711,6 +711,7 @@
         <div class="smf"><label>Coach</label><select id="cavCoachSel" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%"><option value="">Select coach...</option></select></div>
         <div class="smf"><label>Date</label><input type="date" id="cavDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%"/></div>
       </div>
+      <div id="cavBatch"></div>
       <div id="cavGrid" style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px"><div class="smempty" style="grid-column:1/-1">เลือกโค้ชและวันที่</div></div>
       <div style="font-size:.68rem;color:var(--m);margin-top:8px">🟢 เปิดรับสอน (กดเพื่อปิด) · ⚪ ยังไม่เปิด (กดเพื่อเปิด) · 🔴 มีจอง/คาบสอน ปิดไม่ได้ · เทา = ร้านไม่เปิดชั่วโมงนั้น</div>
     </div>
@@ -986,6 +987,7 @@ import {
   getFirestore,collection,doc,getDocs,getDoc,updateDoc,writeBatch,addDoc,
   runTransaction,setDoc,query,where,orderBy,serverTimestamp,Timestamp
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
+import { createAvailabilityBatchSelector } from "./availability-batch.js?v=20260722-batch1";
 
 // ── CONFIG ────────────────────────────────────────────────────────
 // Names only — no PINs. PINs live in ADMIN_USERS_JSON on the server.
@@ -999,7 +1001,7 @@ const DEFAULT_BRANCH_ID="ladprao1";
 const OPEN_HOUR=6,CLOSE_HOUR=24;
 const LN_HOURS=[0,1,2,3,4,5]; // Late Night 00:00–06:00 — opened manually only, never by Open This Day/Week
 const LATE_NIGHT_PRICE=450;   // ฿/hr for Late Night Session
-const BUILD_VERSION="2026-07-22-p0.1";
+const BUILD_VERSION="2026-07-22-p0.2";
 const BANGKOK_TZ="Asia/Bangkok";
 
 const firebaseConfig={
@@ -1645,10 +1647,50 @@ $("coachCreateBtn").addEventListener("click", async ()=>{
 
 // ── Admin-managed coach availability (Stage A) ──────────────────────
 // Same server endpoints as coach.html; admins pass coachId explicitly.
+let cavBatch=null, cavLastData=null;
+
+function cavFailureText(item){
+  if(item.code==="ROOM_CLOSED") return "ร้านปิดชั่วโมงนี้";
+  if(item.code==="HAS_BOOKING") return "มีการจองอยู่";
+  if(item.code==="SAME_DAY_CLOSE") return "ต้องปิดล่วงหน้า 1 วัน";
+  return item.error||"บันทึกไม่สำเร็จ";
+}
+
+function ensureCavBatch(){
+  if(cavBatch) return cavBatch;
+  cavBatch=createAvailabilityBatchSelector({
+    mount:$("cavBatch"),
+    onSelectionChange:()=>paintCavGrid(),
+    onSave:async({open,items})=>{
+      const coachId=$("cavCoachSel").value, date=$("cavDate").value;
+      const submitted=items.map(item=>item.id);
+      try{
+        const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          action:"coach_availability_batch_set",coachId,date,
+          operations:items.map(item=>({hour:item.id,open})),
+        })});
+        const d=await res.json().catch(()=>({}));
+        if(!res.ok||!d.ok){ const message=d.error||"บันทึกไม่สำเร็จ"; showToast(message,true); return {failedIds:submitted,message,isError:true}; }
+        const failed=(d.results||[]).filter(item=>!item.ok);
+        await loadCavGrid();
+        if(failed.length){
+          const message=`สำเร็จ ${d.successCount||0} ช่วง · ไม่สำเร็จ ${failed.map(item=>`${item.hour} (${cavFailureText(item)})`).join(", ")}`;
+          showToast(`มี ${failed.length} ช่วงบันทึกไม่สำเร็จ`,true);
+          return {failedIds:failed.map(item=>item.hour),message,isError:true};
+        }
+        const message=`✓ บันทึก ${d.successCount||items.length} ช่วงเวลาแล้ว`;
+        showToast(message);
+        return {failedIds:[],message};
+      }catch(e){ console.error(e); showToast("Network error",true); return {failedIds:submitted,message:"Network error",isError:true}; }
+    },
+  });
+  return cavBatch;
+}
+
 async function loadCavGrid(){
   const coachId=$("cavCoachSel").value, date=$("cavDate").value;
-  const grid=$("cavGrid");
-  if(!coachId||!date){ grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">เลือกโค้ชและวันที่</div>`; return; }
+  const grid=$("cavGrid"), batch=ensureCavBatch();
+  if(!coachId||!date){ cavLastData=null; batch.setItems([], {preserveSelection:false}); grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">เลือกโค้ชและวันที่</div>`; return; }
   grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">Loading...</div>`;
   try{
     const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_availability_get",coachId,date})});
@@ -1657,40 +1699,42 @@ async function loadCavGrid(){
     renderCavGrid(d);
   }catch(e){ console.error(e); grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">❌ Network error</div>`; }
 }
+
 function renderCavGrid(d){
-  const grid=$("cavGrid");
+  cavLastData=d;
   const roomOpen=new Set(d.roomOpen||[]), assigned=new Set(d.assignedHours||[]), coachOpen=d.coachOpen||{};
-  const hours=[...new Set([...roomOpen,...Object.keys(coachOpen)])].sort();
+  const hours=[...new Set([...roomOpen,...assigned,...Object.keys(coachOpen)])].sort();
+  ensureCavBatch().setItems(hours.map(h=>{
+    const av=coachOpen[h], isBooked=(av&&av.status==="booked")||assigned.has(h), isOn=!!av&&!isBooked;
+    return {id:h,isOpen:isOn,canOpen:!isBooked&&!isOn&&roomOpen.has(h),canClose:!isBooked&&isOn};
+  }));
+  paintCavGrid();
+}
+
+function paintCavGrid(){
+  if(!cavLastData) return;
+  const grid=$("cavGrid"), batch=ensureCavBatch();
+  const roomOpen=new Set(cavLastData.roomOpen||[]), assigned=new Set(cavLastData.assignedHours||[]), coachOpen=cavLastData.coachOpen||{};
+  const hours=[...new Set([...roomOpen,...assigned,...Object.keys(coachOpen)])].sort();
   if(!hours.length){ grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">ร้านไม่ได้เปิดชั่วโมงให้จองในวันนี้</div>`; return; }
-  grid.innerHTML="";
+  grid.replaceChildren();
   hours.forEach(h=>{
-    const av=coachOpen[h];
-    const isBooked=(av&&av.status==="booked")||assigned.has(h);
-    const isOn=!!av&&!isBooked;
+    const av=coachOpen[h], isBooked=(av&&av.status==="booked")||assigned.has(h), isOn=!!av&&!isBooked;
     const btn=document.createElement("button");
     btn.className="smbtn";
     btn.style.cssText="padding:8px 4px;font-size:.75rem;font-weight:800";
     if(isBooked){ btn.textContent=`${h} 🔴`; btn.title=`มีจอง/คาบสอน${av&&av.bookingCode?` · ${av.bookingCode}`:""} — ปิดไม่ได้`; btn.disabled=true; btn.style.background="#3d1010"; btn.style.color="var(--dan)"; }
-    else if(isOn){ btn.textContent=`${h} 🟢`; btn.title="เปิดรับสอนอยู่ — กดเพื่อปิด"; btn.style.background="#0f2d1e"; btn.style.color="#2fbf76"; btn.addEventListener("click",()=>cavToggle(h,false,btn)); }
-    else if(roomOpen.has(h)){ btn.textContent=h; btn.title="ยังไม่เปิดรับสอน — กดเพื่อเปิด"; btn.addEventListener("click",()=>cavToggle(h,true,btn)); }
+    else if(isOn){ btn.textContent=`${h} 🟢`; btn.title=batch.getMode()==="close"?"กดเพื่อเลือกปิด":"เปิดรับสอนอยู่"; btn.style.background="#0f2d1e"; btn.style.color="#2fbf76"; }
+    else if(roomOpen.has(h)){ btn.textContent=h; btn.title=batch.getMode()==="open"?"กดเพื่อเลือกเปิด":"ยังไม่ได้เปิดรับสอน"; }
     else { btn.textContent=h; btn.title="ร้านไม่เปิดชั่วโมงนี้"; btn.disabled=true; btn.style.opacity=".4"; }
+    if(batch.isActionable(h)) btn.addEventListener("click",()=>batch.toggle(h)); else if(!isBooked) btn.disabled=true;
+    if(batch.isSelected(h)){ btn.style.outline="3px solid #f0b429"; btn.style.outlineOffset="1px"; btn.textContent+=" ✓"; }
     grid.appendChild(btn);
   });
 }
-async function cavToggle(hour,open,btn){
-  const coachId=$("cavCoachSel").value, date=$("cavDate").value;
-  if(!open&&!confirm(`ปิดรับสอน ${hour} ของ ${coachId} วันที่ ${date}?`)) return;
-  btn.disabled=true;
-  try{
-    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_availability_set",coachId,date,hour,open})});
-    const d=await res.json().catch(()=>({}));
-    if(!res.ok||!d.ok) showToast(d.error||"บันทึกไม่สำเร็จ",true);
-    else showToast(open?`✓ เปิด ${hour} ให้ ${coachId}`:`✓ ปิด ${hour} ของ ${coachId}`);
-  }catch(e){ showToast("Network error",true); }
-  finally{ loadCavGrid(); }
-}
-$("cavCoachSel").addEventListener("change",loadCavGrid);
-$("cavDate").addEventListener("change",loadCavGrid);
+
+$("cavCoachSel").addEventListener("change",()=>{ ensureCavBatch().clear(); ensureCavBatch().setStatus(""); loadCavGrid(); });
+$("cavDate").addEventListener("change",()=>{ ensureCavBatch().clear(); ensureCavBatch().setStatus(""); loadCavGrid(); });
 
 // ── Assign coach modal ──────────────────────────────────────────────
 let assignCoachBooking = null;

@@ -157,6 +157,7 @@
           <div style="font-size:.66rem;color:var(--muted);margin-top:7px">🟩 วันที่ร้านเปิดให้จอง — กดเพื่อเลือกวันแล้วเปิด/ปิดชั่วโมงด้านล่าง (ร้านมักเปิดเดือนต่อเดือน)</div>
         </div>
         <div class="avail-strip" id="availStrip"></div>
+        <div id="availBatch"></div>
         <div id="availGrid"><div class="empty">กำลังโหลด...</div></div>
         <div class="legend">
           <span class="lg-on">เปิดรับสอน (กดเพื่อปิด)</span>
@@ -172,6 +173,7 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
+import { createAvailabilityBatchSelector } from "./availability-batch.js?v=20260722-batch1";
 // ════════════════════════════════════════════════════════════════════
 // Coach V2 — LINE login (PIN retired). Flow: liff.init → LINE id_token →
 // /api/auth-line mints a Firebase custom token (uid = lineUserId) →
@@ -541,10 +543,47 @@ async function postLesson(bookingId, extra){
 
 // ── My availability (Coach Stage 2) ────────────────────────────────
 // Grid of hours per day. States come entirely from coach_availability_get;
-// every toggle goes through coach_availability_set (server validates that the
-// room slot is open, and blocks closing an hour that has a live booking).
+// Batch changes go through coach_availability_batch_set; the server validates
+// each hour independently and returns exact partial failures.
 let availDate = null;   // YYYY-MM-DD currently shown
-let availBusy = false;
+let availBatch = null;
+let availLastData = null;
+
+function availFailureText(item){
+  if(item.code==="ROOM_CLOSED") return "ร้านปิดชั่วโมงนี้";
+  if(item.code==="HAS_BOOKING") return "มีการจองอยู่";
+  if(item.code==="SAME_DAY_CLOSE") return "ต้องปิดล่วงหน้า 1 วัน";
+  return item.error||"บันทึกไม่สำเร็จ";
+}
+
+function ensureAvailBatch(){
+  if(availBatch) return availBatch;
+  availBatch=createAvailabilityBatchSelector({
+    mount:$("availBatch"),
+    onSelectionChange:()=>paintAvailGrid(),
+    onSave:async({open,items})=>{
+      const submitted=items.map(item=>item.id);
+      try{
+        const {ok,d}=await apiPost(API_OPS,{
+          action:"coach_availability_batch_set",date:availDate,
+          operations:items.map(item=>({hour:item.id,open})),
+        });
+        if(!ok){ const message=d.error||"บันทึกไม่สำเร็จ"; toast(message,true); return {failedIds:submitted,message,isError:true}; }
+        const failed=(d.results||[]).filter(item=>!item.ok);
+        await loadAvail();
+        if(failed.length){
+          const message=`สำเร็จ ${d.successCount||0} ช่วง · ไม่สำเร็จ ${failed.map(item=>`${item.hour} (${availFailureText(item)})`).join(", ")}`;
+          toast(`มี ${failed.length} ช่วงบันทึกไม่สำเร็จ`,true);
+          return {failedIds:failed.map(item=>item.hour),message,isError:true};
+        }
+        const message=`✓ บันทึก ${d.successCount||items.length} ช่วงเวลาแล้ว`;
+        toast(message);
+        return {failedIds:[],message};
+      }catch(e){ console.error(e); toast("เครือข่ายมีปัญหา",true); return {failedIds:submitted,message:"เครือข่ายมีปัญหา",isError:true}; }
+    },
+  });
+  return availBatch;
+}
 
 function isoAddDays(base, days){
   const d = new Date(base.getTime() + days*24*3600*1000);
@@ -568,6 +607,8 @@ function initAvailStrip(){
       availDate = iso;
       strip.querySelectorAll("button").forEach(b=>b.classList.remove("on"));
       btn.classList.add("on");
+      ensureAvailBatch().clear();
+      ensureAvailBatch().setStatus("");
       loadAvail();
     });
     strip.appendChild(btn);
@@ -585,13 +626,26 @@ async function loadAvail(){
 }
 
 function renderAvail(d){
+  availLastData = d;
   const roomOpen = new Set(d.roomOpen||[]);
-  const roomLive = new Set(d.roomLive||[]);
   const assigned = new Set(d.assignedHours||[]);
   const coachOpen = d.coachOpen||{};
-  // Show every hour the room offers today plus any hour the coach already has
-  // a state for (covers room hours closed after the coach opened them).
-  const hours = [...new Set([...roomOpen, ...Object.keys(coachOpen)])].sort();
+  const hours = [...new Set([...roomOpen, ...assigned, ...Object.keys(coachOpen)])].sort();
+  ensureAvailBatch().setItems(hours.map(h=>{
+    const av=coachOpen[h], isBooked=(av&&av.status==="booked")||assigned.has(h), isOn=!!av&&!isBooked;
+    return {id:h,isOpen:isOn,canOpen:!isBooked&&!isOn&&roomOpen.has(h),canClose:!isBooked&&isOn};
+  }));
+  paintAvailGrid();
+}
+
+function paintAvailGrid(){
+  if(!availLastData) return;
+  const roomOpen = new Set(availLastData.roomOpen||[]);
+  const roomLive = new Set(availLastData.roomLive||[]);
+  const assigned = new Set(availLastData.assignedHours||[]);
+  const coachOpen = availLastData.coachOpen||{};
+  const hours = [...new Set([...roomOpen, ...assigned, ...Object.keys(coachOpen)])].sort();
+  const batch=ensureAvailBatch();
   if(!hours.length){ $("availGrid").innerHTML=`<div class="empty">ร้านยังไม่เปิดชั่วโมงให้จองในวันนี้</div>`; return; }
 
   const grid = document.createElement("div");
@@ -610,15 +664,21 @@ function renderAvail(d){
     } else if(isOn){
       btn.classList.add("st-on");
       btn.innerHTML = `${esc(h)}<small>เปิดรับสอน${roomLive.has(h)?" · คอร์ทมีคิวแล้ว":""}</small>`;
-      btn.addEventListener("click", ()=>toggleAvail(h,false,btn));
     } else if(roomIsOpen){
       btn.classList.add("st-off");
       btn.innerHTML = `${esc(h)}<small>ยังไม่เปิด${roomLive.has(h)?" · คอร์ทมีคิวแล้ว":""}</small>`;
-      btn.addEventListener("click", ()=>toggleAvail(h,true,btn));
     } else {
       btn.classList.add("st-roomclosed");
       btn.innerHTML = `${esc(h)}<small>ร้านปิด</small>`;
       btn.disabled = true;
+    }
+    if(batch.isActionable(h)) btn.addEventListener("click",()=>batch.toggle(h));
+    else if(!isBooked) btn.disabled=true;
+    if(batch.isSelected(h)){
+      btn.style.outline="3px solid #f0b429";
+      btn.style.outlineOffset="1px";
+      const small=btn.querySelector("small");
+      if(small) small.textContent=`เลือกแล้ว · ${small.textContent}`;
     }
     grid.appendChild(btn);
   });
@@ -671,6 +731,8 @@ function renderShopMonth(d){
       b.addEventListener("click",()=>{
         availDate=iso;
         document.querySelectorAll("#availStrip button").forEach(x=>x.classList.toggle("on",x.dataset.iso===iso));
+        ensureAvailBatch().clear();
+        ensureAvailBatch().setStatus("");
         loadAvail();
         renderShopMonth(d);
       });
@@ -699,18 +761,6 @@ $("smNext").addEventListener("click",()=>{
   if(next > maxCoachMonth()){ toast("เดือนหน้าเปิดให้ตั้งตั้งแต่วันที่ 25", true); return; }
   smMonth = next; loadShopMonth();
 });
-
-async function toggleAvail(hour, open, btn){
-  if(availBusy) return;
-  if(!open && !confirm(`ปิดรับสอนเวลา ${hour} วันที่ ${availDate}?\n(ปิดได้ล่วงหน้าอย่างน้อย 1 วัน — วันเดียวกันต้องติดต่อแอดมิน)`)) return;
-  availBusy = true; if(btn) btn.disabled = true;
-  try{
-    const { ok, d } = await apiPost(API_OPS, { action:"coach_availability_set", date:availDate, hour, open });
-    if(!ok){ toast(d.error||"บันทึกไม่สำเร็จ", true); }
-    else toast(open?`✓ เปิดรับสอน ${hour}`:`✓ ปิดรับสอน ${hour}`);
-  }catch(e){ toast("เครือข่ายมีปัญหา", true); }
-  finally{ availBusy = false; loadAvail(); }
-}
 
 async function start(){
   showLogin("กำลังเริ่มระบบยืนยันตัวตน...");
