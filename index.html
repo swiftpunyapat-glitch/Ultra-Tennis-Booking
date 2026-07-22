@@ -974,6 +974,31 @@ const RESOURCE_ID = "room1";
 const DEFAULT_BRANCH_ID = "ladprao1";
 const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
 const PAY_MINS    = 15;
+const BANGKOK_TZ  = "Asia/Bangkok";
+const BUILD_VERSION = "2026-07-22-p0.1";
+function slotDateTime(dateKey,time="00:00"){
+  return new Date(`${dateKey}T${time}:00+07:00`);
+}
+function bangkokDateParts(value=new Date()){
+  const parts=new Intl.DateTimeFormat("en-CA",{
+    timeZone:BANGKOK_TZ,year:"numeric",month:"2-digit",day:"2-digit",
+    hour:"2-digit",minute:"2-digit",hourCycle:"h23"
+  }).formatToParts(value);
+  return Object.fromEntries(parts.filter(p=>p.type!=="literal").map(p=>[p.type,p.value]));
+}
+function bangkokTodayKey(){
+  const p=bangkokDateParts();
+  return `${p.year}-${p.month}-${p.day}`;
+}
+function addDateKeyDays(dateKey,days){
+  const [y,m,d]=String(dateKey).split("-").map(Number);
+  const next=new Date(Date.UTC(y,m-1,d+days));
+  return `${next.getUTCFullYear()}-${String(next.getUTCMonth()+1).padStart(2,"0")}-${String(next.getUTCDate()).padStart(2,"0")}`;
+}
+function dayOfWeekDateKey(dateKey){
+  const [y,m,d]=String(dateKey).split("-").map(Number);
+  return new Date(Date.UTC(y,m-1,d)).getUTCDay();
+}
 // Pricing v2 Stage 2: server-authoritative create for single-use.
 const USE_SERVER_CREATE     = true;   // route single-use create through /api/booking (server prices it)
 const ALLOW_LEGACY_FALLBACK = true;   // if server-create hits a SYSTEM error, fall back to legacy client-create
@@ -1023,7 +1048,7 @@ const state = {
   dateOffset: 0,
   time: null,
   durationMinutes: 60,     // Phase B: 30-180 min in 30-min steps (single-use only)
-  halfHourEnabled: false,  // server flag system_settings/features.enableHalfHourBooking
+  halfHourEnabled: true,   // live default; server flag may explicitly disable during an incident
   halfHourPrice: 200,      // display only — the server always prices halves itself
   openSlots: new Set(),
   blockedCells: new Set(),   // blocked 30-min cell starts, minutes since midnight
@@ -1044,6 +1069,35 @@ const state = {
   myBookingsData: null,
   successData: null,
 };
+
+const DEBUG_MODE=new URLSearchParams(location.search).get("debug")==="1";
+const debugTelemetry={
+  buildVersion:BUILD_VERSION,
+  page:"customer",
+  userAgent:navigator.userAgent,
+};
+function updateDebugTelemetry(values={}){
+  if(!DEBUG_MODE) return;
+  Object.assign(debugTelemetry,values,{
+    selectedDate:getSelectedDateISO(),
+    selectedDurationMinutes:state.durationMinutes,
+    bangkokNow:`${bangkokTodayKey()} ${bangkokDateParts().hour}:${bangkokDateParts().minute}`,
+  });
+  let panel=document.getElementById("debugTelemetry");
+  if(!panel){
+    panel=document.createElement("details");
+    panel.id="debugTelemetry";
+    panel.open=true;
+    panel.style.cssText="position:fixed;z-index:99999;left:8px;right:8px;bottom:8px;max-height:46vh;overflow:auto;background:#071526;color:#d8f3ff;border:1px solid #38bdf8;border-radius:10px;padding:8px;font:11px/1.4 ui-monospace,monospace;box-shadow:0 8px 30px #0008";
+    const summary=document.createElement("summary");
+    summary.textContent=`Debug · ${BUILD_VERSION}`;
+    const pre=document.createElement("pre");
+    pre.style.cssText="white-space:pre-wrap;margin:8px 0 0";
+    panel.append(summary,pre);
+    document.body.append(panel);
+  }
+  panel.querySelector("pre").textContent=JSON.stringify(debugTelemetry,null,2);
+}
 
 // ── DOM ─────────────────────────────────────────────────────────
 const $     = id => document.getElementById(id);
@@ -1732,6 +1786,7 @@ function setupNav() {
       const n=parseInt(btn.dataset.durmin,10);
       if(state.bookingPaymentType!=="single" && n!==60){ showToast(t("durPassOnly"),true); return; }
       state.durationMinutes=n;
+      updateDebugTelemetry({event:"duration_change"});
       syncDurButtons();
       if(state.time && getDisabledReasonRange(toMinB(state.time))) state.time=null;
       renderTimes();
@@ -1760,7 +1815,8 @@ function syncDurButtons(){
 }
 
 // One-time fetch of customer feature flags (rules only expose system_settings/
-// pricing to clients, so the half-hour flag comes from the API). Fail-closed.
+// pricing to clients, so the half-hour flag comes from the API). Half-hour is
+// live by default and is hidden only when the server explicitly returns false.
 let _featuresFetched=false;
 async function fetchBookingFeatures(){
   if(_featuresFetched) return;
@@ -1768,11 +1824,11 @@ async function fetchBookingFeatures(){
     const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"features"})});
     const d=await r.json().catch(()=>null);
     if(r.ok&&d&&d.ok){
-      state.halfHourEnabled=d.enableHalfHourBooking===true;
+      state.halfHourEnabled=d.enableHalfHourBooking!==false;
       if(Number.isInteger(Number(d.halfHourPrice))&&Number(d.halfHourPrice)>0) state.halfHourPrice=Number(d.halfHourPrice);
       _featuresFetched=true;
     }
-  }catch(e){ console.warn("[features] fetch failed (half-hour stays hidden):",e); }
+  }catch(e){ console.warn("[features] fetch failed (using live half-hour default):",e); }
   syncDurButtons();
 }
 
@@ -2088,13 +2144,14 @@ async function prefillCustomerInfo() {
 }
 
 function buildDates() {
-  const strip=$("dateStrip"), fmt=new Intl.DateTimeFormat(currentLang==="th"?"th-TH":"en-US",{weekday:"short"});
-  const today=new Date(); strip.innerHTML="";
+  const strip=$("dateStrip"), fmt=new Intl.DateTimeFormat(currentLang==="th"?"th-TH":"en-US",{weekday:"short",timeZone:BANGKOK_TZ});
+  const todayKey=bangkokTodayKey(); strip.innerHTML="";
   for(let i=0;i<30;i++){
-    const d=new Date(today); d.setDate(today.getDate()+i);
+    const dateKey=addDateKeyDays(todayKey,i);
+    const d=slotDateTime(dateKey,"12:00");
     const btn=document.createElement("button");
     btn.className=`dbtn${i===state.dateOffset?" on":""}`;
-    btn.innerHTML=`<span>${i===0?t("today"):fmt.format(d)}</span><strong>${d.getDate()}</strong>`;
+    btn.innerHTML=`<span>${i===0?t("today"):fmt.format(d)}</span><strong>${Number(dateKey.slice(8,10))}</strong>`;
     btn.addEventListener("click", async()=>{
       state.dateOffset=i; state.time=null;
       strip.querySelectorAll(".dbtn").forEach(b=>b.classList.remove("on"));
@@ -2108,15 +2165,28 @@ function buildDates() {
   }
 }
 
+let bookingAvailabilityRequestId=0;
+const bookingAvailabilityCache=new Map();
+
 async function loadSlotsAndRender(dateStr) {
-  state.openSlots=new Set(); state.blockedCells=new Set(); state.currentDateIsHoliday=false;
+  const requestId=++bookingAvailabilityRequestId;
+  const cached=bookingAvailabilityCache.get(dateStr);
+  if(cached){
+    state.openSlots=new Set(cached.openSlots);
+    state.blockedCells=new Set(cached.blockedCells);
+    state.currentDateIsHoliday=cached.currentDateIsHoliday;
+    renderTimes();
+  }
   try {
     const [availSnap, bookSnap, holSnap] = await Promise.all([
       getDocs(query(collection(db,"available_slots"),where("date","==",dateStr),where("resourceId","==",RESOURCE_ID))),
       getDocs(query(collection(db,"booking_slots"),where("date","==",dateStr),where("resourceId","==",RESOURCE_ID))),
       getDoc(doc(db,"holidays",dateStr)),
     ]);
-    availSnap.forEach(d=>{ if(d.data().status==="open") state.openSlots.add(d.data().startTime); });
+    const openSlots=new Set();
+    const blockedCells=new Set();
+    let currentDateIsHoliday=false;
+    availSnap.forEach(d=>{ if(d.data().status==="open") openSlots.add(d.data().startTime); });
     const now=new Date();
     // Span-aware blocking: a live slot doc blocks every 30-min cell it covers.
     // Legacy docs (no slotSpanMinutes) span the full hour.
@@ -2127,10 +2197,52 @@ async function loadSlotsAndRender(dateStr) {
       if(!live || !bd.hour) return;
       const docMin=toMinB(bd.hour);
       const span=bd.slotSpanMinutes===30?30:60;
-      for(let c=docMin;c<docMin+span;c+=30) state.blockedCells.add(c);
+      for(let c=docMin;c<docMin+span;c+=30) blockedCells.add(c);
     });
-    if(holSnap.exists()) state.currentDateIsHoliday = holSnap.data().isHoliday===true;
-  } catch(e) { console.error("Load slots error:",e); }
+    if(holSnap.exists()) currentDateIsHoliday = holSnap.data().isHoliday===true;
+    const result={openSlots,blockedCells,currentDateIsHoliday};
+    bookingAvailabilityCache.set(dateStr,result);
+    // Firestore getDocs cannot be aborted. Ignore an older response that
+    // finishes after the customer has already selected another date.
+    if(requestId!==bookingAvailabilityRequestId || dateStr!==getSelectedDateISO()) return;
+    state.openSlots=new Set(openSlots);
+    state.blockedCells=new Set(blockedCells);
+    state.currentDateIsHoliday=currentDateIsHoliday;
+    const bkkHour=Number(bangkokDateParts().hour);
+    let availableSlotCount=0,pastSlotCount=0;
+    for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
+      const open=openSlots.has(`${String(h).padStart(2,"0")}:00`);
+      const past=dateStr===bangkokTodayKey()&&h<=bkkHour;
+      if(past) pastSlotCount++;
+      if(open&&!past&&!blockedCells.has(h*60)&&!blockedCells.has(h*60+30)) availableSlotCount++;
+    }
+    updateDebugTelemetry({
+      requestId,
+      rawSlotCount:availSnap.size,
+      availableSlotCount,
+      pastSlotCount,
+      bookedSlotCount:bookSnap.size,
+      closedSlotCount:Math.max(0,(CLOSE_HOUR-OPEN_HOUR)-openSlots.size),
+      invalidDateCount:[...openSlots].filter(time=>Number.isNaN(slotDateTime(dateStr,time).getTime())).length,
+      availabilityError:null,
+    });
+  } catch(e) {
+    if(requestId!==bookingAvailabilityRequestId || dateStr!==getSelectedDateISO()) return;
+    console.error("Load slots error:",e);
+    updateDebugTelemetry({requestId,availabilityError:e?.code||e?.message||String(e)});
+    if(cached){
+      $("slotsText").textContent=currentLang==="th"
+        ? "โหลดเวลาว่างไม่สำเร็จ · กำลังแสดงข้อมูลล่าสุด กรุณาลองใหม่"
+        : "Could not refresh availability · showing the last result";
+      return;
+    }
+    $("slotsText").textContent=currentLang==="th"
+      ? "โหลดเวลาว่างไม่สำเร็จ กรุณาลองใหม่"
+      : "Could not load availability. Please try again.";
+    $("timeGrid").innerHTML=`<p class="tloading">${currentLang==="th"?"โหลดเวลาว่างไม่สำเร็จ กรุณาลองใหม่":"Could not load availability. Please try again."}</p>`;
+    return;
+  }
+  if(requestId!==bookingAvailabilityRequestId || dateStr!==getSelectedDateISO()) return;
   renderTimes();
 }
 
@@ -2211,20 +2323,20 @@ function getCellReason(cellMin){
   const h=Math.floor(cellMin/60);
   const hourStr=`${String(h).padStart(2,"0")}:00`;
   // Past time check (same rule as before: the current hour is not bookable)
-  if(state.dateOffset===0 && cellMin<(new Date().getHours()+1)*60) return t("timePassed");
+  if(state.dateOffset===0 && cellMin<(Number(bangkokDateParts().hour)+1)*60) return t("timePassed");
   // Admin opens whole hours — an open hour opens both halves
   if(!state.openSlots.has(hourStr)) return t("notOpened");
   // Actively booked (span-aware set built in loadSlotsAndRender)
   if(state.blockedCells.has(cellMin)) return t("alreadyBooked");
   // Off-Peak restrictions
   if(state.bookingPaymentType==="offpeak"){
-    const day=getSelectedDate().getDay();
+    const day=dayOfWeekDateKey(getSelectedDateISO());
     if(day<1||day>5) return t("offPeakWeekdays");
     if(state.currentDateIsHoliday) return t("offPeakHoliday");
     if(h<OFFPEAK.startHour||h+1>OFFPEAK.endHour) return t("offPeakHours");
   }
   if(state.bookingPaymentType==="event"){
-    const day=getSelectedDate().getDay();
+    const day=dayOfWeekDateKey(getSelectedDateISO());
     if(day<1||day>5) return "MONSTR Event Pass: ใช้ได้เฉพาะจันทร์–ศุกร์";
     if(state.currentDateIsHoliday) return "MONSTR Event Pass: ใช้ในวันหยุดไม่ได้";
   }
@@ -2440,7 +2552,7 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
     const d = await res.json().catch(()=>({}));
     if(!res.ok || !d.ok){
       // Legit rejections (bad input / slot taken / voucher invalid): show, no fallback.
-      if(d.code==="VALIDATION" || d.code==="SLOT" || d.code==="VOUCHER"){
+      if(d.code==="VALIDATION" || d.code==="SLOT" || d.code==="VOUCHER" || d.code==="SHAPE" || d.code==="MIXED_RECEIVER"){
         showToast(d.error || t("bookingFailed"), true);
         return "handled";
       }
@@ -3867,11 +3979,10 @@ function renderSuccess(){
 
 // ── HELPERS ─────────────────────────────────────────────────────
 function getSelectedDate() {
-  const d=new Date(); d.setDate(d.getDate()+state.dateOffset); d.setHours(0,0,0,0); return d;
+  return slotDateTime(getSelectedDateISO(),"12:00");
 }
 function getSelectedDateISO() {
-  const d=getSelectedDate();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  return addDateKeyDays(bangkokTodayKey(),state.dateOffset);
 }
 function formatEndTime(t) {
   const h=parseInt(t)+1; return h>=24?"00:00":`${String(h).padStart(2,"0")}:00`;
