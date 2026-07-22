@@ -897,7 +897,7 @@
 import { initializeApp }             from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
 import { isSupported, getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
 import {
-  getFirestore, collection, doc, getDoc, getDocs, addDoc, updateDoc,
+  getFirestore, collection, doc, getDoc, getDocs, getDocFromServer, getDocsFromServer, addDoc, updateDoc,
   runTransaction, setDoc, query, where, limit, orderBy, serverTimestamp, Timestamp
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 import {
@@ -975,7 +975,7 @@ const DEFAULT_BRANCH_ID = "ladprao1";
 const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
 const PAY_MINS    = 15;
 const BANGKOK_TZ  = "Asia/Bangkok";
-const BUILD_VERSION = "2026-07-22-p0.2";
+const BUILD_VERSION = "2026-07-22-p0.4";
 function slotDateTime(dateKey,time="00:00"){
   return new Date(`${dateKey}T${time}:00+07:00`);
 }
@@ -1053,6 +1053,11 @@ const state = {
   openSlots: new Set(),
   blockedCells: new Set(),   // blocked 30-min cell starts, minutes since midnight
   currentDateIsHoliday: false,
+  availabilityDate: null,
+  availabilityStatus: "idle", // idle | loading | ready | error
+  availabilityError: null,
+  availabilityStale: false,
+  availabilityLoadedAt: 0,
   bookingPaymentType: "single",
   // Eligibility
   eligibility: { hasUltra:false, ultraPkg:null, hasOffpeak:false, offpeakPkg:null, hasEvent:false, eventPkg:null },
@@ -2168,21 +2173,72 @@ function buildDates() {
 let bookingAvailabilityRequestId=0;
 const bookingAvailabilityCache=new Map();
 
+const availabilityWait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+function availabilityTimeout(promise,ms){
+  return Promise.race([
+    promise,
+    new Promise((_,reject)=>setTimeout(()=>{
+      const error=new Error("Availability request timeout");
+      error.code="availability-timeout";
+      reject(error);
+    },ms)),
+  ]);
+}
+
+// iOS in-app browsers can briefly return a Firestore cache snapshot while the
+// network transport is still waking up. Never turn that into "all slots full".
+// Retry once against the server; if it still fails the UI shows a load error.
+async function fetchFreshAvailability(dateStr,requestId){
+  const avQuery=query(collection(db,"available_slots"),where("date","==",dateStr),where("resourceId","==",RESOURCE_ID));
+  const bkQuery=query(collection(db,"booking_slots"),where("date","==",dateStr),where("resourceId","==",RESOURCE_ID));
+  let lastError=null;
+  for(let attempt=1;attempt<=2;attempt++){
+    if(requestId!==bookingAvailabilityRequestId) throw Object.assign(new Error("Stale availability request"),{code:"stale-request"});
+    try{
+      const reads=attempt===1
+        ? [getDocs(avQuery),getDocs(bkQuery),getDoc(doc(db,"holidays",dateStr))]
+        : [getDocsFromServer(avQuery),getDocsFromServer(bkQuery),getDocFromServer(doc(db,"holidays",dateStr))];
+      const snapshots=await availabilityTimeout(Promise.all(reads),attempt===1?5000:8000);
+      const fromCache=snapshots.some(snapshot=>snapshot.metadata?.fromCache===true);
+      updateDebugTelemetry({availabilityAttempt:attempt,firestoreFromCache:fromCache});
+      if(fromCache){
+        const error=new Error("Firestore returned cached availability");
+        error.code="availability-from-cache";
+        throw error;
+      }
+      return snapshots;
+    }catch(error){
+      lastError=error;
+      if(requestId!==bookingAvailabilityRequestId) throw Object.assign(new Error("Stale availability request"),{code:"stale-request"});
+      if(attempt<2) await availabilityWait(450);
+    }
+  }
+  throw lastError||new Error("Availability unavailable");
+}
+
 async function loadSlotsAndRender(dateStr) {
   const requestId=++bookingAvailabilityRequestId;
   const cached=bookingAvailabilityCache.get(dateStr);
+  state.availabilityDate=dateStr;
+  state.availabilityError=null;
+  state.availabilityStale=false;
   if(cached){
     state.openSlots=new Set(cached.openSlots);
     state.blockedCells=new Set(cached.blockedCells);
     state.currentDateIsHoliday=cached.currentDateIsHoliday;
+    state.availabilityStatus="ready";
+    state.availabilityLoadedAt=cached.loadedAt||0;
+    renderTimes();
+  }else{
+    state.openSlots=new Set();
+    state.blockedCells=new Set();
+    state.currentDateIsHoliday=false;
+    state.availabilityStatus="loading";
+    state.availabilityLoadedAt=0;
     renderTimes();
   }
   try {
-    const [availSnap, bookSnap, holSnap] = await Promise.all([
-      getDocs(query(collection(db,"available_slots"),where("date","==",dateStr),where("resourceId","==",RESOURCE_ID))),
-      getDocs(query(collection(db,"booking_slots"),where("date","==",dateStr),where("resourceId","==",RESOURCE_ID))),
-      getDoc(doc(db,"holidays",dateStr)),
-    ]);
+    const [availSnap, bookSnap, holSnap] = await fetchFreshAvailability(dateStr,requestId);
     const openSlots=new Set();
     const blockedCells=new Set();
     let currentDateIsHoliday=false;
@@ -2200,7 +2256,7 @@ async function loadSlotsAndRender(dateStr) {
       for(let c=docMin;c<docMin+span;c+=30) blockedCells.add(c);
     });
     if(holSnap.exists()) currentDateIsHoliday = holSnap.data().isHoliday===true;
-    const result={openSlots,blockedCells,currentDateIsHoliday};
+    const result={openSlots,blockedCells,currentDateIsHoliday,loadedAt:Date.now()};
     bookingAvailabilityCache.set(dateStr,result);
     // Firestore getDocs cannot be aborted. Ignore an older response that
     // finishes after the customer has already selected another date.
@@ -2208,6 +2264,11 @@ async function loadSlotsAndRender(dateStr) {
     state.openSlots=new Set(openSlots);
     state.blockedCells=new Set(blockedCells);
     state.currentDateIsHoliday=currentDateIsHoliday;
+    state.availabilityDate=dateStr;
+    state.availabilityStatus="ready";
+    state.availabilityError=null;
+    state.availabilityStale=false;
+    state.availabilityLoadedAt=result.loadedAt;
     const bkkHour=Number(bangkokDateParts().hour);
     let availableSlotCount=0,pastSlotCount=0;
     for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
@@ -2231,15 +2292,16 @@ async function loadSlotsAndRender(dateStr) {
     console.error("Load slots error:",e);
     updateDebugTelemetry({requestId,availabilityError:e?.code||e?.message||String(e)});
     if(cached){
-      $("slotsText").textContent=currentLang==="th"
-        ? "โหลดเวลาว่างไม่สำเร็จ · กำลังแสดงข้อมูลล่าสุด กรุณาลองใหม่"
-        : "Could not refresh availability · showing the last result";
+      state.availabilityStatus="ready";
+      state.availabilityError=e?.code||e?.message||String(e);
+      state.availabilityStale=true;
+      renderTimes();
       return;
     }
-    $("slotsText").textContent=currentLang==="th"
-      ? "โหลดเวลาว่างไม่สำเร็จ กรุณาลองใหม่"
-      : "Could not load availability. Please try again.";
-    $("timeGrid").innerHTML=`<p class="tloading">${currentLang==="th"?"โหลดเวลาว่างไม่สำเร็จ กรุณาลองใหม่":"Could not load availability. Please try again."}</p>`;
+    state.availabilityStatus="error";
+    state.availabilityError=e?.code||e?.message||String(e);
+    state.availabilityStale=false;
+    renderTimes();
     return;
   }
   if(requestId!==bookingAvailabilityRequestId || dateStr!==getSelectedDateISO()) return;
@@ -2248,6 +2310,27 @@ async function loadSlotsAndRender(dateStr) {
 
 function renderTimes() {
   const grid=$("timeGrid"); grid.innerHTML="";
+  const selectedDate=getSelectedDateISO();
+  if(state.availabilityDate!==selectedDate || state.availabilityStatus==="idle" || state.availabilityStatus==="loading"){
+    $("slotsText").textContent=currentLang==="th"?"กำลังโหลดเวลาว่าง...":"Loading availability...";
+    grid.innerHTML=`<p class="tloading">${currentLang==="th"?"กำลังโหลดเวลาว่าง...":"Loading availability..."}</p>`;
+    return;
+  }
+  if(state.availabilityStatus==="error"){
+    $("slotsText").textContent=currentLang==="th"?"โหลดเวลาว่างไม่สำเร็จ":"Could not load availability";
+    const box=document.createElement("div");
+    box.className="tloading";
+    box.style.gridColumn="1/-1";
+    box.textContent=currentLang==="th"?"โหลดเวลาว่างไม่สำเร็จ กรุณาลองใหม่":"Could not load availability. Please try again.";
+    const retry=document.createElement("button");
+    retry.type="button";
+    retry.textContent=currentLang==="th"?"ลองใหม่":"Retry";
+    retry.style.cssText="display:block;margin:10px auto 0;border:0;border-radius:8px;background:var(--brand);color:#fff;padding:8px 16px;font-weight:800";
+    retry.addEventListener("click",()=>loadSlotsAndRender(selectedDate));
+    box.appendChild(retry);
+    grid.appendChild(box);
+    return;
+  }
   let avail=0;
 
   // Only surface Late Night hours when Admin has explicitly opened at least one.
@@ -2302,8 +2385,26 @@ function renderTimes() {
       if(!reason) avail++;
     }
   }
-  $("slotsText").textContent=avail ? t("slotsAvailable",{count:avail}) : t("noAvailableSlots");
+  $("slotsText").textContent=state.availabilityStale
+    ? (currentLang==="th"?"รีเฟรชไม่สำเร็จ · แสดงข้อมูลล่าสุด":"Refresh failed · showing last result")
+    : (avail ? t("slotsAvailable",{count:avail}) : t("noAvailableSlots"));
 }
+
+// Safari/WebView may restore the page from its back-forward cache without
+// re-running startup. Refresh availability when the booking screen resumes or
+// when the last authoritative result is old; no need to leave and re-enter.
+function refreshAvailabilityOnResume(force=false){
+  const bookingView=$("viewBooking");
+  if(!bookingView || bookingView.style.display==="none") return;
+  const old=Date.now()-(state.availabilityLoadedAt||0)>60_000;
+  if(force || old || state.availabilityStatus==="error" || state.availabilityStale){
+    loadSlotsAndRender(getSelectedDateISO());
+  }
+}
+window.addEventListener("pageshow",event=>refreshAvailabilityOnResume(event.persisted===true));
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="visible") refreshAvailabilityOnResume(false);
+});
 
 // ── Phase B time helpers (minute-based; mirror api/booking.js) ─────
 const toMinB  = tm => { const [h,m]=String(tm).split(":").map(Number); return h*60+(m||0); };

@@ -299,7 +299,7 @@
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
     import {
-      getFirestore, collection, getDocs, query, where
+      getFirestore, collection, getDocs, getDocsFromServer, query, where
     } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -318,7 +318,7 @@
     const OPEN_HOUR = 6;
     const CLOSE_HOUR = 24;
     const BANGKOK_TZ = "Asia/Bangkok";
-    const BUILD_VERSION = "2026-07-22-p0.2";
+    const BUILD_VERSION = "2026-07-22-p0.4";
     const DEBUG_MODE = new URLSearchParams(location.search).get("debug") === "1";
 
     const $ = id => document.getElementById(id);
@@ -329,6 +329,7 @@
 
     let selectedDate = "";
     let availabilityRequestId = 0;
+    let availabilityLoadedAt = 0;
     const availabilityCache = new Map();
     const debugTelemetry={buildVersion:BUILD_VERSION,page:"availability",userAgent:navigator.userAgent};
     function updateDebugTelemetry(values={}){
@@ -503,6 +504,43 @@
       `).join("") || `<div class="empty">ไม่พบข้อมูลเวลา</div>`;
     }
 
+    const availabilityWait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+    function availabilityTimeout(promise,ms){
+      return Promise.race([
+        promise,
+        new Promise((_,reject)=>setTimeout(()=>{
+          const error=new Error("Availability request timeout");
+          error.code="availability-timeout";
+          reject(error);
+        },ms)),
+      ]);
+    }
+    async function fetchFreshAvailability(dateAtStart,requestId){
+      const avQuery=query(collection(db,"available_slots"),where("date","==",dateAtStart),where("resourceId","==",RESOURCE_ID));
+      const bkQuery=query(collection(db,"booking_slots"),where("date","==",dateAtStart),where("resourceId","==",RESOURCE_ID));
+      let lastError=null;
+      for(let attempt=1;attempt<=2;attempt++){
+        if(requestId!==availabilityRequestId) throw Object.assign(new Error("Stale availability request"),{code:"stale-request"});
+        try{
+          const reads=attempt===1?[getDocs(avQuery),getDocs(bkQuery)]:[getDocsFromServer(avQuery),getDocsFromServer(bkQuery)];
+          const snapshots=await availabilityTimeout(Promise.all(reads),attempt===1?5000:8000);
+          const fromCache=snapshots.some(snapshot=>snapshot.metadata?.fromCache===true);
+          updateDebugTelemetry({availabilityAttempt:attempt,firestoreFromCache:fromCache});
+          if(fromCache){
+            const error=new Error("Firestore returned cached availability");
+            error.code="availability-from-cache";
+            throw error;
+          }
+          return snapshots;
+        }catch(error){
+          lastError=error;
+          if(requestId!==availabilityRequestId) throw Object.assign(new Error("Stale availability request"),{code:"stale-request"});
+          if(attempt<2) await availabilityWait(450);
+        }
+      }
+      throw lastError||new Error("Availability unavailable");
+    }
+
     async function loadAvailability(){
       const dateAtStart=selectedDate;
       const requestId=++availabilityRequestId;
@@ -513,10 +551,7 @@
       $("summaryText").textContent = "กำลังโหลด...";
       setBookLink();
       try{
-        const [avSnap,bkSnap] = await Promise.all([
-          getDocs(query(collection(db,"available_slots"),where("date","==",dateAtStart),where("resourceId","==",RESOURCE_ID))),
-          getDocs(query(collection(db,"booking_slots"),where("date","==",dateAtStart),where("resourceId","==",RESOURCE_ID))),
-        ]);
+        const [avSnap,bkSnap] = await fetchFreshAvailability(dateAtStart,requestId);
 
         const avByTime = {};
         avSnap.forEach(docSnap=>{
@@ -567,6 +602,7 @@
         }
         availabilityCache.set(dateAtStart,rows);
         if(requestId!==availabilityRequestId || dateAtStart!==selectedDate) return;
+        availabilityLoadedAt=Date.now();
         updateDebugTelemetry({
           requestId,
           rawSlotCount:avSnap.size,
@@ -591,6 +627,15 @@
         }
       }
     }
+
+    function refreshAvailabilityOnResume(force=false){
+      if(!selectedDate) return;
+      if(force || Date.now()-availabilityLoadedAt>60_000) loadAvailability();
+    }
+    window.addEventListener("pageshow",event=>refreshAvailabilityOnResume(event.persisted===true));
+    document.addEventListener("visibilitychange",()=>{
+      if(document.visibilityState==="visible") refreshAvailabilityOnResume(false);
+    });
 
     function renderWeeklySnapshot(weeklyData) {
       const now = bangkokParts();
@@ -664,8 +709,8 @@
         
         const results = await Promise.all(dates.map(async (dateISO) => {
           const [avSnap, bkSnap] = await Promise.all([
-            getDocs(query(collection(db, "available_slots"), where("date", "==", dateISO), where("resourceId", "==", RESOURCE_ID))),
-            getDocs(query(collection(db, "booking_slots"), where("date", "==", dateISO), where("resourceId", "==", RESOURCE_ID)))
+            getDocsFromServer(query(collection(db, "available_slots"), where("date", "==", dateISO), where("resourceId", "==", RESOURCE_ID))),
+            getDocsFromServer(query(collection(db, "booking_slots"), where("date", "==", dateISO), where("resourceId", "==", RESOURCE_ID)))
           ]);
           
           const avByTime = {};
