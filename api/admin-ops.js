@@ -43,14 +43,14 @@ const VALID_ACTIONS = [
   'auth_metric',
   'coach_create', 'coach_list', 'coach_set_active', 'coach_my_bookings',
   'coach_whoami', 'coach_update_profile', 'coach_link_line',
-  'coach_availability_get', 'coach_availability_set', 'coach_update_rates',
+  'coach_availability_get', 'coach_availability_set', 'coach_availability_batch_set', 'coach_update_rates',
   'shop_open_days', 'coach_delete',
 ];
 
 // Coach V2: actions a coach may call with a LINE-derived Firebase ID token
 // (body.idToken) instead of an admin session cookie.
 const COACH_TOKEN_ACTIONS = [
-  'coach_my_bookings', 'coach_availability_get', 'coach_availability_set',
+  'coach_my_bookings', 'coach_availability_get', 'coach_availability_set', 'coach_availability_batch_set',
   'coach_update_profile', 'shop_open_days',
 ];
 
@@ -253,6 +253,7 @@ export default async function handler(req, res) {
     case 'coach_link_line':        return handleCoachLinkLine(res, session, body);
     case 'coach_availability_get': return handleCoachAvailabilityGet(res, session, body);
     case 'coach_availability_set': return handleCoachAvailabilitySet(res, session, body);
+    case 'coach_availability_batch_set': return handleCoachAvailabilityBatchSet(res, session, body);
     case 'coach_update_rates':     return handleCoachUpdateRates(res, session, body);
     case 'shop_open_days':         return handleShopOpenDays(res, session, body);
     case 'coach_delete':           return handleCoachDelete(res, session, body);
@@ -1303,7 +1304,7 @@ async function handleCoachLinkLine(res, session, body) {
 //            /api/booking create_coach_lesson — Stage 3)
 // Closing an hour DELETES the doc. Server-only writes (client rules deny).
 
-const HOUR_RE = /^\d{2}:\d{2}$/;
+const HOUR_RE = /^(?:[01]\d|2[0-3]):00$/;
 const availDocId = (coachId, date, hour) => `${coachId}_${date}_${String(hour).replace(':', '')}`;
 const bangkokTodayISO = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 
@@ -1413,6 +1414,49 @@ async function handleCoachAvailabilityGet(res, session, body) {
 // branch_manager+. Open requires the room slot to be open (rule: a coach can
 // only offer hours the shop itself offers). Close is blocked while any live
 // booking holds the hour for this coach.
+async function applyCoachAvailabilityChange(db, coachId, coach, date, hour, open) {
+  const availRef = db.collection('coach_availability').doc(availDocId(coachId, date, hour));
+  const roomRef = db.collection('available_slots').doc(slotDocId(date, parseInt(hour, 10)));
+
+  return db.runTransaction(async (t) => {
+    const availSnap = await t.get(availRef);
+
+    if (open) {
+      const roomSnap = await t.get(roomRef);
+      if (!roomSnap.exists || roomSnap.data().status !== 'open') throw new Error('ROOM_CLOSED');
+      if (availSnap.exists && availSnap.data().status === 'booked') throw new Error('HAS_BOOKING');
+      if (availSnap.exists) return 'already_open';
+      t.set(availRef, {
+        coachId, branchId: resolveBranchId(coach),
+        date, hour, status: 'open',
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return 'opened';
+    }
+
+    if (!availSnap.exists) return 'already_closed';
+    const av = availSnap.data();
+    if (av.status === 'booked' && av.bookingId) {
+      const bSnap = await t.get(db.collection('bookings').doc(av.bookingId));
+      if (bSnap.exists && isLiveCoachBooking(bSnap.data())) throw new Error('HAS_BOOKING');
+    }
+    const daySnap = await t.get(db.collection('bookings').where('date', '==', date));
+    const conflict = daySnap.docs.map(d => d.data())
+      .some(b => b.coachId === coachId && b.startTime === hour && isLiveCoachBooking(b));
+    if (conflict) throw new Error('HAS_BOOKING');
+    t.delete(availRef);
+    return 'closed';
+  });
+}
+
+function coachAvailabilityError(error) {
+  const code = error && error.message;
+  if (code === 'ROOM_CLOSED') return { code, error: 'The shop is closed for this hour' };
+  if (code === 'HAS_BOOKING') return { code, error: 'This hour has an active booking' };
+  return { code: 'UPDATE_FAILED', error: 'Failed to update availability' };
+}
+
 async function handleCoachAvailabilitySet(res, session, body) {
   const date = typeof body.date === 'string' ? body.date.trim() : '';
   const hour = typeof body.hour === 'string' ? body.hour.trim() : '';
@@ -1447,46 +1491,8 @@ async function handleCoachAvailabilitySet(res, session, body) {
   if (!actor) return;
   const { coachId, coach } = actor;
 
-  const availRef = db.collection('coach_availability').doc(availDocId(coachId, date, hour));
-  const roomRef  = db.collection('available_slots').doc(slotDocId(date, parseInt(hour, 10)));
-
   try {
-    const result = await db.runTransaction(async (t) => {
-      const availSnap = await t.get(availRef);
-
-      if (open) {
-        const roomSnap = await t.get(roomRef);
-        if (!roomSnap.exists || roomSnap.data().status !== 'open') throw new Error('ROOM_CLOSED');
-        if (availSnap.exists && availSnap.data().status === 'booked') throw new Error('HAS_BOOKING');
-        if (availSnap.exists) return 'already_open';
-        t.set(availRef, {
-          coachId, branchId: resolveBranchId(coach),
-          date, hour, status: 'open',
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-        return 'opened';
-      }
-
-      // Close: never while a live booking holds this hour for the coach.
-      // All reads happen before the delete (Firestore tx rule). The Admin SDK
-      // supports queries inside transactions, so the admin-assigned-booking
-      // conflict check is atomic with the delete.
-      if (!availSnap.exists) return 'already_closed';
-      const av = availSnap.data();
-      if (av.status === 'booked' && av.bookingId) {
-        // Locked by a coach lesson — allow close only if that booking is dead
-        // (missing booking = stale lock → closable).
-        const bSnap = await t.get(db.collection('bookings').doc(av.bookingId));
-        if (bSnap.exists && isLiveCoachBooking(bSnap.data())) throw new Error('HAS_BOOKING');
-      }
-      const daySnap = await t.get(db.collection('bookings').where('date', '==', date));
-      const conflict = daySnap.docs.map(d => d.data())
-        .some(b => b.coachId === coachId && b.startTime === hour && isLiveCoachBooking(b));
-      if (conflict) throw new Error('HAS_BOOKING');
-      t.delete(availRef);
-      return 'closed';
-    });
+    const result = await applyCoachAvailabilityChange(db, coachId, coach, date, hour, open);
 
     await writeAuditLog(db, {
       actor: session.name, actorRole: session.role, branchId: resolveBranchId(coach),
@@ -1500,6 +1506,75 @@ async function handleCoachAvailabilitySet(res, session, body) {
     console.error('[coach_availability_set]', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to update availability' });
   }
+}
+
+// coach_availability_batch_set {date, operations:[{hour,open}], coachId?}
+// applies 1-24 independent changes and returns exact per-hour failures.
+async function handleCoachAvailabilityBatchSet(res, session, body) {
+  const date = typeof body.date === 'string' ? body.date.trim() : '';
+  const operations = Array.isArray(body.operations) ? body.operations : [];
+  if (!DATE_RE.test(date)) return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
+  if (operations.length < 1 || operations.length > 24) {
+    return res.status(400).json({ ok: false, error: 'operations must contain 1-24 items' });
+  }
+
+  const normalized = operations.map((item) => ({
+    hour: typeof item?.hour === 'string' ? item.hour.trim() : '',
+    open: item?.open,
+  }));
+  if (normalized.some(item => !HOUR_RE.test(item.hour) || typeof item.open !== 'boolean')) {
+    return res.status(400).json({ ok: false, error: 'Each operation requires hour HH:00 and open boolean' });
+  }
+  if (new Set(normalized.map(item => item.hour)).size !== normalized.length) {
+    return res.status(400).json({ ok: false, error: 'Duplicate hours are not allowed' });
+  }
+
+  const todayISO = bangkokTodayISO();
+  if (date < todayISO) return res.status(400).json({ ok: false, error: 'Past dates cannot be changed' });
+  if (session.role !== 'coach' && !requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
+  }
+  if (session.role === 'coach' && date > coachAvailHorizonISO()) {
+    return res.status(400).json({ ok: false, error: 'Date is outside the coach availability window' });
+  }
+
+  const db = getDbOr500(res); if (!db) return;
+  let actor;
+  try { actor = await resolveCoachActor(res, session, body, db); }
+  catch (e) {
+    console.error('[coach_availability_batch_set] actor:', e.message);
+    return res.status(500).json({ ok: false, error: 'Server error' });
+  }
+  if (!actor) return;
+  const { coachId, coach } = actor;
+
+  const results = await Promise.all(normalized.map(async ({ hour, open }) => {
+    if (session.role === 'coach' && !open && date <= todayISO) {
+      return { hour, open, ok: false, code: 'SAME_DAY_CLOSE', error: 'Coach cannot close availability on the same day' };
+    }
+    try {
+      const result = await applyCoachAvailabilityChange(db, coachId, coach, date, hour, open);
+      return { hour, open, ok: true, result };
+    } catch (error) {
+      return { hour, open, ok: false, ...coachAvailabilityError(error) };
+    }
+  }));
+
+  const successCount = results.filter(item => item.ok).length;
+  const failureCount = results.length - successCount;
+  try {
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: resolveBranchId(coach),
+      action: 'coach_availability_batch_set', targetId: `${coachId}_${date}`,
+      after: { successCount, failureCount, results },
+    });
+  } catch (error) {
+    console.error('[coach_availability_batch_set] audit:', error.message);
+  }
+
+  return res.status(200).json({
+    ok: true, coachId, date, successCount, failureCount, results,
+  });
 }
 
 // shop_open_days {month:"YYYY-MM"} — coach or any admin. Which days of the
