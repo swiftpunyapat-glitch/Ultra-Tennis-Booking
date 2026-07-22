@@ -48,8 +48,9 @@ const nextHourEnd = (startTime) => {
 //   • slot docs: one per segment. Fully-covered clock hours keep the Phase A
 //     hourly doc (`_HH00`, slotSpanMinutes 60 implied); halves write a
 //     `slotSpanMinutes: 30` doc at `_HHMM`. Legacy docs (no field) = 60 min.
-//   • kill switch: system_settings/features.enableHalfHourBooking (missing =
-//     OFF → only Phase A whole-hour bookings are accepted).
+//   • kill switch: system_settings/features.enableHalfHourBooking. Half-hour
+//     booking is a live product rule, so a missing field means ON; only an
+//     explicit false disables it during an incident.
 // ════════════════════════════════════════════════════════════════════
 const HALF_HOUR_PRICE     = 200;
 const MAX_DURATION_MIN    = 180;
@@ -104,14 +105,16 @@ function halfPlacementError(segs) {
   return null;
 }
 
-// Half-hour feature flag — missing doc/field = OFF (safe default).
+// Half-hour feature flag — live by default. This used to fail closed, which
+// made every 30/90/150-minute request fail whenever the settings document had
+// not been seeded (or an older deployment omitted the field).
 async function halfHourEnabled(db) {
   try {
     const snap = await db.collection('system_settings').doc('features').get();
-    return snap.exists && snap.data().enableHalfHourBooking === true;
+    return !(snap.exists && snap.data().enableHalfHourBooking === false);
   } catch (e) {
-    console.warn('[half flag] read failed → OFF:', e.message);
-    return false;
+    console.warn('[half flag] read failed → ON (live default):', e.message);
+    return true;
   }
 }
 
@@ -499,6 +502,7 @@ async function handleCreate(res, body) {
       // ── Write booking (server price) + one slot lock per segment ─────
       t.set(bookingRef, {
         bookingCode, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
+        bookingSlotIds: segRefs.map(r => r.id),
         bookingType,
         lineUserId, lineDisplayName,
         customerName, customerPhone, customerPhoneNormalized: normalizePhone(customerPhone),
@@ -551,6 +555,7 @@ async function handleCreate(res, body) {
     paymentExpiresAt: paymentExpiresAt.toDate().toISOString(),
     booking: {
       id: bookingRef.id, bookingCode, date, startTime, endTime,
+      bookingSlotIds: segRefs.map(r => r.id),
       durationMinutes, durationHours: durationMinutes / 60,
       bookingType,
       finalPrice, price: finalPrice, originalPrice: quote.originalPrice,
