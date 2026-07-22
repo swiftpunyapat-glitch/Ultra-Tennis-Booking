@@ -20,6 +20,7 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 const RESOURCE_ID       = 'room1';
 const DEFAULT_BRANCH_ID = 'ladprao1';
 const PAY_MINS          = 15;    // payment window — mirrors index.html
+const BUILD_VERSION     = '2026-07-22-p0.2';
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{2}:\d{2}$/;
 
@@ -129,12 +130,33 @@ function halfPriceFrom(pricingData) {
   return (Number.isInteger(n) && n >= 100 && n <= 1000) ? n : HALF_HOUR_PRICE;
 }
 
-// Quote-shaped object for one flat-price half segment.
-const halfSegQuote = (start, price = HALF_HOUR_PRICE) => ({
+function flatHalfMetadata(date, start, isHoliday) {
+  const [y, m, d] = String(date).split('-').map(Number);
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  const hour = parseInt(String(start).slice(0, 2), 10);
+  const startMs = Date.parse(`${date}T${start}:00+07:00`);
+  return {
+    priceRuleVersion: 'half-hour-flat-v1',
+    isHoliday: isHoliday === true,
+    isWeekend: dow === 0 || dow === 6,
+    isMorningWeekday: dow >= 1 && dow <= 5 && isHoliday !== true && hour >= 6 && hour <= 11,
+    advanceHours: Number.isFinite(startMs) ? (startMs - Date.now()) / 3_600_000 : null,
+  };
+}
+
+// Quote-shaped object for one flat-price half segment. Keep every metadata
+// field defined: Firestore rejects `undefined`, which previously made a pure
+// 30-minute create fail even though price_quote correctly returned ฿200.
+const halfSegQuote = (start, price = HALF_HOUR_PRICE, meta = {}) => ({
   pricingType: 'half_hour', originalPrice: price, finalPrice: price,
   price, amount: price, qrAmount: price,
   qrType: 'normal', promoCode: null, voucherCode: null, discountAmount: 0,
   voucherApplied: false, voucherReason: null,
+  priceRuleVersion: meta.priceRuleVersion || 'half-hour-flat-v1',
+  isHoliday: meta.isHoliday === true,
+  isWeekend: meta.isWeekend === true,
+  isMorningWeekday: meta.isMorningWeekday === true,
+  advanceHours: Number.isFinite(meta.advanceHours) ? meta.advanceHours : null,
   startTime: start, span: 30,
 });
 
@@ -274,7 +296,7 @@ async function handleFeatures(res) {
     const p = await db.collection('system_settings').doc('pricing').get();
     halfHourPrice = halfPriceFrom(p.exists ? p.data() : null);
   } catch (e) { console.warn('[features] pricing read failed → default half price:', e.message); }
-  return res.status(200).json({ ok: true, enableHalfHourBooking: await halfHourEnabled(db), halfHourPrice });
+  return res.status(200).json({ ok: true, buildVersion: BUILD_VERSION, enableHalfHourBooking: await halfHourEnabled(db), halfHourPrice });
 }
 
 async function handlePriceQuote(res, body) {
@@ -316,9 +338,10 @@ async function handlePriceQuote(res, body) {
     // price with the special promo disabled (single MAIN-account QR).
     const promoConfig = (!hasHalf && pricingSnap.exists) ? pricingSnap.data() : null;
     const halfPrice   = halfPriceFrom(pricingSnap.exists ? pricingSnap.data() : null);
+    const isHoliday = holidaySnap.exists && holidaySnap.data().isHoliday === true;
     const quoteInput = h => ({
       date, startTime: h, nowMs: Date.now(),
-      isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true,
+      isHoliday,
       promoConfig, payType, voucherCode,
       voucher: voucherSnap && voucherSnap.exists ? voucherSnap.data() : null,
       lineUserId,
@@ -327,7 +350,7 @@ async function handlePriceQuote(res, body) {
       return res.status(200).json({ ok: true, quote: computeQuote(quoteInput(startTime)) });
     }
     const segQuotes = segs.map(x => x.span === 30
-      ? halfSegQuote(x.start, halfPrice)
+      ? halfSegQuote(x.start, halfPrice, flatHalfMetadata(date, x.start, isHoliday))
       : { ...computeQuote(quoteInput(x.start)), startTime: x.start, span: 60 });
     const combined  = combineQuotes(segQuotes);
     return res.status(200).json({
@@ -395,12 +418,13 @@ async function handleCreate(res, body) {
     // Owner rule: bookings containing a half join NO promotions (promo off).
     const promoConfig = (!hasHalf && pricingSnap.exists) ? pricingSnap.data() : null;
     const halfPrice   = halfPriceFrom(pricingSnap.exists ? pricingSnap.data() : null);
+    const isHoliday   = holidaySnap.exists && holidaySnap.data().isHoliday === true;
     segQuotes = segs.map(x => x.span === 30
-      ? halfSegQuote(x.start, halfPrice)
+      ? halfSegQuote(x.start, halfPrice, flatHalfMetadata(date, x.start, isHoliday))
       : {
           ...computeQuote({
             date, startTime: x.start, nowMs,
-            isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true,
+            isHoliday,
             promoConfig,
             payType: 'single', voucherCode,
             voucher: voucherSnap && voucherSnap.exists ? voucherSnap.data() : null,
