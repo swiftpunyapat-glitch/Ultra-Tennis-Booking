@@ -898,7 +898,8 @@ import { initializeApp }             from "https://www.gstatic.com/firebasejs/12
 import { isSupported, getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
 import {
   getFirestore, collection, doc, getDoc, getDocs, getDocFromServer, getDocsFromServer, addDoc, updateDoc,
-  runTransaction, setDoc, query, where, limit, orderBy, serverTimestamp, Timestamp
+  runTransaction, setDoc, query, where, limit, orderBy, serverTimestamp, Timestamp,
+  disableNetwork, enableNetwork
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 import {
   getStorage, ref as sRef, uploadBytes, getDownloadURL
@@ -975,7 +976,7 @@ const DEFAULT_BRANCH_ID = "ladprao1";
 const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
 const PAY_MINS    = 15;
 const BANGKOK_TZ  = "Asia/Bangkok";
-const BUILD_VERSION = "2026-07-22-p0.4";
+const BUILD_VERSION = "2026-07-22-p0.5";
 function slotDateTime(dateKey,time="00:00"){
   return new Date(`${dateKey}T${time}:00+07:00`);
 }
@@ -2172,6 +2173,7 @@ function buildDates() {
 
 let bookingAvailabilityRequestId=0;
 const bookingAvailabilityCache=new Map();
+let availabilityHardRetryBusy=false;
 
 const availabilityWait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function availabilityTimeout(promise,ms){
@@ -2308,6 +2310,41 @@ async function loadSlotsAndRender(dateStr) {
   renderTimes();
 }
 
+function reloadBookingWithCacheBust(){
+  const url=new URL(location.href);
+  url.searchParams.set("availabilityRetry",Date.now().toString());
+  location.replace(url.toString());
+}
+
+// A normal retry reuses the same Firestore WebChannel. On iOS/WebView that
+// channel can remain wedged until the Firebase client is recreated, so first
+// reset Firestore networking and use a cache-busted page reload as fallback.
+async function hardRetryBookingAvailability(dateStr){
+  if(availabilityHardRetryBusy) return;
+  availabilityHardRetryBusy=true;
+  bookingAvailabilityCache.delete(dateStr);
+  state.availabilityDate=dateStr;
+  state.availabilityStatus="loading";
+  state.availabilityError=null;
+  state.availabilityStale=false;
+  state.openSlots=new Set();
+  state.blockedCells=new Set();
+  updateDebugTelemetry({event:"availability_hard_retry"});
+  renderTimes();
+  try{
+    await availabilityTimeout(disableNetwork(db),3000);
+    await availabilityTimeout(enableNetwork(db),5000);
+    await availabilityWait(300);
+    await loadSlotsAndRender(dateStr);
+    if(state.availabilityStatus!=="ready") reloadBookingWithCacheBust();
+  }catch(error){
+    console.error("Hard availability retry failed:",error);
+    reloadBookingWithCacheBust();
+  }finally{
+    availabilityHardRetryBusy=false;
+  }
+}
+
 function renderTimes() {
   const grid=$("timeGrid"); grid.innerHTML="";
   const selectedDate=getSelectedDateISO();
@@ -2326,7 +2363,7 @@ function renderTimes() {
     retry.type="button";
     retry.textContent=currentLang==="th"?"ลองใหม่":"Retry";
     retry.style.cssText="display:block;margin:10px auto 0;border:0;border-radius:8px;background:var(--brand);color:#fff;padding:8px 16px;font-weight:800";
-    retry.addEventListener("click",()=>loadSlotsAndRender(selectedDate));
+    retry.addEventListener("click",()=>hardRetryBookingAvailability(selectedDate));
     box.appendChild(retry);
     grid.appendChild(box);
     return;
