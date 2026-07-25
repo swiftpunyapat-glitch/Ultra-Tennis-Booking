@@ -2661,7 +2661,7 @@ $("openWeekBtn").addEventListener("click",async()=>{
   const btn=$("openWeekBtn");btn.disabled=true;btn.textContent="Opening...";
   try{await setSlots(dateRange(s,7));showToast(`✓ Opened 7 days from ${s}`);
     if($("viewDate").value)await loadSlotGrid($("viewDate").value);}
-  catch(e){console.error(e);showToast("Failed.",true);}
+  catch(e){console.error(e);showToast(e?.message||"Failed.",true);}
   finally{btn.disabled=false;btn.textContent="⚡ Open Full Week (7 days)";}
 });
 
@@ -2670,7 +2670,7 @@ $("openDayBtn").addEventListener("click",async()=>{
   const btn=$("openDayBtn");btn.disabled=true;btn.textContent="Opening...";
   try{await setSlots([d]);showToast(`✓ Opened all slots for ${d}`);
     if(getViewDate()===d)await loadSlotGrid(d);}
-  catch(e){console.error(e);showToast("Failed.",true);}
+  catch(e){console.error(e);showToast(e?.message||"Failed.",true);}
   finally{btn.disabled=false;btn.textContent="+ Open This Day";}
 });
 
@@ -2680,7 +2680,7 @@ $("closeDayBtn").addEventListener("click",async()=>{
   const btn=$("closeDayBtn");btn.disabled=true;btn.textContent="Closing...";
   try{await setSlots([d],true);showToast(`✓ Closed all slots for ${d}`);
     if(getViewDate()===d)await loadSlotGrid(d);}
-  catch(e){console.error(e);showToast("Failed.",true);}
+  catch(e){console.error(e);showToast(e?.message||"Failed.",true);}
   finally{btn.disabled=false;btn.textContent="✕ Close This Day";}
 });
 
@@ -2695,7 +2695,7 @@ $("openLNBtn").addEventListener("click",async()=>{
     showToast(`🌙 Late Night slots opened for ${d}`);
     if(getViewDate()===d) await loadSlotGrid(d);
     if(dvLastLoad===d) loadDailyView();
-  }catch(e){console.error(e);showToast("Failed.",true);}
+  }catch(e){console.error(e);showToast(e?.message||"Failed.",true);}
   finally{btn.disabled=false;btn.textContent="🌙 Open Late Night (00–06)";}
 });
 
@@ -2708,7 +2708,7 @@ $("closeLNBtn").addEventListener("click",async()=>{
     showToast(`✓ Late Night slots closed for ${d}`);
     if(getViewDate()===d) await loadSlotGrid(d);
     if(dvLastLoad===d) loadDailyView();
-  }catch(e){console.error(e);showToast("Failed.",true);}
+  }catch(e){console.error(e);showToast(e?.message||"Failed.",true);}
   finally{btn.disabled=false;btn.textContent="✕ Close Late Night";}
 });
 
@@ -2727,7 +2727,7 @@ $("openAllBtn").addEventListener("click",async()=>{
     if(data.count===0){showToast("All slots already set.");return;}
     showToast(`✓ Opened ${data.count} new slots for ${d}`);await loadSlotGrid(d);
     if(dvLastLoad===d) loadDailyView();
-  }catch(e){console.error(e);showToast("Failed.",true);}
+  }catch(e){console.error(e);showToast(e?.message||"Failed.",true);}
 });
 
 $("closeUnbookedBtn").addEventListener("click",async()=>{
@@ -2741,7 +2741,7 @@ $("closeUnbookedBtn").addEventListener("click",async()=>{
     if(!data.count){showToast("No unbooked open slots to close.");return;}
     showToast(`✓ Closed ${data.count} unbooked slots`);await loadSlotGrid(d);
     if(dvLastLoad===d) loadDailyView();
-  }catch(e){console.error(e);showToast("Failed.",true);}
+  }catch(e){console.error(e);showToast(e?.message||"Failed.",true);}
 });
 
 async function loadSlotGrid(dateISO){
@@ -2797,7 +2797,7 @@ async function toggleSlot(btn,dateISO){
     if(!res.ok||!data.ok){showToast(data.error||"Toggle failed.",true);btn.disabled=false;return;}
     loadSlotGrid(dateISO);
     if(dvLastLoad===dateISO) loadDailyView();
-  }catch(e){console.error(e);showToast("Toggle failed.",true);btn.disabled=false;}
+  }catch(e){console.error(e);showToast(e?.message||"Toggle failed.",true);btn.disabled=false;}
 }
 
 // Holiday save
