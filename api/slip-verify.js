@@ -38,7 +38,11 @@
 // ════════════════════════════════════════════════════════════════════
 
 import crypto from 'node:crypto';
-import { getAdminDb, getAdminBucket, writeAuditLog } from './_lib/firebase-admin.js';
+import {
+  getAdminDb, getAdminBucket, writeAuditLog, getAdminAuth,
+  verifyGuestToken, checkRateLimit, RATE_LIMITS, clientIp,
+  claimIdempotencyKey, storeIdempotentResponse,
+} from './_lib/firebase-admin.js';
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
 import { FieldValue } from 'firebase-admin/firestore';
 
@@ -127,10 +131,246 @@ async function computeServerSlipHash(slipUrl) {
   }
 }
 
+// ════════════════════════════════════════════════════════════════════
+// Server-side slip submission — Security Hotfix 2026-08-04
+// ════════════════════════════════════════════════════════════════════
+// index.html:3387 ran a browser transaction that set the booking to
+// bookingStatus:"confirmed" and paymentStatus:"pending_review", and locked
+// every slot, the moment a slip was uploaded. Two problems:
+//
+//   • It contradicts the locked business rule. Addendum 02 sec 12 states the
+//     booking becomes confirmed only AFTER an admin presses Mark Paid.
+//     Uploading an image is not evidence of payment.
+//   • The active rules allow any caller to perform that update on any
+//     booking, so "confirmed" was never a trustworthy state (SEC-03).
+//
+// Here the slip only ever moves payment into pending_review. bookingStatus
+// is left untouched, so the admin approval step remains the sole path to
+// confirmed. Slots keep their existing hold rather than being locked early.
+//
+// Auth: a LINE customer presents a Firebase ID token; a guest presents the
+// capability token issued when the booking was created.
+// ════════════════════════════════════════════════════════════════════
+
+async function serverSlipSubmitEnabled(db) {
+  try {
+    const snap = await db.collection('system_settings').doc('features').get();
+    return snap.exists && snap.data().useServerSlipSubmit === true;
+  } catch (e) {
+    console.warn('[server slip flag] read failed → OFF:', e.message);
+    return false;
+  }
+}
+
+// Resolves the caller against a target booking. Returns
+// { ok, actor } or { ok:false, status, error }.
+async function authorizeSlipCaller(req, db, { bookingId, ownerLineUserId, idToken, guestToken }) {
+  if (idToken) {
+    try {
+      const uid = (await getAdminAuth().verifyIdToken(idToken)).uid;
+      if (uid && uid === ownerLineUserId) return { ok: true, actor: uid };
+      return { ok: false, status: 403, error: 'บัญชีไม่ตรงกับการจอง' };
+    } catch { /* fall through to guest token */ }
+  }
+  if (guestToken) {
+    const gate = await checkRateLimit(db, {
+      bucket: 'guestMutation', key: `${guestToken}|${clientIp(req)}`, ...RATE_LIMITS.guestMutation,
+    });
+    if (!gate.allowed) return { ok: false, status: 429, error: 'Too many requests', retryAfterSec: gate.retryAfterSec };
+    const v = await verifyGuestToken(db, guestToken);
+    if (v.ok && v.bookingId === bookingId) return { ok: true, actor: 'guest' };
+  }
+  return { ok: false, status: 403, error: 'ยืนยันตัวตนไม่ผ่าน' };
+}
+
+// Accepts a storage URL only if it points at our own bucket, reusing the
+// parser the hashing path already relies on. Prevents a caller from
+// pointing slipUrl at an arbitrary external host.
+function isOwnStorageUrl(url) {
+  return !!parseStorageUrl(url);
+}
+
+async function handleSubmitBookingSlip(req, res, body, db) {
+  const bookingId   = typeof body.bookingId === 'string' ? body.bookingId.trim() : '';
+  const bookingCode = typeof body.bookingCode === 'string' ? body.bookingCode.trim() : '';
+  const slipUrl     = typeof body.slipUrl === 'string' ? body.slipUrl.trim() : '';
+  const idToken     = typeof body.idToken === 'string' ? body.idToken.trim() : '';
+  const guestToken  = typeof body.guestToken === 'string' ? body.guestToken.trim() : '';
+  const idemKey     = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : '';
+
+  if (!bookingId)   return res.status(400).json({ ok: false, error: 'Missing bookingId' });
+  if (!bookingCode) return res.status(400).json({ ok: false, error: 'Missing bookingCode' });
+  if (!slipUrl || !isOwnStorageUrl(slipUrl)) {
+    return res.status(400).json({ ok: false, error: 'slipUrl must be a Firebase Storage URL for this project' });
+  }
+  if (!idemKey) return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey is required' });
+
+  const bookingRef = db.collection('bookings').doc(bookingId);
+  let booking;
+  try {
+    const snap = await bookingRef.get();
+    if (!snap.exists) return res.status(404).json({ ok: false, error: 'Booking not found' });
+    booking = snap.data();
+  } catch (e) {
+    console.error('[submit_slip] read:', e.message);
+    return res.status(500).json({ ok: false, error: 'Server error' });
+  }
+
+  if (bookingCode !== booking.bookingCode) {
+    return res.status(403).json({ ok: false, error: 'ไม่ใช่การจองของคุณ' });
+  }
+
+  const auth = await authorizeSlipCaller(req, db, {
+    bookingId, ownerLineUserId: booking.lineUserId, idToken, guestToken,
+  });
+  if (!auth.ok) {
+    if (auth.retryAfterSec) res.setHeader('Retry-After', String(auth.retryAfterSec));
+    return res.status(auth.status).json({ ok: false, error: auth.error });
+  }
+
+  // GT-02: guest mutations must be idempotent so a retry cannot double-submit.
+  let claim;
+  try { claim = await claimIdempotencyKey(db, idemKey, 'submit_slip'); }
+  catch (e) { console.error('[submit_slip] idempotency:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+  if (!claim.fresh) return res.status(200).json(claim.response ?? { ok: true, replayed: true });
+
+  try {
+    await db.runTransaction(async (t) => {
+      const snap = await t.get(bookingRef);
+      if (!snap.exists) throw new Error('GONE');
+      const b = snap.data();
+      if (b.paymentStatus === 'paid' || b.paymentStatus === 'package') throw new Error('ALREADY_SETTLED');
+      if (b.bookingStatus === 'cancelled') throw new Error('CANCELLED');
+      if (b.paymentStatus !== 'unpaid' && b.paymentStatus !== 'pending_review') throw new Error('BAD_STATE');
+
+      // Payment only. bookingStatus is deliberately NOT written here —
+      // confirming a booking is the admin's action (Addendum 02 sec 12).
+      t.update(bookingRef, {
+        paymentStatus:  'pending_review',
+        slipUrl,
+        slipUploadedAt: FieldValue.serverTimestamp(),
+        slipSubmittedVia: 'server',
+        updatedAt:      FieldValue.serverTimestamp(),
+      });
+    });
+  } catch (e) {
+    const map = {
+      GONE:            [404, 'Booking not found'],
+      ALREADY_SETTLED: [409, 'การจองนี้ชำระเงินแล้ว'],
+      CANCELLED:       [409, 'การจองนี้ถูกยกเลิกแล้ว'],
+      BAD_STATE:       [409, 'สถานะการจองเปลี่ยนไปแล้ว กรุณารีเฟรช'],
+    };
+    const [code, msg] = map[e.message] || [500, 'ส่งสลิปไม่สำเร็จ'];
+    if (code === 500) console.error('[submit_slip] tx:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+
+  await writeAuditLog(db, {
+    actor: auth.actor, actorRole: auth.actor === 'guest' ? 'guest' : 'customer',
+    branchId: booking.branchId ?? null,
+    action: 'slip_submitted', targetId: bookingId,
+    before: { paymentStatus: booking.paymentStatus, bookingStatus: booking.bookingStatus },
+    after:  { paymentStatus: 'pending_review', bookingStatus: booking.bookingStatus },
+    note: bookingCode,
+  });
+
+  const response = { ok: true, paymentStatus: 'pending_review', bookingStatus: booking.bookingStatus };
+  await storeIdempotentResponse(claim.ref, response);
+  return res.status(200).json(response);
+}
+
+async function handleSubmitPassSlip(req, res, body, db) {
+  const purchaseId = typeof body.purchaseId === 'string' ? body.purchaseId.trim() : '';
+  const slipUrl    = typeof body.slipUrl === 'string' ? body.slipUrl.trim() : '';
+  const idToken    = typeof body.idToken === 'string' ? body.idToken.trim() : '';
+  const idemKey    = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : '';
+
+  if (!purchaseId) return res.status(400).json({ ok: false, error: 'Missing purchaseId' });
+  if (!slipUrl || !isOwnStorageUrl(slipUrl)) {
+    return res.status(400).json({ ok: false, error: 'slipUrl must be a Firebase Storage URL for this project' });
+  }
+  if (!idemKey) return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey is required' });
+
+  // Passes are a LINE-only product (Addendum 02 sec 9.4) — no guest path.
+  let uid = null;
+  try { if (idToken) uid = (await getAdminAuth().verifyIdToken(idToken)).uid; }
+  catch { /* fall through */ }
+  if (!uid) return res.status(403).json({ ok: false, code: 'AUTH', error: 'กรุณาเข้าสู่ระบบผ่าน LINE' });
+
+  const ref = db.collection('pass_purchases').doc(purchaseId);
+  let purchase;
+  try {
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ ok: false, error: 'Purchase not found' });
+    purchase = snap.data();
+  } catch (e) {
+    console.error('[submit_pass_slip] read:', e.message);
+    return res.status(500).json({ ok: false, error: 'Server error' });
+  }
+
+  if (purchase.lineUserId !== uid) return res.status(403).json({ ok: false, error: 'ไม่ใช่รายการของบัญชีนี้' });
+
+  let claim;
+  try { claim = await claimIdempotencyKey(db, idemKey, 'submit_pass_slip'); }
+  catch (e) { console.error('[submit_pass_slip] idempotency:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+  if (!claim.fresh) return res.status(200).json(claim.response ?? { ok: true, replayed: true });
+
+  try {
+    await db.runTransaction(async (t) => {
+      const snap = await t.get(ref);
+      if (!snap.exists) throw new Error('GONE');
+      const p = snap.data();
+      if (p.issuedPackageId || p.paymentStatus === 'paid') throw new Error('ALREADY_SETTLED');
+      if (p.status === 'rejected' || p.paymentStatus === 'rejected') throw new Error('REJECTED');
+      t.update(ref, {
+        status: 'pending_review', paymentStatus: 'pending_review',
+        slipUrl, slipUploadedAt: FieldValue.serverTimestamp(),
+        slipSubmittedVia: 'server',
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+  } catch (e) {
+    const map = {
+      GONE:            [404, 'Purchase not found'],
+      ALREADY_SETTLED: [409, 'รายการนี้ดำเนินการแล้ว'],
+      REJECTED:        [409, 'รายการนี้ถูกปฏิเสธแล้ว'],
+    };
+    const [code, msg] = map[e.message] || [500, 'ส่งสลิปไม่สำเร็จ'];
+    if (code === 500) console.error('[submit_pass_slip] tx:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+
+  await writeAuditLog(db, {
+    actor: uid, actorRole: 'customer', branchId: null,
+    action: 'pass_slip_submitted', targetId: purchaseId,
+    after: { paymentStatus: 'pending_review' },
+    note: purchase.purchaseCode ?? null,
+  });
+
+  const response = { ok: true, paymentStatus: 'pending_review' };
+  await storeIdempotentResponse(claim.ref, response);
+  return res.status(200).json(response);
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' });
   const body = parseBody(req);
   if (!body) return res.status(400).json({ ok: false, error: 'Invalid request body' });
+
+  // ── Security Hotfix 2026-08-04: server-side slip submission ────────
+  // Moves the mutation that index.html:3387 / :3369 performed from the
+  // browser to here. Gated by a fail-closed flag so Stage A is inert.
+  if (body.action === 'submit_slip' || body.action === 'submit_pass_slip') {
+    let db0;
+    try { db0 = getAdminDb(); }
+    catch (e) { console.error('[submit_slip] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+    if (!(await serverSlipSubmitEnabled(db0))) {
+      return res.status(403).json({ ok: false, code: 'DISABLED', error: 'Server slip submission is not enabled' });
+    }
+    return body.action === 'submit_slip'
+      ? handleSubmitBookingSlip(req, res, body, db0)
+      : handleSubmitPassSlip(req, res, body, db0);
+  }
 
   // Stage D: pre-check for PASS PURCHASE slips (pass_purchases collection).
   // Separate handler so the Phase 1A booking path below stays untouched.
