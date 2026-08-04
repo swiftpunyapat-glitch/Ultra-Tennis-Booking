@@ -338,6 +338,19 @@ export default async function handler(req, res) {
 
   if (body.action === 'price_quote')   return handlePriceQuote(res, body);
   if (body.action === 'create')        return handleCreate(res, body);
+  // Server-side pass booking (Security Hotfix 2026-08-04 — closes SEC-02).
+  // Gated by system_settings/features.useServerPassBooking; while that flag
+  // is OFF the client keeps using its legacy transaction and this endpoint
+  // simply refuses, so deploying it changes nothing until we switch over.
+  if (body.action === 'create_pass_booking') {
+    let db;
+    try { db = getAdminDb(); }
+    catch (e) { console.error('[create_pass_booking] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+    if (!(await serverPassBookingEnabled(db))) {
+      return res.status(403).json({ ok: false, code: 'DISABLED', error: 'Server pass booking is not enabled' });
+    }
+    return handleCreatePassBooking(res, body);
+  }
   if (body.action === 'cancel_pending') return handleCancelPending(res, body);
   if (body.action === 'features')      return handleFeatures(res);
   // Coach lesson booking (Stage 3) — customer-facing, feature-flagged OFF by
@@ -361,6 +374,19 @@ const PASS_CATALOG = {
   ultra_pass_20:   { packageName: 'Ultra Pass 20 Hours', price: 5900 },
   offpeak:         { packageName: 'Off-Peak Pass',       price: 3600 },
 };
+
+// Security Hotfix 2026-08-04 kill switch. Fails CLOSED: until the flag is
+// explicitly true the endpoint refuses, so Deployment A ships the code
+// without changing any behaviour (Hotfix Plan, Stage A).
+async function serverPassBookingEnabled(db) {
+  try {
+    const snap = await db.collection('system_settings').doc('features').get();
+    return snap.exists && snap.data().useServerPassBooking === true;
+  } catch (e) {
+    console.warn('[server pass flag] read failed → OFF:', e.message);
+    return false;
+  }
+}
 
 async function passSelfPurchaseEnabled(db) {
   try {
@@ -914,6 +940,311 @@ async function handleCancelPending(res, body) {
   }
 
   return res.status(200).json({ ok: true });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// create_pass_booking — Security Hotfix 2026-08-04  (closes SEC-02)
+// ════════════════════════════════════════════════════════════════════
+// Replaces the client-side Firestore transaction at index.html:2891, which
+// deducted customer_packages.remainingMinutes straight from the browser.
+// The baseline rules never constrained remainingMinutes on update, so any
+// caller could set any pass balance to any value.
+//
+// Two things this fixes that the client path could not:
+//   1. Ownership is proved by a Firebase ID token (uid == verified LINE
+//      userId, minted by /api/auth-line), not by a client-stated field.
+//   2. Duration is enforced server-side. The client restricted pass
+//      bookings to 60 minutes in JS (index.html:1810) but always deducted
+//      a hard-coded 60, so a modified client could book 180 minutes and
+//      pay 60 (R-02). Here the booked duration IS the deducted amount.
+//
+// Guests cannot reach this path at all (Addendum 02 sec 9.4).
+// ════════════════════════════════════════════════════════════════════
+
+const PASS_PAY_TYPES   = ['ultra', 'offpeak', 'event'];
+const OFFPEAK_HOURS    = { startHour: 9, endHour: 15 };
+
+// ISO-8601 week key, ported 1:1 from index.html:1482 so quota buckets stay
+// identical across the old and new path during migration.
+function isoWeekKeyOf(dateISO) {
+  const [y, m, dd] = String(dateISO).split('-').map(Number);
+  const d = new Date(Date.UTC(y, m - 1, dd));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+}
+const monthKeyOf = dateISO => String(dateISO).slice(0, 7);
+const dowOfDate  = (dateISO) => {
+  const [y, m, d] = String(dateISO).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();   // 0=Sun..6=Sat
+};
+
+// Validates a pass against the booking context and returns the package
+// mutation to apply. Pure apart from the values passed in, so the rules are
+// readable in one place. Throws Error(code) — mapped to Thai text by caller.
+function validatePassAndBuildUpdate({ payType, pkg, uid, dateISO, startTime, durationMinutes, isHoliday, nowMs }) {
+  if (pkg.lineUserId !== uid)  throw new Error('PASS_NOT_OWNED');
+  if (pkg.status !== 'active') throw new Error('PASS_INACTIVE');
+
+  const validUntil = pkg.validUntil?.toMillis?.() ?? null;
+  if (!validUntil || validUntil < nowMs) throw new Error('PASS_EXPIRED');
+
+  const remaining = Number(pkg.remainingMinutes);
+  const dow       = dowOfDate(dateISO);
+  const startH    = parseInt(String(startTime).slice(0, 2), 10);
+
+  if (payType === 'ultra') {
+    if (!Number.isFinite(remaining) || remaining < durationMinutes) throw new Error('PASS_INSUFFICIENT');
+    return { remainingMinutes: remaining - durationMinutes };
+  }
+
+  if (payType === 'event') {
+    if (!Number.isFinite(remaining) || remaining < durationMinutes) throw new Error('PASS_INSUFFICIENT');
+    if (pkg.branchId   && pkg.branchId   !== DEFAULT_BRANCH_ID) throw new Error('PASS_WRONG_BRANCH');
+    if (pkg.resourceId && pkg.resourceId !== RESOURCE_ID)       throw new Error('PASS_WRONG_RESOURCE');
+    if (dow < 1 || dow > 5) throw new Error('PASS_WEEKDAY_ONLY');
+    if (isHoliday)          throw new Error('PASS_NO_HOLIDAY');
+    return { remainingMinutes: remaining - durationMinutes, eventUsedAt: FieldValue.serverTimestamp() };
+  }
+
+  // ── offpeak: day/time window + weekly/monthly quota + total cap ──
+  if (dow < 1 || dow > 5) throw new Error('PASS_WEEKDAY_ONLY');
+  if (isHoliday)          throw new Error('PASS_NO_HOLIDAY');
+  if (startH < OFFPEAK_HOURS.startHour || startH + (durationMinutes / 60) > OFFPEAK_HOURS.endHour) {
+    throw new Error('PASS_OFFPEAK_WINDOW');
+  }
+
+  const weekKey = isoWeekKeyOf(dateISO);
+  const monKey  = monthKeyOf(dateISO);
+  const wkUsage = pkg.weeklyUsage  || {};
+  const moUsage = pkg.monthlyUsage || {};
+  const wkUsed  = Number(wkUsage[weekKey]) || 0;
+  const moUsed  = Number(moUsage[monKey])  || 0;
+  const wkLimit = (Number(pkg.weeklyLimitHours)  || 0) * 60;
+  const moLimit = (Number(pkg.monthlyLimitHours) || 0) * 60;
+
+  // A configured-but-unset limit blocks rather than silently allowing —
+  // same fail-closed stance as the client path it replaces.
+  if (!wkLimit || !moLimit) throw new Error('PASS_QUOTA_UNCONFIGURED');
+  if (wkUsed + durationMinutes > wkLimit) throw new Error('PASS_WEEKLY_LIMIT');
+  if (moUsed + durationMinutes > moLimit) throw new Error('PASS_MONTHLY_LIMIT');
+
+  // Legacy off-peak passes predate totalMinutes; for those the monthly cap
+  // governs and remainingMinutes is not tracked.
+  const hasTotal = Number(pkg.totalMinutes) > 0;
+  if (hasTotal) {
+    if (!Number.isFinite(remaining))      throw new Error('PASS_HOURS_UNCONFIGURED');
+    if (remaining < durationMinutes)      throw new Error('PASS_INSUFFICIENT');
+  }
+
+  return {
+    ...(hasTotal ? { remainingMinutes: remaining - durationMinutes } : {}),
+    weeklyUsage:  { ...wkUsage, [weekKey]: wkUsed + durationMinutes },
+    monthlyUsage: { ...moUsage, [monKey]:  moUsed + durationMinutes },
+  };
+}
+
+const PASS_ERROR_TEXT = {
+  PASS_NOT_OWNED:          'แพ็คเกจนี้ไม่ใช่ของบัญชีนี้',
+  PASS_INACTIVE:           'แพ็คเกจไม่พร้อมใช้งาน',
+  PASS_EXPIRED:            'แพ็คเกจหมดอายุแล้ว',
+  PASS_INSUFFICIENT:       'ชั่วโมงในแพ็คเกจไม่พอ',
+  PASS_WRONG_BRANCH:       'แพ็คเกจนี้ใช้ได้กับสาขาอื่น',
+  PASS_WRONG_RESOURCE:     'แพ็คเกจนี้ใช้ได้กับคอร์ทอื่น',
+  PASS_WEEKDAY_ONLY:       'แพ็คเกจนี้ใช้ได้เฉพาะวันจันทร์–ศุกร์',
+  PASS_NO_HOLIDAY:         'แพ็คเกจนี้ใช้ในวันหยุดไม่ได้',
+  PASS_OFFPEAK_WINDOW:     'Off-Peak ใช้ได้เฉพาะ 09:00–15:00',
+  PASS_QUOTA_UNCONFIGURED: 'โควตาของแพ็คเกจยังไม่ถูกตั้งค่า กรุณาติดต่อร้าน',
+  PASS_HOURS_UNCONFIGURED: 'ชั่วโมงของแพ็คเกจยังไม่ถูกตั้งค่า กรุณาติดต่อร้าน',
+  PASS_WEEKLY_LIMIT:       'ใช้ครบโควตารายสัปดาห์แล้ว',
+  PASS_MONTHLY_LIMIT:      'ใช้ครบโควตารายเดือนแล้ว',
+  PASS_GONE:               'ไม่พบแพ็คเกจ กรุณารีเฟรช',
+};
+
+async function handleCreatePassBooking(res, body) {
+  const date            = typeof body.date === 'string' ? body.date.trim() : '';
+  const startTime       = typeof body.startTime === 'string' ? body.startTime.trim() : '';
+  const payType         = typeof body.payType === 'string' ? body.payType.trim() : '';
+  const packageId       = typeof body.packageId === 'string' ? body.packageId.trim() : '';
+  const customerName    = typeof body.customerName === 'string' ? body.customerName.trim() : '';
+  const customerPhone   = typeof body.customerPhone === 'string' ? body.customerPhone.trim() : '';
+  const customerNote    = typeof body.customerNote === 'string' ? body.customerNote.slice(0, 500) : '';
+  const lineDisplayName = typeof body.lineDisplayName === 'string' ? body.lineDisplayName : '';
+  const idToken         = typeof body.idToken === 'string' ? body.idToken.trim() : '';
+  const durationMinutes = parseDurationMinutes(body);
+
+  if (!DATE_RE.test(date))      return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'date must be YYYY-MM-DD' });
+  if (!TIME_RE.test(startTime)) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'startTime must be HH:mm' });
+  if (!PASS_PAY_TYPES.includes(payType)) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Unknown payType' });
+  if (!packageId)     return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'packageId is required' });
+  if (!customerName)  return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerName is required' });
+  if (!customerPhone) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerPhone is required' });
+
+  // Pass bookings are whole-hour only. The client enforced 60 minutes in JS
+  // and then deducted a fixed 60; enforcing it here is what actually closes
+  // the bypass (R-02).
+  if (durationMinutes === null || durationMinutes % 60 !== 0) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'durationMinutes must be a whole number of hours' });
+  }
+
+  const segs = segmentsOf(startTime, durationMinutes);
+  if (!segs) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Invalid start/duration' });
+
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[create_pass_booking] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
+
+  // ── Identity is mandatory. No token, no pass. ──────────────────────
+  let uid = null;
+  try {
+    if (idToken) uid = (await getAdminAuth().verifyIdToken(idToken)).uid;
+  } catch { /* fall through to 403 */ }
+  if (!uid) return res.status(403).json({ ok: false, code: 'AUTH', error: 'กรุณาเข้าสู่ระบบผ่าน LINE เพื่อใช้แพ็คเกจ' });
+
+  const nowMs   = Date.now();
+  const startMs = Date.parse(`${date}T${startTime}:00+07:00`);
+  if (!Number.isFinite(startMs) || startMs <= nowMs) {
+    return res.status(409).json({ ok: false, code: 'SLOT', error: 'ช่วงเวลานี้ผ่านมาแล้ว' });
+  }
+
+  let isHoliday = false;
+  try {
+    const h = await db.collection('holidays').doc(date).get();
+    isHoliday = h.exists && h.data().isHoliday === true;
+  } catch (e) { console.warn('[create_pass_booking] holiday read failed → treating as non-holiday:', e.message); }
+
+  const endTime          = endTimeAfterMin(startTime, durationMinutes);
+  const bookingCode      = genBookingCode();
+  const startMin         = toMin(startTime);
+  const needCells        = []; for (let m = startMin; m < startMin + durationMinutes; m += 30) needCells.push(m);
+  const touchedHours     = [...new Set(needCells.map(m => Math.floor(m / 60)))];
+
+  const bookingRef = db.collection('bookings').doc();
+  const segRefs    = segs.map(x => db.collection('booking_slots').doc(slotIdOf(date, x.start)));
+  const cellRefs   = touchedHours.flatMap(H => [
+    db.collection('booking_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:00`)),
+    db.collection('booking_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:30`)),
+  ]);
+  const availRefs  = touchedHours.map(H => db.collection('available_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:00`)));
+  const pkgRef     = db.collection('customer_packages').doc(packageId);
+
+  let pkgSnapshot = null;
+  try {
+    await db.runTransaction(async (t) => {
+      const snaps     = await Promise.all([...cellRefs.map(r => t.get(r)), ...availRefs.map(r => t.get(r)), t.get(pkgRef)]);
+      const cellSnaps = snaps.slice(0, cellRefs.length);
+      const availSnaps= snaps.slice(cellRefs.length, cellRefs.length + availRefs.length);
+      const pkgSnap   = snaps[snaps.length - 1];
+
+      for (const a of availSnaps) {
+        if (!a.exists || a.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
+      }
+      // Same cell-level conflict model as handleCreate: legacy docs with no
+      // slotSpanMinutes are full-hour by definition.
+      cellSnaps.forEach((snap, i) => {
+        if (!snap.exists) return;
+        const sd = snap.data();
+        const docMin  = touchedHours[Math.floor(i / 2)] * 60 + (i % 2) * 30;
+        const docSpan = sd.slotSpanMinutes === 30 ? 30 : 60;
+        const overlaps = needCells.some(c => c >= docMin && c < docMin + docSpan);
+        if (!overlaps) return;
+        if (sd.bookingStatus === 'confirmed') throw new Error('SLOT_TAKEN');
+        if (sd.bookingStatus === 'pending_payment') {
+          const exp = sd.expiresAt?.toMillis?.() ?? 0;
+          if (!exp || exp > nowMs) throw new Error('SLOT_HELD');
+        }
+      });
+
+      if (!pkgSnap.exists) throw new Error('PASS_GONE');
+      const pkg = pkgSnap.data();
+      pkgSnapshot = pkg;
+
+      // Re-validated INSIDE the transaction so a concurrent booking cannot
+      // spend the same minutes twice.
+      const pkgUpdate = validatePassAndBuildUpdate({
+        payType, pkg, uid, dateISO: date, startTime, durationMinutes, isHoliday, nowMs,
+      });
+
+      t.set(bookingRef, {
+        bookingCode, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
+        bookingSlotIds: segRefs.map(r => r.id),
+        bookingType: pkg.packageName || 'Package Booking',
+        lineUserId: uid, lineDisplayName,
+        customerName, customerPhone, customerPhoneNormalized: normalizePhone(customerPhone),
+        customerNote,
+        date, startTime, endTime,
+        durationMinutes, durationHours: durationMinutes / 60,
+        price: 0, amount: 0, originalPrice: 0, finalPrice: 0, basePrice: 0, effectivePrice: 0,
+        pricingType: 'package', pricingMode: 'package',
+        promoCode: null, voucherCode: null, discountAmount: 0,
+        priceRuleVersion: 'pass-server-v1',
+        qrAmount: 0, qrType: null, paymentQrType: null, promoApplied: false,
+        isHoliday, isWeekend: [0, 6].includes(dowOfDate(date)),
+        packageId, packageType: pkg.packageType, packageName: pkg.packageName || pkg.packageType,
+        usedPackageId: packageId, usedPackageType: pkg.packageType, usedPackageName: pkg.packageName || pkg.packageType,
+        packageMinutesUsed: durationMinutes,
+        ...(payType === 'event' ? { isEventBooking: true } : {}),
+        bookingStatus: 'confirmed', paymentStatus: 'package',
+        paymentExpiresAt: null,
+        slipUrl: null, slipUploadedAt: null, cancelReason: null,
+        confirmedAt: FieldValue.serverTimestamp(),
+        createdVia: 'server_pass',
+        createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+      });
+
+      segs.forEach((x, i) => {
+        writeSlotDoc(t, segRefs[i], {
+          bookingCode, bookingId: bookingRef.id, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
+          date, hour: x.start, slotSpanMinutes: x.span,
+          bookingStatus: 'confirmed', paymentStatus: 'package',
+          expiresAt: null,
+        });
+      });
+
+      t.update(pkgRef, {
+        ...pkgUpdate,
+        lastUsedAt: FieldValue.serverTimestamp(),
+        lastUsedBooking: bookingCode,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+  } catch (e) {
+    const msg = e.message || '';
+    if (msg.startsWith('SLOT_')) {
+      const m = { SLOT_NOT_OPEN: 'ช่องเวลานี้ปิดรับจองแล้ว', SLOT_TAKEN: 'ช่องเวลานี้เพิ่งถูกจอง', SLOT_HELD: 'ช่องเวลานี้ถูกจองค้างอยู่ ลองใหม่อีกครั้ง' };
+      return res.status(409).json({ ok: false, code: 'SLOT', error: m[msg] || 'ช่องเวลาไม่ว่าง' });
+    }
+    if (PASS_ERROR_TEXT[msg]) {
+      return res.status(409).json({ ok: false, code: 'PASS', error: PASS_ERROR_TEXT[msg] });
+    }
+    console.error('[create_pass_booking] tx:', msg);
+    return res.status(500).json({ ok: false, error: 'Failed to create booking' });
+  }
+
+  console.log(`[create_pass_booking] ${bookingCode} ${payType} pkg:${packageId} ${durationMinutes}min uid:${uid}`);
+  await writeAuditLog(db, {
+    actor: uid, actorRole: 'customer', branchId: DEFAULT_BRANCH_ID,
+    action: 'pass_booking_created', targetId: bookingRef.id,
+    after: { packageId, packageType: pkgSnapshot?.packageType ?? null, minutesUsed: durationMinutes, bookingCode },
+    note: `${date} ${startTime}-${endTime}`,
+  });
+
+  return res.status(200).json({
+    ok: true,
+    booking: {
+      id: bookingRef.id, bookingCode, date, startTime, endTime,
+      bookingSlotIds: segRefs.map(r => r.id),
+      durationMinutes, durationHours: durationMinutes / 60,
+      bookingType: pkgSnapshot?.packageName || 'Package Booking',
+      price: 0, finalPrice: 0, originalPrice: 0,
+      pricingType: 'package',
+      bookingStatus: 'confirmed', paymentStatus: 'package',
+      packageId, packageName: pkgSnapshot?.packageName ?? null,
+      lineUserId: uid, customerName, customerPhone, customerNote,
+    },
+  });
 }
 
 // ════════════════════════════════════════════════════════════════════
