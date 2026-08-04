@@ -295,7 +295,13 @@ export async function revokeGuestAccess(db, bookingId, reason) {
 // repeated invalid-token attempts.
 //
 // Returns { allowed:true } or { allowed:false, retryAfterSec }.
+// TTL grace after the window (or block) ends, per the review decision:
+// expiresAt = windowEnd + 24h.
+const RATE_LIMIT_TTL_GRACE_MS = 24 * 60 * 60 * 1000;
+
 export async function checkRateLimit(db, { bucket, key, limit, windowMs, blockMs = 0 }) {
+  // One document per (bucket, key) — reused across windows, never one per
+  // attempt. windowStart is what rolls the window, not the document id.
   const docId = `${bucket}__${createHash('sha256').update(String(key)).digest('hex').slice(0, 32)}`;
   const ref   = db.collection('rate_limits').doc(docId);
   const nowMs = Date.now();
@@ -314,12 +320,19 @@ export async function checkRateLimit(db, { bucket, key, limit, windowMs, blockMs
       const fresh = !windowStart || (nowMs - windowStart) >= windowMs;
       const count = fresh ? 1 : (Number(d.count) || 0) + 1;
 
+      // RB-04: expiresAt is what a Firestore TTL policy acts on. It always
+      // sits past the end of the current window (and past any block), so a
+      // document is only reaped once it can no longer affect a decision.
+      const effWindowStart = fresh ? nowMs : windowStart;
+      const windowEnd      = effWindowStart + windowMs;
+
       if (count > limit) {
-        const until = blockMs > 0 ? nowMs + blockMs : windowStart + windowMs;
+        const until = blockMs > 0 ? nowMs + blockMs : windowEnd;
         t.set(ref, {
           bucket, count,
-          windowStart: Timestamp.fromMillis(fresh ? nowMs : windowStart),
+          windowStart: Timestamp.fromMillis(effWindowStart),
           blockedUntil: Timestamp.fromMillis(until),
+          expiresAt: Timestamp.fromMillis(Math.max(windowEnd, until) + RATE_LIMIT_TTL_GRACE_MS),
           updatedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
         return { allowed: false, retryAfterSec: Math.ceil((until - nowMs) / 1000) };
@@ -327,8 +340,9 @@ export async function checkRateLimit(db, { bucket, key, limit, windowMs, blockMs
 
       t.set(ref, {
         bucket, count,
-        windowStart: Timestamp.fromMillis(fresh ? nowMs : windowStart),
+        windowStart: Timestamp.fromMillis(effWindowStart),
         blockedUntil: null,
+        expiresAt: Timestamp.fromMillis(windowEnd + RATE_LIMIT_TTL_GRACE_MS),
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       return { allowed: true };
@@ -354,33 +368,62 @@ export function clientIp(req) {
   return req.socket?.remoteAddress || 'unknown';
 }
 
-// ── Idempotency for guest mutations (GT-02) ─────────────────────────
-// tx.create() fails if the doc exists, which makes "claim the key" atomic
-// without a read-modify-write race.
-// Returns { fresh:true } when the caller should proceed, or
-// { fresh:false, response } to replay a stored result.
-export async function claimIdempotencyKey(db, key, scope) {
-  const ref = db.collection('idempotency_records').doc(`${scope}__${createHash('sha256').update(String(key)).digest('hex').slice(0, 40)}`);
-  try {
-    await db.runTransaction(async (t) => {
-      const snap = await t.get(ref);
-      if (snap.exists) {
-        const e = new Error('IDEMPOTENT_REPLAY');
-        e.stored = snap.data()?.response ?? null;
-        throw e;
-      }
-      t.create(ref, { scope, createdAt: FieldValue.serverTimestamp(), response: null });
-    });
-    return { fresh: true, ref };
-  } catch (e) {
-    if (e.message === 'IDEMPOTENT_REPLAY') return { fresh: false, response: e.stored };
-    throw e;
-  }
+// ── Idempotency (review remediation RB-02 / RB-09) ──────────────────
+// The first version claimed the key in its own transaction, then ran the
+// mutation, then wrote the response in a third step. Three problems:
+//   • a mutation could commit with no record, or a record could exist with
+//     no mutation (RB-02);
+//   • a concurrent retry arriving between claim and response-write saw
+//     response:null and returned an empty body (RB-09);
+//   • a failed mutation left the key claimed forever.
+//
+// These helpers are transaction-native instead. The caller reads the record
+// and writes it INSIDE the same transaction as the mutation, so the record
+// and the effect it describes commit or fail together. A rolled-back
+// transaction leaves no record, and a retry always finds a complete
+// response because the response is written in the same commit.
+//
+// The fingerprint is a hash of the semantically significant request fields.
+// Same key + same fingerprint replays; same key + different fingerprint is
+// a client bug and returns 409 rather than silently applying either one.
+const IDEMPOTENCY_TTL_MS = 90 * 24 * 60 * 60 * 1000;   // 90 days
+
+export function idempotencyRef(db, key, scope) {
+  const id = `${scope}__${createHash('sha256').update(String(key)).digest('hex').slice(0, 40)}`;
+  return db.collection('idempotency_records').doc(id);
 }
 
-export async function storeIdempotentResponse(ref, response) {
-  try { await ref.update({ response, completedAt: FieldValue.serverTimestamp() }); }
-  catch (e) { console.warn('[idempotency] store failed:', e.message); }
+// Stable hash of the request fields that define "the same request".
+// Key order is normalised so callers do not have to care.
+export function fingerprintOf(fields) {
+  const norm = JSON.stringify(fields, Object.keys(fields).sort());
+  return createHash('sha256').update(norm).digest('hex');
+}
+
+// Call inside a transaction, before performing any write.
+//   { state: 'fresh' }                      → proceed with the mutation
+//   { state: 'replay', response }           → return the stored response
+//   { state: 'conflict' }                   → same key, different request
+export async function readIdempotencyInTx(t, ref, fingerprint) {
+  const snap = await t.get(ref);
+  if (!snap.exists) return { state: 'fresh' };
+  const d = snap.data();
+  if (d.fingerprint && fingerprint && d.fingerprint !== fingerprint) return { state: 'conflict' };
+  // A record only ever exists together with its response, because both are
+  // written in the same commit — so this can never be an empty replay.
+  return { state: 'replay', response: d.response ?? null };
+}
+
+// Call inside the same transaction as the mutation.
+// expiresAt is what a Firestore TTL policy on this collection will act on.
+export function writeIdempotencyInTx(t, ref, { scope, fingerprint, response, nowMs = Date.now() }) {
+  t.create(ref, {
+    scope,
+    fingerprint,
+    response,
+    createdAt: Timestamp.fromMillis(nowMs),
+    expiresAt: Timestamp.fromMillis(nowMs + IDEMPOTENCY_TTL_MS),
+  });
 }
 
 // Convert a Firestore Admin SDK document data object to a JSON-safe plain object.

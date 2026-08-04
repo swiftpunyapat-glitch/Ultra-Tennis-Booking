@@ -41,7 +41,7 @@ import crypto from 'node:crypto';
 import {
   getAdminDb, getAdminBucket, writeAuditLog, getAdminAuth,
   verifyGuestToken, checkRateLimit, RATE_LIMITS, clientIp,
-  claimIdempotencyKey, storeIdempotentResponse,
+  idempotencyRef, fingerprintOf, readIdempotencyInTx, writeIdempotencyInTx,
 } from './_lib/firebase-admin.js';
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -230,14 +230,20 @@ async function handleSubmitBookingSlip(req, res, body, db) {
     return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
-  // GT-02: guest mutations must be idempotent so a retry cannot double-submit.
-  let claim;
-  try { claim = await claimIdempotencyKey(db, idemKey, 'submit_slip'); }
-  catch (e) { console.error('[submit_slip] idempotency:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
-  if (!claim.fresh) return res.status(200).json(claim.response ?? { ok: true, replayed: true });
+  // RB-02/RB-09: the idempotency record lives in the same transaction as the
+  // state change, so a rolled-back submission leaves no record and a replay
+  // always finds a complete response.
+  const idemRef = idempotencyRef(db, idemKey, 'submit_slip');
+  const idemFp  = fingerprintOf({ bookingId, slipUrl, actor: auth.actor });
+  const response = { ok: true, paymentStatus: 'pending_review', bookingStatus: booking.bookingStatus };
+  let replayed = null;
 
   try {
     await db.runTransaction(async (t) => {
+      const idem = await readIdempotencyInTx(t, idemRef, idemFp);
+      if (idem.state === 'conflict') throw new Error('IDEMPOTENCY_CONFLICT');
+      if (idem.state === 'replay')  { replayed = idem.response; return; }
+
       const snap = await t.get(bookingRef);
       if (!snap.exists) throw new Error('GONE');
       const b = snap.data();
@@ -254,8 +260,13 @@ async function handleSubmitBookingSlip(req, res, body, db) {
         slipSubmittedVia: 'server',
         updatedAt:      FieldValue.serverTimestamp(),
       });
+
+      writeIdempotencyInTx(t, idemRef, { scope: 'submit_slip', fingerprint: idemFp, response });
     });
   } catch (e) {
+    if (e.message === 'IDEMPOTENCY_CONFLICT') {
+      return res.status(409).json({ ok: false, code: 'IDEMPOTENCY_CONFLICT', error: 'idempotencyKey ถูกใช้กับคำขออื่นแล้ว' });
+    }
     const map = {
       GONE:            [404, 'Booking not found'],
       ALREADY_SETTLED: [409, 'การจองนี้ชำระเงินแล้ว'],
@@ -267,6 +278,8 @@ async function handleSubmitBookingSlip(req, res, body, db) {
     return res.status(code).json({ ok: false, error: msg });
   }
 
+  if (replayed) return res.status(200).json({ ...replayed, replayed: true });
+
   await writeAuditLog(db, {
     actor: auth.actor, actorRole: auth.actorRole,
     branchId: booking.branchId ?? null,
@@ -276,8 +289,6 @@ async function handleSubmitBookingSlip(req, res, body, db) {
     note: bookingCode,
   });
 
-  const response = { ok: true, paymentStatus: 'pending_review', bookingStatus: booking.bookingStatus };
-  await storeIdempotentResponse(claim.ref, response);
   return res.status(200).json(response);
 }
 
@@ -312,13 +323,17 @@ async function handleSubmitPassSlip(req, res, body, db) {
 
   if (purchase.lineUserId !== uid) return res.status(403).json({ ok: false, error: 'ไม่ใช่รายการของบัญชีนี้' });
 
-  let claim;
-  try { claim = await claimIdempotencyKey(db, idemKey, 'submit_pass_slip'); }
-  catch (e) { console.error('[submit_pass_slip] idempotency:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
-  if (!claim.fresh) return res.status(200).json(claim.response ?? { ok: true, replayed: true });
+  const idemRef  = idempotencyRef(db, idemKey, 'submit_pass_slip');
+  const idemFp   = fingerprintOf({ purchaseId, slipUrl, actor: uid });
+  const response = { ok: true, paymentStatus: 'pending_review' };
+  let replayed   = null;
 
   try {
     await db.runTransaction(async (t) => {
+      const idem = await readIdempotencyInTx(t, idemRef, idemFp);
+      if (idem.state === 'conflict') throw new Error('IDEMPOTENCY_CONFLICT');
+      if (idem.state === 'replay')  { replayed = idem.response; return; }
+
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('GONE');
       const p = snap.data();
@@ -330,8 +345,13 @@ async function handleSubmitPassSlip(req, res, body, db) {
         slipSubmittedVia: 'server',
         updatedAt: FieldValue.serverTimestamp(),
       });
+
+      writeIdempotencyInTx(t, idemRef, { scope: 'submit_pass_slip', fingerprint: idemFp, response });
     });
   } catch (e) {
+    if (e.message === 'IDEMPOTENCY_CONFLICT') {
+      return res.status(409).json({ ok: false, code: 'IDEMPOTENCY_CONFLICT', error: 'idempotencyKey ถูกใช้กับคำขออื่นแล้ว' });
+    }
     const map = {
       GONE:            [404, 'Purchase not found'],
       ALREADY_SETTLED: [409, 'รายการนี้ดำเนินการแล้ว'],
@@ -342,6 +362,8 @@ async function handleSubmitPassSlip(req, res, body, db) {
     return res.status(code).json({ ok: false, error: msg });
   }
 
+  if (replayed) return res.status(200).json({ ...replayed, replayed: true });
+
   await writeAuditLog(db, {
     actor: uid, actorRole: 'customer', branchId: null,
     action: 'pass_slip_submitted', targetId: purchaseId,
@@ -349,8 +371,6 @@ async function handleSubmitPassSlip(req, res, body, db) {
     note: purchase.purchaseCode ?? null,
   });
 
-  const response = { ok: true, paymentStatus: 'pending_review' };
-  await storeIdempotentResponse(claim.ref, response);
   return res.status(200).json(response);
 }
 

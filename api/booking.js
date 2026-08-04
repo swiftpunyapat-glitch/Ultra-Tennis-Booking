@@ -16,6 +16,7 @@ import {
   getAdminDb, getAdminAuth, writeAuditLog,
   issueGuestToken, verifyGuestToken, revokeGuestAccess,
   checkRateLimit, RATE_LIMITS, clientIp,
+  idempotencyRef, fingerprintOf, readIdempotencyInTx, writeIdempotencyInTx,
 } from './_lib/firebase-admin.js';
 import { computeQuote } from './_lib/pricing.js';
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
@@ -1085,12 +1086,16 @@ async function handleCreatePassBooking(res, body) {
   const customerNote    = typeof body.customerNote === 'string' ? body.customerNote.slice(0, 500) : '';
   const lineDisplayName = typeof body.lineDisplayName === 'string' ? body.lineDisplayName : '';
   const idToken         = typeof body.idToken === 'string' ? body.idToken.trim() : '';
+  const idemKey         = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : '';
   const durationMinutes = parseDurationMinutes(body);
 
   if (!DATE_RE.test(date))      return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'date must be YYYY-MM-DD' });
   if (!TIME_RE.test(startTime)) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'startTime must be HH:mm' });
   if (!PASS_PAY_TYPES.includes(payType)) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Unknown payType' });
   if (!packageId)     return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'packageId is required' });
+  // RB-02: mandatory. A pass booking spends real balance; a retry without a
+  // key would book twice and deduct twice.
+  if (!idemKey)       return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey is required' });
   if (!customerName)  return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerName is required' });
   if (!customerPhone) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerPhone is required' });
 
@@ -1142,9 +1147,23 @@ async function handleCreatePassBooking(res, body) {
   const availRefs  = touchedHours.map(H => db.collection('available_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:00`)));
   const pkgRef     = db.collection('customer_packages').doc(packageId);
 
+  // RB-02: the idempotency record is read and written INSIDE the booking
+  // transaction, so the record and the booking commit or roll back together.
+  // The fingerprint covers everything that defines "the same request" —
+  // reusing a key for a different booking is a client bug, not a replay.
+  const idemRef  = idempotencyRef(db, idemKey, 'create_pass_booking');
+  const idemFp   = fingerprintOf({ uid, payType, packageId, date, startTime, durationMinutes });
+  const ledgerRef = db.collection('customer_package_logs').doc();
+
   let pkgSnapshot = null;
+  let replayed    = null;
   try {
     await db.runTransaction(async (t) => {
+      // Read the record first: on replay nothing else needs reading.
+      const idem = await readIdempotencyInTx(t, idemRef, idemFp);
+      if (idem.state === 'conflict') throw new Error('IDEMPOTENCY_CONFLICT');
+      if (idem.state === 'replay')  { replayed = idem.response; return; }
+
       const snaps     = await Promise.all([...cellRefs.map(r => t.get(r)), ...availRefs.map(r => t.get(r)), t.get(pkgRef)]);
       const cellSnaps = snaps.slice(0, cellRefs.length);
       const availSnaps= snaps.slice(cellRefs.length, cellRefs.length + availRefs.length);
@@ -1221,9 +1240,53 @@ async function handleCreatePassBooking(res, body) {
         lastUsedBooking: bookingCode,
         updatedAt: FieldValue.serverTimestamp(),
       });
+
+      // Package movement entry, in the same commit as the deduction.
+      // NOTE: this writes customer_package_logs, the collection the admin
+      // adjustment flow already uses. It is deliberately NOT the V2
+      // pass_ledger — Addendum 03 sec 3 forbids creating that during the
+      // hotfix, and the review's "package ledger entry" requirement is
+      // satisfied by recording the movement atomically here.
+      const beforeMin = Number(pkg.remainingMinutes);
+      const afterMin  = pkgUpdate.remainingMinutes;
+      if (Number.isFinite(beforeMin) && Number.isFinite(afterMin)) {
+        t.create(ledgerRef, {
+          packageId, lineUserId: uid,
+          packageType: pkg.packageType,
+          packageName: pkg.packageName || pkg.packageType,
+          action: 'deduct_minutes',
+          oldRemainingMinutes: beforeMin,
+          newRemainingMinutes: afterMin,
+          deltaMinutes: afterMin - beforeMin,
+          reason: `booking ${bookingCode}`,
+          bookingId: bookingRef.id,
+          source: 'create_pass_booking',
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      }
+
+      // Response snapshot written in the same commit — a retry can never
+      // observe a record without one (RB-09).
+      writeIdempotencyInTx(t, idemRef, {
+        scope: 'create_pass_booking',
+        fingerprint: idemFp,
+        response: buildPassBookingResponse({
+          bookingId: bookingRef.id, bookingCode, date, startTime, endTime,
+          slotIds: segRefs.map(r => r.id), durationMinutes,
+          packageId, packageName: pkg.packageName || pkg.packageType,
+          uid, customerName, customerPhone, customerNote,
+        }),
+        nowMs,
+      });
     });
   } catch (e) {
     const msg = e.message || '';
+    if (msg === 'IDEMPOTENCY_CONFLICT') {
+      return res.status(409).json({
+        ok: false, code: 'IDEMPOTENCY_CONFLICT',
+        error: 'idempotencyKey ถูกใช้กับคำขออื่นแล้ว',
+      });
+    }
     if (msg.startsWith('SLOT_')) {
       const m = { SLOT_NOT_OPEN: 'ช่องเวลานี้ปิดรับจองแล้ว', SLOT_TAKEN: 'ช่องเวลานี้เพิ่งถูกจอง', SLOT_HELD: 'ช่องเวลานี้ถูกจองค้างอยู่ ลองใหม่อีกครั้ง' };
       return res.status(409).json({ ok: false, code: 'SLOT', error: m[msg] || 'ช่องเวลาไม่ว่าง' });
@@ -1235,6 +1298,10 @@ async function handleCreatePassBooking(res, body) {
     return res.status(500).json({ ok: false, error: 'Failed to create booking' });
   }
 
+  // Replay: return the snapshot stored alongside the original mutation.
+  // It is always populated, because it was written in the same commit.
+  if (replayed) return res.status(200).json({ ...replayed, replayed: true });
+
   // RB-07: no uid, no packageId, no phone, no name. bookingCode is enough to
   // correlate with the audit log, which is access-controlled.
   console.log(`[create_pass_booking] ${bookingCode} ${payType} ${durationMinutes}min`);
@@ -1245,20 +1312,34 @@ async function handleCreatePassBooking(res, body) {
     note: `${date} ${startTime}-${endTime}`,
   });
 
-  return res.status(200).json({
+  return res.status(200).json(buildPassBookingResponse({
+    bookingId: bookingRef.id, bookingCode, date, startTime, endTime,
+    slotIds: segRefs.map(r => r.id), durationMinutes,
+    packageId, packageName: pkgSnapshot?.packageName ?? null,
+    uid, customerName, customerPhone, customerNote,
+  }));
+}
+
+// Single definition of the success payload so the live response and the
+// stored idempotency snapshot can never drift apart.
+function buildPassBookingResponse({
+  bookingId, bookingCode, date, startTime, endTime, slotIds, durationMinutes,
+  packageId, packageName, uid, customerName, customerPhone, customerNote,
+}) {
+  return {
     ok: true,
     booking: {
-      id: bookingRef.id, bookingCode, date, startTime, endTime,
-      bookingSlotIds: segRefs.map(r => r.id),
+      id: bookingId, bookingCode, date, startTime, endTime,
+      bookingSlotIds: slotIds,
       durationMinutes, durationHours: durationMinutes / 60,
-      bookingType: pkgSnapshot?.packageName || 'Package Booking',
+      bookingType: packageName || 'Package Booking',
       price: 0, finalPrice: 0, originalPrice: 0,
       pricingType: 'package',
       bookingStatus: 'confirmed', paymentStatus: 'package',
-      packageId, packageName: pkgSnapshot?.packageName ?? null,
+      packageId, packageName: packageName ?? null,
       lineUserId: uid, customerName, customerPhone, customerNote,
     },
-  });
+  };
 }
 
 // ════════════════════════════════════════════════════════════════════
