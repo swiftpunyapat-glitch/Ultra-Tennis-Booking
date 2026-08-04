@@ -12,7 +12,11 @@
 // are NOT handled here — they stay on the legacy client path.
 // ════════════════════════════════════════════════════════════════════
 
-import { getAdminDb, getAdminAuth, writeAuditLog } from './_lib/firebase-admin.js';
+import {
+  getAdminDb, getAdminAuth, writeAuditLog,
+  issueGuestToken, verifyGuestToken, revokeGuestTokensForBooking,
+  checkRateLimit, RATE_LIMITS, clientIp,
+} from './_lib/firebase-admin.js';
 import { computeQuote } from './_lib/pricing.js';
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
@@ -215,10 +219,122 @@ function mapVoucherReason(r) {
   })[r] || 'โค้ดส่วนลดไม่ถูกต้อง';
 }
 
+// ════════════════════════════════════════════════════════════════════
+// booking_slots sanitation contract — Security Hotfix 2026-08-04 (SL-02)
+// ════════════════════════════════════════════════════════════════════
+// booking_slots stays PUBLICLY READABLE after the rules cutover because the
+// availability grid is unauthenticated by product design. Firestore rules
+// cannot filter fields — `allow read` is all-or-nothing per document — so
+// the ONLY control over what leaks is what we write. Every server write to
+// booking_slots must go through writeSlotDoc().
+//
+// Owner decision SL-02: coachId must NOT appear in the public slot contract,
+// and no PII of any kind may be written here.
+//
+// bookingId / bookingCode: retained. Existing ownership checks across the
+// codebase compare slot.bookingId / slot.bookingCode when releasing or
+// confirming a slot (see handleCancelPending below, admin approve_slip and
+// refund). Dropping them would silently break slot release. They are already
+// public on every legacy document, so this is the residual risk the owner
+// accepted — NOT a new exposure. Flagged for the V2 slot redesign.
+const SLOT_FIELD_ALLOWLIST = new Set([
+  'date', 'hour', 'resourceId', 'slotSpanMinutes', 'branchId',
+  'bookingStatus', 'paymentStatus', 'expiresAt',
+  'bookingId', 'bookingCode',
+]);
+
+// Strips anything outside the allowlist. Returns a clean object to write.
+// Callers should use this instead of building slot payloads inline.
+function slotDocPayload(fields) {
+  const out = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (SLOT_FIELD_ALLOWLIST.has(k) && v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
+// Transaction-aware slot writer. `t` may be a transaction or a batch.
+function writeSlotDoc(t, ref, fields) {
+  return t.set(ref, slotDocPayload(fields));
+}
+
+// Booking fields a guest is allowed to see. Everything else — including
+// lineUserId, pass/credit/voucher state and internal pricing metadata —
+// is withheld (Addendum 02 §3.2).
+function guestBookingProjection(id, b) {
+  return {
+    id,
+    bookingCode:   b.bookingCode ?? null,
+    date:          b.date ?? null,
+    startTime:     b.startTime ?? null,
+    endTime:       b.endTime ?? null,
+    durationMinutes: b.durationMinutes ?? null,
+    bookingType:   b.bookingType ?? null,
+    bookingStatus: b.bookingStatus ?? null,
+    paymentStatus: b.paymentStatus ?? null,
+    price:         Number(b.price) || 0,
+    qrType:        b.qrType ?? null,
+    qrAmount:      Number(b.qrAmount) || 0,
+    customerName:  b.customerName ?? null,   // their own name, on their own booking
+    paymentExpiresAt: b.paymentExpiresAt?.toDate?.()?.toISOString?.() ?? null,
+    slipUploadedAt:   b.slipUploadedAt?.toDate?.()?.toISOString?.() ?? null,
+    hasSlip:       !!b.slipUrl,              // boolean only — never the URL (SEC-06)
+  };
+}
+
+// guest_booking — a guest reads THEIR OWN booking using the capability
+// token handed back when the booking was created. Replaces the direct
+// Firestore read that the hardened rules deny.
+async function handleGuestBooking(req, res, body) {
+  const token = typeof body.guestToken === 'string' ? body.guestToken.trim() : '';
+  const ip    = clientIp(req);
+
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[guest_booking] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+
+  if (!token) return res.status(400).json({ ok: false, code: 'TOKEN', error: 'Missing token' });
+
+  // Read limiter first, keyed on token+IP (GT-02: 30 / 15 min).
+  const readGate = await checkRateLimit(db, {
+    bucket: 'guestRead', key: `${token}|${ip}`, ...RATE_LIMITS.guestRead,
+  });
+  if (!readGate.allowed) {
+    res.setHeader('Retry-After', String(readGate.retryAfterSec));
+    return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many requests' });
+  }
+
+  const v = await verifyGuestToken(db, token);
+  if (!v.ok) {
+    // Invalid attempts are counted separately and trigger the 60-minute
+    // lockout (GT-02). Keyed on IP so guessing is throttled per source.
+    const bad = await checkRateLimit(db, {
+      bucket: 'guestInvalid', key: `${ip}`, ...RATE_LIMITS.guestInvalid,
+    });
+    if (!bad.allowed) {
+      res.setHeader('Retry-After', String(bad.retryAfterSec));
+      return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many attempts' });
+    }
+    return res.status(401).json({ ok: false, code: 'TOKEN', error: 'ลิงก์ไม่ถูกต้องหรือหมดอายุ' });
+  }
+
+  try {
+    const snap = await db.collection('bookings').doc(v.bookingId).get();
+    if (!snap.exists) return res.status(404).json({ ok: false, error: 'Booking not found' });
+    return res.status(200).json({ ok: true, booking: guestBookingProjection(snap.id, snap.data()) });
+  } catch (e) {
+    console.error('[guest_booking] read:', e.message);
+    return res.status(500).json({ ok: false, error: 'Server error' });
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' });
   const body = parseBody(req);
   if (!body) return res.status(400).json({ ok: false, error: 'Invalid request body' });
+
+  // Guest capability token (Security Hotfix 2026-08-04)
+  if (body.action === 'guest_booking') return handleGuestBooking(req, res, body);
 
   if (body.action === 'price_quote')   return handlePriceQuote(res, body);
   if (body.action === 'create')        return handleCreate(res, body);
@@ -551,8 +667,10 @@ async function handleCreate(res, body) {
         createdVia: 'server',
         createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
       });
+      // Routed through writeSlotDoc so the public slot contract (SL-02) is
+      // enforced in one place rather than at each call site.
       segs.forEach((x, i) => {
-        t.set(segRefs[i], {
+        writeSlotDoc(t, segRefs[i], {
           bookingCode, bookingId: bookingRef.id, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
           date, hour: x.start, slotSpanMinutes: x.span,
           bookingStatus: 'pending_payment', paymentStatus: 'unpaid',
@@ -574,9 +692,31 @@ async function handleCreate(res, body) {
   }
 
   console.log(`[create] ${bookingCode} ${quote.pricingType} ${durationMinutes}min ฿${finalPrice}${quote.voucherApplied ? ' voucher=' + voucherCode : ''}`);
+
+  // ── Guest capability token (Security Hotfix 2026-08-04) ─────────────
+  // Guests have no Firebase Auth, so once the hardened rules land they can
+  // no longer read their own booking from Firestore. Hand them a scoped
+  // token here — this is the ONLY time the raw value exists. Never logged.
+  // Non-fatal: the booking already succeeded, so a token failure must not
+  // turn into a booking failure.
+  let guestAccess = null;
+  if (lineUserId === 'guest') {
+    try {
+      const endMs = Date.parse(`${date}T${endTime}:00+07:00`);
+      guestAccess = await issueGuestToken(db, {
+        bookingId: bookingRef.id,
+        bookingEndMs: Number.isFinite(endMs) ? endMs : null,
+        issuedFor: 'guest_booking',
+      });
+    } catch (e) {
+      console.error('[create] guest token issue failed (non-fatal):', e.message);
+    }
+  }
+
   return res.status(200).json({
     ok: true,
     paymentExpiresAt: paymentExpiresAt.toDate().toISOString(),
+    ...(guestAccess ? { guestAccessToken: guestAccess.token, guestAccessExpiresAt: guestAccess.expiresAt } : {}),
     booking: {
       id: bookingRef.id, bookingCode, date, startTime, endTime,
       bookingSlotIds: segRefs.map(r => r.id),
@@ -631,7 +771,30 @@ async function handleCancelPending(res, body) {
       else return res.status(403).json({ ok: false, error: 'บัญชีไม่ตรงกับการจอง' });
     } catch { /* token invalid/expired → fall back to stated lineUserId */ }
   }
-  if (!owner && lineUserId && lineUserId === booking.lineUserId) owner = true;
+  // ── Guest cancellation via capability token (Hotfix 2026-08-04) ─────
+  // Rate-limited as a mutation (GT-02: 5 / 15 min per token+IP).
+  const guestToken = typeof body.guestToken === 'string' ? body.guestToken.trim() : '';
+  if (!owner && guestToken) {
+    const gate = await checkRateLimit(db, {
+      bucket: 'guestMutation', key: `${guestToken}|${clientIp(req)}`, ...RATE_LIMITS.guestMutation,
+    });
+    if (!gate.allowed) {
+      res.setHeader('Retry-After', String(gate.retryAfterSec));
+      return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many requests' });
+    }
+    const v = await verifyGuestToken(db, guestToken);
+    if (v.ok && v.bookingId === bookingId) owner = true;
+  }
+
+  // SECURITY (Hotfix 2026-08-04): the previous fallback accepted a
+  // client-stated lineUserId whenever it equalled booking.lineUserId. For a
+  // guest booking that value is the literal string "guest", so ANY caller
+  // could cancel ANY guest booking — and both bookingId and bookingCode are
+  // readable from the publicly-readable booking_slots collection. The
+  // fallback is now restricted to real LINE identities; guests must present
+  // their capability token instead.
+  if (!owner && lineUserId && lineUserId !== 'guest' && lineUserId === booking.lineUserId) owner = true;
+
   if (!owner) return res.status(403).json({ ok: false, error: 'ยกเลิกไม่ได้ (ยืนยันตัวตนไม่ผ่าน)' });
 
   // ── Preconditions (customer may only cancel an unpaid, not-yet-expired hold) ──
@@ -704,6 +867,11 @@ async function handleCancelPending(res, body) {
     console.error('[cancel_pending] tx:', e.message);
     return res.status(500).json({ ok: false, error: 'ยกเลิกไม่สำเร็จ กรุณาลองใหม่' });
   }
+
+  // GT-01: a cancelled booking must not remain reachable by its guest token.
+  // Non-fatal — the cancellation itself already committed.
+  await revokeGuestTokensForBooking(db, bookingId, 'booking_cancelled')
+    .catch(e => console.warn('[cancel_pending] token revoke:', e.message));
 
   await writeAuditLog(db, {
     actor: 'customer', actorRole: 'customer', branchId: booking.branchId || DEFAULT_BRANCH_ID,
@@ -1100,13 +1268,16 @@ async function handleCreateCoachLesson(res, body) {
         createdVia: 'server',
         createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
       });
-      t.set(slotRef, {
+      // SL-02: coachId is deliberately NOT written here. booking_slots stays
+      // publicly readable, and which coach teaches which hour is the coach's
+      // information, not availability data. The coach lock lives on
+      // coach_availability (written below), which is server-only.
+      writeSlotDoc(t, slotRef, {
         bookingCode, bookingId: bookingRef.id, resourceId: RESOURCE_ID,
         branchId: ca.branchId || DEFAULT_BRANCH_ID,
         date, hour: startTime,
         bookingStatus: bkStatus, paymentStatus: payStatus,
         expiresAt: holdExp,
-        coachId,
       });
       t.set(coachAvailRef, {
         coachId, branchId: ca.branchId || DEFAULT_BRANCH_ID,
