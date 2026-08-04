@@ -165,20 +165,22 @@ async function serverSlipSubmitEnabled(db) {
 // Resolves the caller against a target booking. Returns
 // { ok, actor } or { ok:false, status, error }.
 async function authorizeSlipCaller(req, db, { bookingId, ownerLineUserId, idToken, guestToken }) {
+  // RB-11: an ID token that fails verification is a hard failure. It must
+  // not silently degrade into a weaker check.
   if (idToken) {
-    try {
-      const uid = (await getAdminAuth().verifyIdToken(idToken)).uid;
-      if (uid && uid === ownerLineUserId) return { ok: true, actor: uid };
-      return { ok: false, status: 403, error: 'บัญชีไม่ตรงกับการจอง' };
-    } catch { /* fall through to guest token */ }
+    let uid = null;
+    try { uid = (await getAdminAuth().verifyIdToken(idToken)).uid; }
+    catch { return { ok: false, status: 401, error: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่' }; }
+    if (uid && uid === ownerLineUserId) return { ok: true, actor: uid, actorRole: 'customer' };
+    return { ok: false, status: 403, error: 'บัญชีไม่ตรงกับการจอง' };
   }
   if (guestToken) {
     const gate = await checkRateLimit(db, {
       bucket: 'guestMutation', key: `${guestToken}|${clientIp(req)}`, ...RATE_LIMITS.guestMutation,
     });
     if (!gate.allowed) return { ok: false, status: 429, error: 'Too many requests', retryAfterSec: gate.retryAfterSec };
-    const v = await verifyGuestToken(db, guestToken);
-    if (v.ok && v.bookingId === bookingId) return { ok: true, actor: 'guest' };
+    const v = await verifyGuestToken(db, bookingId, guestToken, 'slip:submit');
+    if (v.ok) return { ok: true, actor: 'guest', actorRole: 'guest' };
   }
   return { ok: false, status: 403, error: 'ยืนยันตัวตนไม่ผ่าน' };
 }
@@ -266,7 +268,7 @@ async function handleSubmitBookingSlip(req, res, body, db) {
   }
 
   await writeAuditLog(db, {
-    actor: auth.actor, actorRole: auth.actor === 'guest' ? 'guest' : 'customer',
+    actor: auth.actor, actorRole: auth.actorRole,
     branchId: booking.branchId ?? null,
     action: 'slip_submitted', targetId: bookingId,
     before: { paymentStatus: booking.paymentStatus, bookingStatus: booking.bookingStatus },

@@ -108,7 +108,7 @@ beforeEach(async () => {
     await setDoc(doc(db, 'holidays/2026-08-12'), { date: '2026-08-12', isHoliday: true });
     await setDoc(doc(db, 'audit_logs/al_1'), { action: 'x', actor: 'y' });
     await setDoc(doc(db, 'vouchers/V1'), { code: 'V1', active: true });
-    await setDoc(doc(db, 'guest_access_tokens/deadbeef'), { bookingId: 'bk_G1', revokedAt: null });
+    await setDoc(doc(db, 'guest_booking_access/bk_G1'), { tokenHash: 'x'.repeat(64), scopes: ['booking:read'], revokedAt: null, tokenVersion: 1 });
   });
 });
 
@@ -257,8 +257,8 @@ describe('Guest isolation', () => {
     await assertSucceeds(getDoc(doc(anon(), 'system_settings/pricing')));
   });
   test('GT-13 capability tokens are not readable from the client', async () => {
-    await assertFails(getDoc(doc(anon(), 'guest_access_tokens/deadbeef')));
-    await assertFails(getDoc(doc(asA(), 'guest_access_tokens/deadbeef')));
+    await assertFails(getDoc(doc(anon(), 'guest_booking_access/bk_G1')));
+    await assertFails(getDoc(doc(asA(), 'guest_booking_access/bk_G1')));
   });
 });
 

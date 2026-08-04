@@ -58,7 +58,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 import { verifySession, requireRole, resolveBranchId, hasBranchAccess, coachSessionFromToken } from './_lib/admin-auth.js';
-import { getAdminDb, getAdminAuth, writeAuditLog } from './_lib/firebase-admin.js';
+import { getAdminDb, getAdminAuth, writeAuditLog, revokeGuestAccess } from './_lib/firebase-admin.js';
 import { FieldValue }          from 'firebase-admin/firestore';
 
 // ── Shared constants ──────────────────────────────────────────────
@@ -800,6 +800,13 @@ async function handleRefund({ res, adminName, session, db, booking, bookingRef, 
   }
 
   console.log(`[refund] OK — booking:${bookingId} amount:${refundAmount} status:${refundStatus} admin:${adminName}`);
+
+  // RB-05: a refunded booking must not stay reachable by its guest link.
+  // Non-fatal — the refund itself already committed and must not be undone
+  // because a revoke failed.
+  await revokeGuestAccess(db, bookingId, 'booking_refunded')
+    .catch(e => console.warn('[refund] guest access revoke:', e.message));
+
   await writeAuditLog(db, {
     actor: adminName, actorRole: session.role,
     branchId: resolveBranchId(booking),

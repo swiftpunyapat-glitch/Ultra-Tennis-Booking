@@ -8,7 +8,7 @@ import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { getStorage } from 'firebase-admin/storage';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 
 export function getAdminDb() {
   if (!getApps().length) {
@@ -127,7 +127,7 @@ export async function writeAuditLog(db, { actor, actorRole, branchId, action, ta
 //     instance is recycled constantly, so an in-process counter would reset
 //     and provide no protection at all.
 //
-// Storage: guest_access_tokens/{sha256(token)} — the raw token is NEVER
+// Storage: guest_booking_access/{bookingId} — the raw token is NEVER
 // persisted. It is returned to the caller exactly once, in the response of
 // the request that created it.
 //
@@ -143,6 +143,32 @@ export const GUEST_REVOKE_REASONS = [
   'booking_cancelled', 'booking_refunded', 'account_linked',
   'admin_revoked', 'reissued',
 ];
+
+// ── Store layout (review remediation RB-03 / RB-06) ─────────────────
+// One document per booking, keyed by bookingId:
+//
+//   guest_booking_access/{bookingId}
+//     tokenHash     sha256 of the current token, hex
+//     scopes        string[] — what the token may do
+//     issuedAt      Timestamp
+//     expiresAt     Timestamp
+//     revokedAt     Timestamp | null
+//     revokeReason  string | null
+//     tokenVersion  int, incremented on every issue
+//
+// The first design keyed documents by token hash and found the live token
+// with a two-equality-filter query. That needed a composite index (RB-06),
+// and reissue was a revoke followed by a separate create, which is not
+// atomic (RB-03). Keying by bookingId removes both problems: there is
+// exactly one document, lookup is a direct get, and reissue is a
+// single-document transaction whose commit invalidates the old token in the
+// same instant it publishes the new one.
+//
+// This is also why callers must now pass bookingId alongside the token:
+// the token alone no longer locates the document. The token is still what
+// proves the caller is entitled to it.
+export const GUEST_ACCESS_COLLECTION = 'guest_booking_access';
+export const GUEST_SCOPES = ['booking:read', 'booking:cancel', 'slip:submit'];
 
 // Opaque, unguessable, and not derived from any public value.
 export function generateGuestToken() {
@@ -161,74 +187,104 @@ export function guestTokenExpiryMs(bookingEndMs, nowMs = Date.now()) {
   return Math.min(bookingEndMs + GUEST_TTL_AFTER_END_MS, hardCap);
 }
 
-// Issue a token for ONE booking. Any previously live token for the same
-// booking is revoked with reason 'reissued' (GT-01).
-// Returns the RAW token — the caller must return it to the client and then
-// forget it. Never log it.
-export async function issueGuestToken(db, { bookingId, bookingEndMs = null, issuedFor = 'guest_booking' }) {
+// Issue (or reissue) the token for ONE booking, atomically.
+//
+// The whole operation is a single-document transaction, so at the moment it
+// commits the previous tokenHash is gone and the previous token stops
+// verifying. There is no window where both work, and no window where
+// neither does.
+//
+// Returns the RAW token. It exists only in this return value and in the
+// HTTP response the caller builds from it. Never log it, never store it.
+export async function issueGuestToken(db, { bookingId, bookingEndMs = null, scopes = GUEST_SCOPES }) {
   if (!bookingId) throw new Error('issueGuestToken: bookingId required');
-  await revokeGuestTokensForBooking(db, bookingId, 'reissued');
 
   const token   = generateGuestToken();
   const nowMs   = Date.now();
   const expires = guestTokenExpiryMs(bookingEndMs, nowMs);
+  const ref     = db.collection(GUEST_ACCESS_COLLECTION).doc(bookingId);
 
-  await db.collection('guest_access_tokens').doc(hashGuestToken(token)).set({
-    bookingId,
-    issuedFor,
-    issuedAt:  Timestamp.fromMillis(nowMs),
-    expiresAt: Timestamp.fromMillis(expires),
-    revokedAt: null,
-    revokeReason: null,
-    useCount:  0,
-    lastUsedAt: null,
+  const tokenVersion = await db.runTransaction(async (t) => {
+    const snap = await t.get(ref);
+    const prev = snap.exists ? (Number(snap.data().tokenVersion) || 0) : 0;
+    t.set(ref, {
+      tokenHash:    hashGuestToken(token),
+      scopes:       Array.isArray(scopes) ? scopes : GUEST_SCOPES,
+      issuedAt:     Timestamp.fromMillis(nowMs),
+      expiresAt:    Timestamp.fromMillis(expires),
+      revokedAt:    null,
+      revokeReason: null,
+      tokenVersion: prev + 1,
+    });
+    return prev + 1;
   });
 
-  return { token, expiresAt: new Date(expires).toISOString() };
+  return { token, expiresAt: new Date(expires).toISOString(), tokenVersion };
 }
 
-// Verify a token. Returns { ok:true, bookingId } or { ok:false, reason }.
-// `reason` is deliberately coarse so the caller cannot use it as an oracle.
-export async function verifyGuestToken(db, token) {
+// Verify a token against a specific booking.
+//
+// bookingId locates the document; the token proves entitlement. A token
+// issued for booking A therefore cannot be presented against booking B —
+// the document found under B holds a different hash.
+//
+// `reason` stays coarse so it cannot be used as an oracle.
+export async function verifyGuestToken(db, bookingId, token, requiredScope = null) {
+  if (!bookingId) return { ok: false, reason: 'invalid' };
   if (typeof token !== 'string' || token.length < 20) return { ok: false, reason: 'invalid' };
+
   let snap;
   try {
-    snap = await db.collection('guest_access_tokens').doc(hashGuestToken(token)).get();
+    snap = await db.collection(GUEST_ACCESS_COLLECTION).doc(bookingId).get();
   } catch (e) {
-    console.error('[guest-token] lookup failed:', e.message);
+    // Message only. The token and the booking id never reach the log.
+    console.error('[guest-access] lookup failed:', e.message);
     return { ok: false, reason: 'error' };
   }
   if (!snap.exists) return { ok: false, reason: 'invalid' };
 
   const d = snap.data();
-  if (d.revokedAt) return { ok: false, reason: 'revoked' };
+  if (d.revokedAt) return { ok: false, reason: 'invalid' };
+
   const exp = d.expiresAt?.toMillis?.() ?? 0;
-  if (!exp || exp < Date.now()) return { ok: false, reason: 'expired' };
+  if (!exp || exp < Date.now()) return { ok: false, reason: 'invalid' };
 
-  // Fire-and-forget usage counter — must never fail the request.
-  snap.ref.update({ useCount: FieldValue.increment(1), lastUsedAt: FieldValue.serverTimestamp() })
-    .catch(e => console.warn('[guest-token] usage counter:', e.message));
+  // Constant-time compare of two equal-length hex digests. Both sides are
+  // sha256 output, so the length check can only fail on a malformed stored
+  // document, never on caller input.
+  const presented = Buffer.from(hashGuestToken(token), 'utf8');
+  const stored    = Buffer.from(String(d.tokenHash || ''), 'utf8');
+  if (presented.length !== stored.length) return { ok: false, reason: 'invalid' };
+  if (!timingSafeEqual(presented, stored)) return { ok: false, reason: 'invalid' };
 
-  return { ok: true, bookingId: d.bookingId };
+  if (requiredScope && !(Array.isArray(d.scopes) && d.scopes.includes(requiredScope))) {
+    return { ok: false, reason: 'scope' };
+  }
+
+  return { ok: true, bookingId, scopes: d.scopes || [], tokenVersion: d.tokenVersion ?? null };
 }
 
-// Revoke every live token for a booking. Safe to call when none exist.
-export async function revokeGuestTokensForBooking(db, bookingId, reason) {
-  if (!bookingId) return 0;
+// Revoke access for a booking. Direct document update — no query, no index.
+// Safe to call when no access document exists.
+export async function revokeGuestAccess(db, bookingId, reason) {
+  if (!bookingId) return false;
   const why = GUEST_REVOKE_REASONS.includes(reason) ? reason : 'admin_revoked';
   try {
-    const q = await db.collection('guest_access_tokens')
-      .where('bookingId', '==', bookingId).where('revokedAt', '==', null).limit(50).get();
-    if (q.empty) return 0;
-    const batch = db.batch();
-    q.docs.forEach(doc => batch.update(doc.ref, {
-      revokedAt: FieldValue.serverTimestamp(), revokeReason: why,
-    }));
-    await batch.commit();
-    return q.size;
+    const ref = db.collection(GUEST_ACCESS_COLLECTION).doc(bookingId);
+    return await db.runTransaction(async (t) => {
+      const snap = await t.get(ref);
+      if (!snap.exists) return false;
+      if (snap.data().revokedAt) return false;      // already revoked
+      t.update(ref, {
+        tokenHash:    null,                          // the token stops verifying immediately
+        revokedAt:    FieldValue.serverTimestamp(),
+        revokeReason: why,
+      });
+      return true;
+    });
   } catch (e) {
-    console.error('[guest-token] revoke failed:', e.message);
-    return 0;
+    console.error('[guest-access] revoke failed:', e.message);
+    return false;
   }
 }
 

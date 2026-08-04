@@ -14,7 +14,7 @@
 
 import {
   getAdminDb, getAdminAuth, writeAuditLog,
-  issueGuestToken, verifyGuestToken, revokeGuestTokensForBooking,
+  issueGuestToken, verifyGuestToken, revokeGuestAccess,
   checkRateLimit, RATE_LIMITS, clientIp,
 } from './_lib/firebase-admin.js';
 import { computeQuote } from './_lib/pricing.js';
@@ -286,14 +286,17 @@ function guestBookingProjection(id, b) {
 // token handed back when the booking was created. Replaces the direct
 // Firestore read that the hardened rules deny.
 async function handleGuestBooking(req, res, body) {
-  const token = typeof body.guestToken === 'string' ? body.guestToken.trim() : '';
-  const ip    = clientIp(req);
+  // RB-03/RB-06: access documents are keyed by bookingId, so the caller
+  // supplies both. The token proves entitlement; the id only locates.
+  const bookingId = typeof body.bookingId === 'string' ? body.bookingId.trim() : '';
+  const token     = typeof body.guestToken === 'string' ? body.guestToken.trim() : '';
+  const ip        = clientIp(req);
 
   let db;
   try { db = getAdminDb(); }
   catch (e) { console.error('[guest_booking] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
 
-  if (!token) return res.status(400).json({ ok: false, code: 'TOKEN', error: 'Missing token' });
+  if (!bookingId || !token) return res.status(400).json({ ok: false, code: 'TOKEN', error: 'Missing credentials' });
 
   // Read limiter first, keyed on token+IP (GT-02: 30 / 15 min).
   const readGate = await checkRateLimit(db, {
@@ -304,7 +307,7 @@ async function handleGuestBooking(req, res, body) {
     return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many requests' });
   }
 
-  const v = await verifyGuestToken(db, token);
+  const v = await verifyGuestToken(db, bookingId, token, 'booking:read');
   if (!v.ok) {
     // Invalid attempts are counted separately and trigger the 60-minute
     // lockout (GT-02). Keyed on IP so guessing is throttled per source.
@@ -319,7 +322,7 @@ async function handleGuestBooking(req, res, body) {
   }
 
   try {
-    const snap = await db.collection('bookings').doc(v.bookingId).get();
+    const snap = await db.collection('bookings').doc(bookingId).get();
     if (!snap.exists) return res.status(404).json({ ok: false, error: 'Booking not found' });
     return res.status(200).json({ ok: true, booking: guestBookingProjection(snap.id, snap.data()) });
   } catch (e) {
@@ -351,7 +354,10 @@ export default async function handler(req, res) {
     }
     return handleCreatePassBooking(res, body);
   }
-  if (body.action === 'cancel_pending') return handleCancelPending(res, body);
+  // RB-01: handleCancelPending needs `req` for the rate limiter's client IP.
+  // The first version referenced `req` without it being in scope, which threw
+  // a ReferenceError on every guest cancellation.
+  if (body.action === 'cancel_pending') return handleCancelPending(req, res, body);
   if (body.action === 'features')      return handleFeatures(res);
   // Coach lesson booking (Stage 3) — customer-facing, feature-flagged OFF by
   // default via system_settings/features.enableCoachBookingCustomer.
@@ -761,11 +767,17 @@ async function handleCreate(res, body) {
 // Fixes the live "Insufficient Permission" bug: the client used to set
 // booking_slots.paymentStatus="cancelled", which is NOT in the rules enum.
 // Doing it server-side (Admin SDK bypasses rules) avoids widening the rules.
-// Ownership: bookingCode must match AND (verified Firebase uid == lineUserId,
-// or stated lineUserId == booking.lineUserId). Only pending_payment + unpaid +
-// not-expired bookings are cancellable by a customer. Does NOT touch the admin
-// reject/refund flow, and passes/events (confirmed/package) are excluded.
-async function handleCancelPending(res, body) {
+// Ownership (review remediation RB-11): a LINE customer must present a
+// Firebase ID token, verified server-side. A guest must present the
+// capability token for that booking. There is no longer any path that
+// accepts a client-stated identity — the previous fallback trusted
+// body.lineUserId whenever it equalled booking.lineUserId, and every input
+// it compared is readable from public data.
+//
+// Only pending_payment + unpaid + not-expired bookings are cancellable by a
+// customer. Does NOT touch the admin reject/refund flow, and passes/events
+// (confirmed/package) are excluded.
+async function handleCancelPending(req, res, body) {
   const bookingId   = typeof body.bookingId === 'string' ? body.bookingId.trim() : '';
   const bookingCode = typeof body.bookingCode === 'string' ? body.bookingCode.trim() : '';
   const lineUserId  = typeof body.lineUserId === 'string' ? body.lineUserId : '';
@@ -790,15 +802,22 @@ async function handleCancelPending(res, body) {
     return res.status(403).json({ ok: false, error: 'ยกเลิกไม่ได้ (ไม่ใช่การจองของคุณ)' });
   }
   let owner = false;
+
+  // Path 1 — LINE customer. Server-verified Firebase ID token only.
+  // An invalid or expired token is a hard failure; it no longer degrades
+  // into trusting whatever identity the client claimed (RB-11).
   if (idToken) {
-    try {
-      const decoded = await getAdminAuth().verifyIdToken(idToken);
-      if (decoded.uid === booking.lineUserId) owner = true;
-      else return res.status(403).json({ ok: false, error: 'บัญชีไม่ตรงกับการจอง' });
-    } catch { /* token invalid/expired → fall back to stated lineUserId */ }
+    let decoded = null;
+    try { decoded = await getAdminAuth().verifyIdToken(idToken); }
+    catch { return res.status(401).json({ ok: false, code: 'AUTH', error: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่' }); }
+    if (decoded.uid !== booking.lineUserId) {
+      return res.status(403).json({ ok: false, error: 'บัญชีไม่ตรงกับการจอง' });
+    }
+    owner = true;
   }
-  // ── Guest cancellation via capability token (Hotfix 2026-08-04) ─────
-  // Rate-limited as a mutation (GT-02: 5 / 15 min per token+IP).
+
+  // Path 2 — guest capability token, rate-limited as a mutation
+  // (GT-02: 5 / 15 min per token+IP).
   const guestToken = typeof body.guestToken === 'string' ? body.guestToken.trim() : '';
   if (!owner && guestToken) {
     const gate = await checkRateLimit(db, {
@@ -808,19 +827,12 @@ async function handleCancelPending(res, body) {
       res.setHeader('Retry-After', String(gate.retryAfterSec));
       return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many requests' });
     }
-    const v = await verifyGuestToken(db, guestToken);
-    if (v.ok && v.bookingId === bookingId) owner = true;
+    const v = await verifyGuestToken(db, bookingId, guestToken, 'booking:cancel');
+    if (v.ok) owner = true;
   }
 
-  // SECURITY (Hotfix 2026-08-04): the previous fallback accepted a
-  // client-stated lineUserId whenever it equalled booking.lineUserId. For a
-  // guest booking that value is the literal string "guest", so ANY caller
-  // could cancel ANY guest booking — and both bookingId and bookingCode are
-  // readable from the publicly-readable booking_slots collection. The
-  // fallback is now restricted to real LINE identities; guests must present
-  // their capability token instead.
-  if (!owner && lineUserId && lineUserId !== 'guest' && lineUserId === booking.lineUserId) owner = true;
-
+  // No third path. body.lineUserId is accepted as a request field for
+  // backward compatibility with older clients but carries no authority.
   if (!owner) return res.status(403).json({ ok: false, error: 'ยกเลิกไม่ได้ (ยืนยันตัวตนไม่ผ่าน)' });
 
   // ── Preconditions (customer may only cancel an unpaid, not-yet-expired hold) ──
@@ -896,8 +908,8 @@ async function handleCancelPending(res, body) {
 
   // GT-01: a cancelled booking must not remain reachable by its guest token.
   // Non-fatal — the cancellation itself already committed.
-  await revokeGuestTokensForBooking(db, bookingId, 'booking_cancelled')
-    .catch(e => console.warn('[cancel_pending] token revoke:', e.message));
+  await revokeGuestAccess(db, bookingId, 'booking_cancelled')
+    .catch(e => console.warn('[cancel_pending] access revoke:', e.message));
 
   await writeAuditLog(db, {
     actor: 'customer', actorRole: 'customer', branchId: booking.branchId || DEFAULT_BRANCH_ID,
@@ -1223,7 +1235,9 @@ async function handleCreatePassBooking(res, body) {
     return res.status(500).json({ ok: false, error: 'Failed to create booking' });
   }
 
-  console.log(`[create_pass_booking] ${bookingCode} ${payType} pkg:${packageId} ${durationMinutes}min uid:${uid}`);
+  // RB-07: no uid, no packageId, no phone, no name. bookingCode is enough to
+  // correlate with the audit log, which is access-controlled.
+  console.log(`[create_pass_booking] ${bookingCode} ${payType} ${durationMinutes}min`);
   await writeAuditLog(db, {
     actor: uid, actorRole: 'customer', branchId: DEFAULT_BRANCH_ID,
     action: 'pass_booking_created', targetId: bookingRef.id,
