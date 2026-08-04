@@ -76,10 +76,16 @@ beforeEach(async () => {
       customerName: 'B', customerPhone: '0810000002',
       remainingMinutes: 60, totalMinutes: 600, status: 'active',
     });
+    // Post-hotfix shape: availability data only, no owner (RB-10).
     await setDoc(doc(db, 'booking_slots/room1_2026-08-10_1400'), {
-      bookingCode: 'UTAAA01', bookingId: 'bk_A1', resourceId: 'room1', branchId: 'ladprao1',
+      resourceId: 'room1', branchId: 'ladprao1',
       date: '2026-08-10', hour: '14:00', slotSpanMinutes: 60,
       bookingStatus: 'confirmed', paymentStatus: 'paid',
+    });
+    // The owner linkage now lives here, server-side only.
+    await setDoc(doc(db, 'booking_slot_claims/room1_2026-08-10_1400'), {
+      bookingId: 'bk_A1', bookingCode: 'UTAAA01',
+      date: '2026-08-10', hour: '14:00', slotSpanMinutes: 60,
     });
     // Legacy slot: no slotSpanMinutes — must still be readable.
     await setDoc(doc(db, 'booking_slots/room1_2026-08-10_1500'), {
@@ -291,6 +297,44 @@ describe('registered_users identity binding', () => {
 });
 
 // ── Server-only collections and forged claims ───────────────────────
+// ── Private slot claims (RB-10) ─────────────────────────────────────
+// The identifiers that used to sit on the public slot document now live in
+// booking_slot_claims. That only helps if the collection really is
+// server-only, so every actor is checked, not just anonymous.
+describe('booking_slot_claims is server-only', () => {
+  test('anonymous cannot read a claim', async () => {
+    await assertFails(getDoc(doc(anon(), 'booking_slot_claims/room1_2026-08-10_1400')));
+  });
+  test('an authenticated customer cannot read a claim', async () => {
+    await assertFails(getDoc(doc(asA(), 'booking_slot_claims/room1_2026-08-10_1400')));
+  });
+  test('the owning customer still cannot read their own claim', async () => {
+    // bk_A1 belongs to UID_A, and the claim points at it — ownership of the
+    // booking must not grant access to the slot linkage.
+    await assertFails(getDoc(doc(asA(), 'booking_slot_claims/room1_2026-08-10_1400')));
+  });
+  test('a forged admin claim cannot read a claim', async () => {
+    await assertFails(getDoc(doc(fake(), 'booking_slot_claims/room1_2026-08-10_1400')));
+  });
+  test('nobody can list claims', async () => {
+    await assertFails(getDocs(collection(anon(), 'booking_slot_claims')));
+    await assertFails(getDocs(collection(asA(), 'booking_slot_claims')));
+  });
+  test('nobody can create a claim', async () => {
+    await assertFails(setDoc(doc(asA(), 'booking_slot_claims/room1_2026-08-11_0900'), {
+      bookingId: 'bk_A1', bookingCode: 'UTAAA01', date: '2026-08-11', hour: '09:00',
+    }));
+    await assertFails(setDoc(doc(anon(), 'booking_slot_claims/room1_2026-08-11_1000'), {
+      bookingId: 'x', bookingCode: 'y', date: '2026-08-11', hour: '10:00',
+    }));
+  });
+  test('nobody can update a claim to steal a slot', async () => {
+    await assertFails(updateDoc(doc(asB(), 'booking_slot_claims/room1_2026-08-10_1400'), {
+      bookingId: 'bk_B1',
+    }));
+  });
+});
+
 describe('Server-only collections', () => {
   test('AT-14 server-only collections are unreachable', async () => {
     await assertFails(getDoc(doc(asA(), 'audit_logs/al_1')));

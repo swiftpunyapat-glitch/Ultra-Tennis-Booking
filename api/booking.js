@@ -238,15 +238,33 @@ function mapVoucherReason(r) {
 // refund). Dropping them would silently break slot release. They are already
 // public on every legacy document, so this is the residual risk the owner
 // accepted — NOT a new exposure. Flagged for the V2 slot redesign.
+// Review remediation RB-10: bookingId and bookingCode are no longer written
+// to the public document. What remains is availability data and nothing
+// else — a reader learns that an hour is taken, never whose it is.
 const SLOT_FIELD_ALLOWLIST = new Set([
   'date', 'hour', 'resourceId', 'slotSpanMinutes', 'branchId',
   'bookingStatus', 'paymentStatus', 'expiresAt',
-  'bookingId', 'bookingCode',
 ]);
 
-// Strips anything outside the allowlist. Returns a clean object to write.
-// Callers should use this instead of building slot payloads inline.
-function slotDocPayload(fields) {
+// Fields that must never reach the public collection under any circumstance.
+// Asserted rather than silently dropped, so a future call site that tries
+// fails loudly in tests instead of leaking quietly in production.
+const SLOT_FORBIDDEN_FIELDS = [
+  'bookingId', 'bookingCode', 'coachId',
+  'customerName', 'customerPhone', 'customerPhoneNormalized',
+  'lineUserId', 'lineDisplayName', 'customerNote', 'slipUrl',
+  'price', 'amount', 'createdBy', 'paidBy',
+];
+
+// Strips anything outside the allowlist, and throws if a caller passed a
+// field that must never be public. Dropping those silently would let a bad
+// call site look correct while leaking; throwing makes it fail in tests.
+export function slotDocPayload(fields) {
+  for (const banned of SLOT_FORBIDDEN_FIELDS) {
+    if (banned in fields) {
+      throw new Error(`SLOT_CONTRACT_VIOLATION: "${banned}" must not be written to booking_slots`);
+    }
+  }
   const out = {};
   for (const [k, v] of Object.entries(fields)) {
     if (SLOT_FIELD_ALLOWLIST.has(k) && v !== undefined) out[k] = v;
@@ -254,9 +272,30 @@ function slotDocPayload(fields) {
   return out;
 }
 
-// Transaction-aware slot writer. `t` may be a transaction or a batch.
-function writeSlotDoc(t, ref, fields) {
-  return t.set(ref, slotDocPayload(fields));
+// The ownership linkage moved here. booking_slot_claims is server-only —
+// the rules deny it to every client — so the identifiers that used to sit
+// on the public slot document now live somewhere only the Admin SDK reads.
+//
+// Same deterministic id as the public slot, so a claim is always a direct
+// get: no query, no index.
+const SLOT_CLAIMS_COLLECTION = 'booking_slot_claims';
+export const slotClaimRef = (db, slotId) => db.collection(SLOT_CLAIMS_COLLECTION).doc(slotId);
+
+// Writes the public availability document and the private claim together.
+// `t` is a transaction — the pair must never be written separately, or a
+// slot could be occupied with nothing recording who occupied it.
+function writeSlotDoc(t, db, slotId, publicFields, claimFields) {
+  const publicRef = db.collection('booking_slots').doc(slotId);
+  t.set(publicRef, slotDocPayload(publicFields));
+  t.set(slotClaimRef(db, slotId), {
+    bookingId:   claimFields.bookingId,
+    bookingCode: claimFields.bookingCode,
+    ...(claimFields.coachId ? { coachId: claimFields.coachId } : {}),
+    date: publicFields.date, hour: publicFields.hour,
+    slotSpanMinutes: publicFields.slotSpanMinutes ?? 60,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  return publicRef;
 }
 
 // Booking fields a guest is allowed to see. Everything else — including
@@ -702,13 +741,14 @@ async function handleCreate(res, body) {
       });
       // Routed through writeSlotDoc so the public slot contract (SL-02) is
       // enforced in one place rather than at each call site.
+      // Public availability document + private claim, written together.
       segs.forEach((x, i) => {
-        writeSlotDoc(t, segRefs[i], {
-          bookingCode, bookingId: bookingRef.id, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
+        writeSlotDoc(t, db, segRefs[i].id, {
+          resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
           date, hour: x.start, slotSpanMinutes: x.span,
           bookingStatus: 'pending_payment', paymentStatus: 'unpaid',
           expiresAt: paymentExpiresAt,
-        });
+        }, { bookingId: bookingRef.id, bookingCode });
       });
     });
   } catch (e) {
@@ -860,7 +900,8 @@ async function handleCancelPending(req, res, body) {
   try {
     await db.runTransaction(async (t) => {
       const bSnap = await t.get(bookingRef);
-      const slotSnaps = await Promise.all(slotRefs.map(r => t.get(r)));
+      const slotSnaps  = await Promise.all(slotRefs.map(r => t.get(r)));
+      const claimSnaps = await Promise.all(slotRefs.map(r => t.get(slotClaimRef(db, r.id))));
       const caSnap = coachAvailRef ? await t.get(coachAvailRef) : null;
       if (!bSnap.exists) throw new Error('GONE');
       const bNow = bSnap.data();
@@ -889,13 +930,21 @@ async function handleCancelPending(req, res, body) {
         cancelledBy:   'customer',
         updatedAt:     FieldValue.serverTimestamp(),
       });
-      // Release each slot only if it still belongs to this booking and isn't confirmed.
+      // Release each slot only if it still belongs to this booking and isn't
+      // confirmed. RB-10: ownership now comes from the private claim, since
+      // the public document no longer carries bookingId or bookingCode.
+      // A legacy slot written before this hotfix has no claim; those still
+      // carry the identifiers inline, so fall back to them for compatibility.
       slotSnaps.forEach((slotSnap, i) => {
         if (!slotSnap.exists) return;
-        const sd = slotSnap.data();
-        const owns = sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode;
+        const sd    = slotSnap.data();
+        const claim = claimSnaps[i]?.exists ? claimSnaps[i].data() : null;
+        const owns  = claim
+          ? claim.bookingId === bookingId
+          : (sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode);
         if (owns && sd.bookingStatus !== 'confirmed') {
           t.update(slotRefs[i], { bookingStatus: 'cancelled', paymentStatus: 'rejected' });
+          if (claim) t.delete(slotClaimRef(db, slotRefs[i].id));
         }
       });
     });
@@ -1226,12 +1275,12 @@ async function handleCreatePassBooking(res, body) {
       });
 
       segs.forEach((x, i) => {
-        writeSlotDoc(t, segRefs[i], {
-          bookingCode, bookingId: bookingRef.id, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
+        writeSlotDoc(t, db, segRefs[i].id, {
+          resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
           date, hour: x.start, slotSpanMinutes: x.span,
           bookingStatus: 'confirmed', paymentStatus: 'package',
           expiresAt: null,
-        });
+        }, { bookingId: bookingRef.id, bookingCode });
       });
 
       t.update(pkgRef, {
@@ -1698,13 +1747,13 @@ async function handleCreateCoachLesson(res, body) {
       // publicly readable, and which coach teaches which hour is the coach's
       // information, not availability data. The coach lock lives on
       // coach_availability (written below), which is server-only.
-      writeSlotDoc(t, slotRef, {
-        bookingCode, bookingId: bookingRef.id, resourceId: RESOURCE_ID,
+      writeSlotDoc(t, db, slotRef.id, {
+        resourceId: RESOURCE_ID,
         branchId: ca.branchId || DEFAULT_BRANCH_ID,
-        date, hour: startTime,
+        date, hour: startTime, slotSpanMinutes: 60,
         bookingStatus: bkStatus, paymentStatus: payStatus,
         expiresAt: holdExp,
-      });
+      }, { bookingId: bookingRef.id, bookingCode, coachId });
       t.set(coachAvailRef, {
         coachId, branchId: ca.branchId || DEFAULT_BRANCH_ID,
         date, hour: startTime,

@@ -192,6 +192,28 @@ function isOwnStorageUrl(url) {
   return !!parseStorageUrl(url);
 }
 
+// The slot ids a booking holds. Server-created bookings record them
+// explicitly; older ones are reconstructed from date + start + duration the
+// same way the booking route derives them.
+function bookingSlotIdsOf(b) {
+  if (Array.isArray(b.bookingSlotIds) && b.bookingSlotIds.length) return b.bookingSlotIds;
+  if (!b.date || !b.startTime) return [];
+  const toMin = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
+  const pad   = n => String(n).padStart(2, '0');
+  const dm    = Number(b.durationMinutes);
+  const total = (Number.isInteger(dm) && dm >= 30) ? Math.min(dm, 360)
+              : Math.min(Math.max(parseInt(b.durationHours, 10) || 1, 1), 6) * 60;
+  const ids = [];
+  let m = toMin(b.startTime);
+  const end = m + total;
+  while (m < end) {
+    const span = (m % 60 === 0 && m + 60 <= end) ? 60 : 30;
+    ids.push(`${b.resourceId || 'room1'}_${b.date}_${pad(Math.floor(m / 60))}${pad(m % 60)}`);
+    m += span;
+  }
+  return ids;
+}
+
 async function handleSubmitBookingSlip(req, res, body, db) {
   const bookingId   = typeof body.bookingId === 'string' ? body.bookingId.trim() : '';
   const bookingCode = typeof body.bookingCode === 'string' ? body.bookingCode.trim() : '';
@@ -244,6 +266,7 @@ async function handleSubmitBookingSlip(req, res, body, db) {
       if (idem.state === 'conflict') throw new Error('IDEMPOTENCY_CONFLICT');
       if (idem.state === 'replay')  { replayed = idem.response; return; }
 
+      // 2. Booking state.
       const snap = await t.get(bookingRef);
       if (!snap.exists) throw new Error('GONE');
       const b = snap.data();
@@ -251,8 +274,33 @@ async function handleSubmitBookingSlip(req, res, body, db) {
       if (b.bookingStatus === 'cancelled') throw new Error('CANCELLED');
       if (b.paymentStatus !== 'unpaid' && b.paymentStatus !== 'pending_review') throw new Error('BAD_STATE');
 
-      // Payment only. bookingStatus is deliberately NOT written here —
-      // confirming a booking is the admin's action (Addendum 02 sec 12).
+      // 3. Every private slot claim must belong to this booking (RB-08).
+      // The public document no longer carries an owner, so this is the only
+      // place the linkage can be checked — and it is checked for every slot
+      // the booking says it holds, not just one.
+      const slotIds    = bookingSlotIdsOf(b);
+      if (!slotIds.length) throw new Error('SLOT_OWNERSHIP_MISMATCH');
+      const claimSnaps = await Promise.all(slotIds.map(id => t.get(db.collection('booking_slot_claims').doc(id))));
+      const slotSnaps  = await Promise.all(slotIds.map(id => t.get(db.collection('booking_slots').doc(id))));
+
+      claimSnaps.forEach((cs, i) => {
+        const ss = slotSnaps[i];
+        // A slot released and taken by someone else has no claim of ours.
+        if (!cs.exists) {
+          // Legacy compatibility: slots written before this hotfix carry the
+          // identifiers inline instead of in a claim.
+          const sd = ss.exists ? ss.data() : null;
+          const legacyOwns = sd && (sd.bookingId === bookingId || sd.bookingCode === bookingCode);
+          if (!legacyOwns) throw new Error('SLOT_OWNERSHIP_MISMATCH');
+          return;
+        }
+        if (cs.data().bookingId !== bookingId) throw new Error('SLOT_OWNERSHIP_MISMATCH');
+      });
+
+      // 4. Payment moves to pending_review. bookingStatus is deliberately
+      // NOT written — confirming a booking is the admin's action
+      // (Addendum 02 sec 12), and the slip pipeline only ever reaches
+      // pre_verified, which is explicitly not bank-verified.
       t.update(bookingRef, {
         paymentStatus:  'pending_review',
         slipUrl,
@@ -261,11 +309,29 @@ async function handleSubmitBookingSlip(req, res, body, db) {
         updatedAt:      FieldValue.serverTimestamp(),
       });
 
+      // 5/6. Public slots follow payment into pending_review, and the hold is
+      // preserved rather than released, so the reservation survives while the
+      // admin reviews. expiresAt is left untouched: extending or clearing it
+      // here would either confirm the slot early or let it lapse mid-review.
+      slotSnaps.forEach((ss, i) => {
+        if (!ss.exists) return;
+        if (ss.data().bookingStatus === 'confirmed') return;   // already settled
+        t.update(db.collection('booking_slots').doc(slotIds[i]), {
+          paymentStatus: 'pending_review',
+        });
+      });
+
       writeIdempotencyInTx(t, idemRef, { scope: 'submit_slip', fingerprint: idemFp, response });
     });
   } catch (e) {
     if (e.message === 'IDEMPOTENCY_CONFLICT') {
       return res.status(409).json({ ok: false, code: 'IDEMPOTENCY_CONFLICT', error: 'idempotencyKey ถูกใช้กับคำขออื่นแล้ว' });
+    }
+    if (e.message === 'SLOT_OWNERSHIP_MISMATCH') {
+      return res.status(409).json({
+        ok: false, code: 'SLOT_OWNERSHIP_MISMATCH',
+        error: 'ช่องเวลาของการจองนี้ถูกเปลี่ยนไปแล้ว กรุณาติดต่อแอดมิน',
+      });
     }
     const map = {
       GONE:            [404, 'Booking not found'],
