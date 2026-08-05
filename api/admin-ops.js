@@ -287,7 +287,7 @@ const PACKAGE_READ_FIELDS = [
 ];
 const USER_READ_FIELDS = ['lineUserId','lineDisplayName','pictureUrl','name','phone','phoneNormalized','createdAt','updatedAt'];
 const PII_FIELDS = new Set(['lineUserId','lineDisplayName','customerName','customerPhone','customerPhoneNormalized','customerNote','name','phone','phoneNormalized','pictureUrl']);
-const SLIP_REVIEW_ROLES = new Set(['owner','ultra_admin','branch_manager','branch_staff']);
+const SLIP_REVIEW_ROLES = new Set(['owner','ultra_admin','branch_manager']);
 
 function projectAdminDoc(id, data, fields, { pii, slip }) {
   const out = { id };
@@ -300,6 +300,9 @@ function projectAdminDoc(id, data, fields, { pii, slip }) {
 }
 
 async function handleAdminRead(res, session, body) {
+  if (session.role === 'coach') {
+    return res.status(403).json({ ok:false, error:'Coaches may read only their own session view' });
+  }
   const resource = typeof body.resource === 'string' ? body.resource : '';
   const requested = Number(body.limit);
   const limit = Number.isInteger(requested) ? Math.min(Math.max(requested, 1), ADMIN_READ_LIMIT_MAX) : 250;

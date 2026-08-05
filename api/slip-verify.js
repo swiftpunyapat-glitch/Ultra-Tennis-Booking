@@ -42,7 +42,7 @@
 import crypto from 'node:crypto';
 import {
   getAdminDb, getAdminBucket, writeAuditLog, getAdminAuth,
-  verifyGuestToken, checkRateLimit, RATE_LIMITS, clientIp,
+  verifyGuestToken, checkRateLimit, readRateLimitGate, RATE_LIMITS, clientIp,
   idempotencyRef, fingerprintOf, readIdempotencyInTx, writeIdempotencyInTx,
   GUEST_BOOKING_ID_MAX_LENGTH, GUEST_TOKEN_MAX_LENGTH, isValidIdempotencyKey,
 } from './_lib/firebase-admin.js';
@@ -180,16 +180,23 @@ async function authorizeSlipCaller(req, db, { bookingId, ownerLineUserId, idToke
     if (uid && uid === ownerLineUserId) return { ok: true, actor: uid, actorRole: 'customer' };
     return { ok: false, status: 403, error: 'บัญชีไม่ตรงกับการจอง' };
   }
+  const ip = clientIp(req);
+  const globalGate = await readRateLimitGate(db, { bucket: 'guestInvalid', key: ip });
+  if (!globalGate.allowed) {
+    return { ok: false, status: 429, error: 'Too many requests', retryAfterSec: globalGate.retryAfterSec };
+  }
   if (guestToken) {
-    const gate = await checkRateLimit(db, {
-      bucket: 'guestMutation', key: `${clientIp(req)}|${bookingId}`, ...RATE_LIMITS.guestMutation,
-    });
-    if (!gate.allowed) return { ok: false, status: 429, error: 'Too many requests', retryAfterSec: gate.retryAfterSec };
     const v = await verifyGuestToken(db, bookingId, guestToken, 'slip:submit');
-    if (v.ok) return { ok: true, actor: 'guest', actorRole: 'guest' };
+    if (v.ok) {
+      const gate = await checkRateLimit(db, {
+        bucket: 'guestMutation', key: `${ip}|${bookingId}`, ...RATE_LIMITS.guestMutation,
+      });
+      if (!gate.allowed) return { ok: false, status: 429, error: 'Too many requests', retryAfterSec: gate.retryAfterSec };
+      return { ok: true, actor: 'guest', actorRole: 'guest' };
+    }
   }
   const bad = await checkRateLimit(db, {
-    bucket: 'guestInvalid', key: `${clientIp(req)}|${bookingId}`, ...RATE_LIMITS.guestInvalid,
+    bucket: 'guestInvalid', key: ip, ...RATE_LIMITS.guestInvalid,
   });
   if (!bad.allowed) return { ok: false, status: 429, error: 'Too many attempts', retryAfterSec: bad.retryAfterSec };
   return { ok: false, status: 403, error: 'ยืนยันตัวตนไม่ผ่าน' };
@@ -247,6 +254,20 @@ async function handleSubmitBookingSlip(req, res, body, db) {
   }
   if (!isValidIdempotencyKey(idemKey)) return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey has invalid format or length' });
 
+  // Guest capability authorization does not need booking data. Resolve it
+  // before the booking read so rotating nonexistent booking IDs is still
+  // charged to the single global invalid-IP bucket.
+  let auth = null;
+  if (!idToken) {
+    auth = await authorizeSlipCaller(req, db, {
+      bookingId, ownerLineUserId: null, idToken: '', guestToken,
+    });
+    if (!auth.ok) {
+      if (auth.retryAfterSec) res.setHeader('Retry-After', String(auth.retryAfterSec));
+      return res.status(auth.status).json({ ok: false, error: auth.error });
+    }
+  }
+
   const bookingRef = db.collection('bookings').doc(bookingId);
   let booking;
   try {
@@ -258,12 +279,14 @@ async function handleSubmitBookingSlip(req, res, body, db) {
     return res.status(500).json({ ok: false, error: 'Server error' });
   }
 
-  const auth = await authorizeSlipCaller(req, db, {
-    bookingId, ownerLineUserId: booking.lineUserId, idToken, guestToken,
-  });
-  if (!auth.ok) {
-    if (auth.retryAfterSec) res.setHeader('Retry-After', String(auth.retryAfterSec));
-    return res.status(auth.status).json({ ok: false, error: auth.error });
+  if (!auth) {
+    auth = await authorizeSlipCaller(req, db, {
+      bookingId, ownerLineUserId: booking.lineUserId, idToken, guestToken: '',
+    });
+    if (!auth.ok) {
+      if (auth.retryAfterSec) res.setHeader('Retry-After', String(auth.retryAfterSec));
+      return res.status(auth.status).json({ ok: false, error: auth.error });
+    }
   }
 
   // bookingCode is checked only after the caller has authenticated.

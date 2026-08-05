@@ -15,7 +15,7 @@ import { describe, test, expect, beforeAll, beforeEach } from 'vitest';
 import {
   getAdminDb, idempotencyRef, fingerprintOf,
   readIdempotencyInTx, writeIdempotencyInTx,
-  checkRateLimit, RATE_LIMITS,
+  checkRateLimit, readRateLimitGate, canonicalIp, RATE_LIMITS,
 } from '../api/_lib/firebase-admin.js';
 
 let db;
@@ -188,6 +188,22 @@ describe('RB-04 TTL fields', () => {
 });
 
 describe('Rate limiter behaviour', () => {
+  test('canonical IP normalization collapses equivalent source forms', () => {
+    expect(canonicalIp('203.0.113.8:443')).toBe('203.0.113.8');
+    expect(canonicalIp('::ffff:203.0.113.8')).toBe('203.0.113.8');
+    expect(canonicalIp('2001:0db8:0:0:0:0:0:1')).toBe('2001:db8::1');
+    expect(canonicalIp('not-an-ip')).toBe('unknown');
+  });
+
+  test('read-only global gate creates nothing and observes an existing block', async () => {
+    const opts = { bucket: 'guestInvalid', key: '203.0.113.9', ...RATE_LIMITS.guestInvalid };
+    expect((await readRateLimitGate(db, opts)).allowed).toBe(true);
+    expect((await db.collection('rate_limits').get()).size).toBe(0);
+    for (let i = 0; i <= RATE_LIMITS.guestInvalid.limit; i++) await checkRateLimit(db, opts);
+    expect((await readRateLimitGate(db, opts)).allowed).toBe(false);
+    expect((await db.collection('rate_limits').get()).size).toBe(1);
+  });
+
   test('allows up to the limit then denies with Retry-After', async () => {
     const opts = { bucket: 'guestMutation', key: 'rl|1.1.1.1', ...RATE_LIMITS.guestMutation };
     for (let i = 0; i < RATE_LIMITS.guestMutation.limit; i++) {

@@ -10,7 +10,7 @@
 //     Body fields: bookingId, accountingType, bookingStatus?, price?,
 //                  influencerExpenseAmount?, reason
 //
-//   operation: "refund"           (any logged-in admin)
+//   operation: "refund"           (branch_manager or above)
 //     Process a customer refund.
 //     Body fields: bookingId, refundAmount, refundMode, refundReason,
 //                  refundNote, incidentType, incidentNote?, releaseSlot?
@@ -340,11 +340,19 @@ export default async function handler(req, res) {
   if (!session) return res.status(401).json({ ok: false, error: 'Unauthorized' });
   const adminName = session.name;
 
+  const financialApprovalOperations = new Set([
+    'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'coach_payout_paid',
+  ]);
+  if (financialApprovalOperations.has(operation) &&
+      !requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+    return res.status(403).json({ ok: false, error: 'Role cannot perform financial approval actions' });
+  }
+
   // ── Per-operation auth + input validation (before any DB call) ────
 
   if (operation === 'accounting_edit') {
     // Owner-only (legacy sessions: Art → owner)
-    if (!requireRole(session, 'owner')) {
+    if (!requireRole(session, 'owner', 'ultra_admin')) {
       return res.status(403).json({ ok: false, error: 'Owner access only.' });
     }
     const { accountingType, reason } = body;
@@ -355,7 +363,6 @@ export default async function handler(req, res) {
   }
 
   if (operation === 'refund') {
-    // Any valid admin — no extra auth needed
     const { refundAmount: rawAmt, refundMode, refundReason, refundNote = '', incidentType = 'none' } = body;
     const refundAmount = Number(rawAmt);
     if (!Number.isFinite(refundAmount) || refundAmount <= 0)
@@ -372,7 +379,7 @@ export default async function handler(req, res) {
 
   if (operation === 'delete_booking') {
     // Owner-only: enforce server-side regardless of frontend hiding.
-    if (!requireRole(session, 'owner')) {
+    if (!requireRole(session, 'owner', 'ultra_admin')) {
       return res.status(403).json({ ok: false, error: 'Only the owner can permanently delete bookings.' });
     }
   }
@@ -482,6 +489,9 @@ async function handleManualCreate({ res, adminName, session, body }) {
   const bookingType = typeof body.bookingType === 'string' ? body.bookingType : '';
   if (!name || !phone || !RESCHED_DATE_RE.test(date) || !/^\d{2}:00$/.test(startTime) || !MANUAL_BOOKING_TYPES.has(bookingType)) {
     return res.status(400).json({ ok:false, error:'Invalid manual booking fields' });
+  }
+  if (session.role === 'branch_staff' && !new Set(['Manual Single Use','Pay at Counter']).has(bookingType)) {
+    return res.status(403).json({ ok:false, error:'Branch staff cannot create paid or package bookings' });
   }
   const branchId = DEFAULT_BRANCH_ID;
   if (!hasBranchAccess(session, branchId)) return res.status(403).json({ok:false,error:'No access to this branch'});

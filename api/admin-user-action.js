@@ -4,7 +4,7 @@
 // ════════════════════════════════════════════════════════════════════
 // Auth: requires valid admin session cookie.
 // Actions:
-//   add_pass_to_registered_user            (any logged-in admin)
+//   add_pass_to_registered_user            (branch_manager or above)
 //   save_special_promotion                 (owner-only — merged in from
 //   deactivate_special_promotion            the former /api/admin-pricing-action
 //                                           route to keep the Vercel function
@@ -102,10 +102,23 @@ export default async function handler(req, res) {
 
   // ── Pricing actions (owner-only) ─────────────────────────────────
   if (action === 'save_special_promotion' || action === 'deactivate_special_promotion') {
-    if (!requireRole(session, 'owner')) {
+    if (!requireRole(session, 'owner', 'ultra_admin')) {
       return res.status(403).json({ ok: false, error: 'Access denied: owner only.' });
     }
     return handlePricingAction({ req, res, adminName, session, action });
+  }
+
+  const passFinancialActions = new Set([
+    'add_pass_to_registered_user', 'adjust_pass_minutes', 'deactivate_pass',
+    'list_pending_pass_purchases', 'approve_pass_purchase', 'reject_pass_purchase',
+  ]);
+  if (passFinancialActions.has(action)) {
+    if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
+      return res.status(403).json({ ok: false, error: 'Role cannot perform pass financial actions' });
+    }
+    if (!hasBranchAccess(session, DEFAULT_BRANCH_ID)) {
+      return res.status(403).json({ ok: false, error: 'No access to this branch' });
+    }
   }
 
   // ── Pass actions (any valid admin — consistent with add_pass) ────

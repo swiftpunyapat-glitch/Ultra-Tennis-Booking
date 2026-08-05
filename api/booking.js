@@ -15,7 +15,7 @@ import {
   getAdminDb, getAdminAuth, writeAuditLog,
   prepareGuestAccess, verifyGuestToken, revokeGuestAccess,
   GUEST_ACCESS_COLLECTION, GUEST_BOOKING_ID_MAX_LENGTH, GUEST_TOKEN_MAX_LENGTH,
-  checkRateLimit, RATE_LIMITS, clientIp,
+  checkRateLimit, readRateLimitGate, RATE_LIMITS, clientIp,
   idempotencyRef, fingerprintOf, readIdempotencyInTx, writeIdempotencyInTx,
   isValidIdempotencyKey,
 } from './_lib/firebase-admin.js';
@@ -359,12 +359,13 @@ async function handleGuestBooking(req, res, body) {
 
   if (!bookingId || !token) return res.status(400).json({ ok: false, code: 'TOKEN', error: 'Missing credentials' });
 
-  // Bounded key: arbitrary tokens for one IP+booking consume the same bucket.
-  const readGate = await checkRateLimit(db, {
-    bucket: 'guestRead', key: `${ip}|${bookingId}`, ...RATE_LIMITS.guestRead,
+  // Check the global invalid-IP bucket before touching the capability record
+  // or creating any IP+booking limiter. Rotating bookingId cannot bypass it.
+  const globalGate = await readRateLimitGate(db, {
+    bucket: 'guestInvalid', key: ip,
   });
-  if (!readGate.allowed) {
-    res.setHeader('Retry-After', String(readGate.retryAfterSec));
+  if (!globalGate.allowed) {
+    res.setHeader('Retry-After', String(globalGate.retryAfterSec));
     return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many requests' });
   }
 
@@ -373,13 +374,22 @@ async function handleGuestBooking(req, res, body) {
     // Invalid attempts are counted separately and trigger the 60-minute
     // lockout (GT-02). Keyed on IP so guessing is throttled per source.
     const bad = await checkRateLimit(db, {
-      bucket: 'guestInvalid', key: `${ip}|${bookingId}`, ...RATE_LIMITS.guestInvalid,
+      bucket: 'guestInvalid', key: ip, ...RATE_LIMITS.guestInvalid,
     });
     if (!bad.allowed) {
       res.setHeader('Retry-After', String(bad.retryAfterSec));
       return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many attempts' });
     }
     return res.status(401).json({ ok: false, code: 'TOKEN', error: 'ลิงก์ไม่ถูกต้องหรือหมดอายุ' });
+  }
+
+  // Valid capability requests retain the existing per-IP+booking read rate.
+  const readGate = await checkRateLimit(db, {
+    bucket: 'guestRead', key: `${ip}|${bookingId}`, ...RATE_LIMITS.guestRead,
+  });
+  if (!readGate.allowed) {
+    res.setHeader('Retry-After', String(readGate.retryAfterSec));
+    return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many requests' });
   }
 
   try {
@@ -859,6 +869,38 @@ async function handleCancelPending(req, res, body) {
   try { db = getAdminDb(); }
   catch (e) { console.error('[cancel_pending] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
 
+  const guestToken = guestTokenRaw.trim();
+  const ip = clientIp(req);
+  let guestAuthorized = false;
+  if (!idToken) {
+    const globalGate = await readRateLimitGate(db, { bucket: 'guestInvalid', key: ip });
+    if (!globalGate.allowed) {
+      res.setHeader('Retry-After', String(globalGate.retryAfterSec));
+      return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many requests' });
+    }
+    const verified = guestToken
+      ? await verifyGuestToken(db, bookingId, guestToken, 'booking:cancel')
+      : { ok:false };
+    if (!verified.ok) {
+      const bad = await checkRateLimit(db, {
+        bucket: 'guestInvalid', key: ip, ...RATE_LIMITS.guestInvalid,
+      });
+      if (!bad.allowed) {
+        res.setHeader('Retry-After', String(bad.retryAfterSec));
+        return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many attempts' });
+      }
+      return res.status(403).json({ ok: false, code: 'TOKEN', error: 'Guest authentication failed' });
+    }
+    const mutationGate = await checkRateLimit(db, {
+      bucket: 'guestMutation', key: `${ip}|${bookingId}`, ...RATE_LIMITS.guestMutation,
+    });
+    if (!mutationGate.allowed) {
+      res.setHeader('Retry-After', String(mutationGate.retryAfterSec));
+      return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many requests' });
+    }
+    guestAuthorized = true;
+  }
+
   const bookingRef = db.collection('bookings').doc(bookingId);
   let booking;
   try {
@@ -868,7 +910,7 @@ async function handleCancelPending(req, res, body) {
   } catch (e) { console.error('[cancel_pending] read:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
 
   // ── Ownership ─────────────────────────────────────────────────────
-  let owner = false;
+  let owner = guestAuthorized;
 
   // Path 1 — LINE customer. Server-verified Firebase ID token only.
   // An invalid or expired token is a hard failure; it no longer degrades
@@ -883,26 +925,11 @@ async function handleCancelPending(req, res, body) {
     owner = true;
   }
 
-  // Path 2 — guest capability token, rate-limited as a mutation
-  // (GT-02: 5 / 15 min per token+IP).
-  const guestToken = guestTokenRaw.trim();
-  if (!owner && guestToken) {
-    const gate = await checkRateLimit(db, {
-      bucket: 'guestMutation', key: `${clientIp(req)}|${bookingId}`, ...RATE_LIMITS.guestMutation,
-    });
-    if (!gate.allowed) {
-      res.setHeader('Retry-After', String(gate.retryAfterSec));
-      return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many requests' });
-    }
-    const v = await verifyGuestToken(db, bookingId, guestToken, 'booking:cancel');
-    if (v.ok) owner = true;
-  }
-
   // No third path. body.lineUserId is accepted as a request field for
   // backward compatibility with older clients but carries no authority.
   if (!owner) {
     const bad = await checkRateLimit(db, {
-      bucket: 'guestInvalid', key: `${clientIp(req)}|${bookingId}`, ...RATE_LIMITS.guestInvalid,
+      bucket: 'guestInvalid', key: ip, ...RATE_LIMITS.guestInvalid,
     });
     if (!bad.allowed) {
       res.setHeader('Retry-After', String(bad.retryAfterSec));

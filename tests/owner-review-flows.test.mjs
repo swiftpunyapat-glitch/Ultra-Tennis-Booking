@@ -26,11 +26,11 @@ beforeAll(async () => {
   adminCookie = createSessionCookie('Art').split(';')[0];
 });
 
-function req(body, { admin=false }={}) {
+function req(body, { admin=false, ip=IP }={}) {
   return {
     method:'POST', body,
-    headers:{ 'x-forwarded-for':IP, ...(admin?{cookie:adminCookie}:{}) },
-    socket:{ remoteAddress:IP },
+    headers:{ 'x-forwarded-for':ip, ...(admin?{cookie:adminCookie}:{}) },
+    socket:{ remoteAddress:ip },
   };
 }
 function res() {
@@ -77,13 +77,13 @@ async function createGuest(time='10:00') {
   });
 }
 
-async function submitGuestSlip(created, suffix='one') {
+async function submitGuestSlip(created, suffix='one', opts) {
   return call(slipHandler, {
     action:'submit_slip', bookingId:created.body.booking.id,
     bookingCode:created.body.booking.bookingCode,
     guestToken:created.body.guestAccessToken,
     slipUrl:storageUrl(suffix), idempotencyKey:`slip-${suffix}`,
-  });
+  },opts);
 }
 
 describe('OR-05 atomic guest access issuance', () => {
@@ -157,14 +157,14 @@ describe('OR-03 pending_review remains occupied', () => {
 });
 
 describe('OR-04 bounded guest rate-limit keys', () => {
-  test('100 random tokens for one IP and booking create only bounded buckets', async () => {
+  test('100 random tokens for one IP and one booking use one global invalid bucket', async () => {
     const created=await createGuest();
     const bookingId=created.body.booking.id;
     for(let i=0;i<100;i++) {
       await call(bookingHandler,{action:'guest_booking',bookingId,guestToken:`invalid-token-${String(i).padStart(4,'0')}-xxxxxxxxxxxxxxxxxxxx`});
     }
     let docs=await db.collection('rate_limits').get();
-    expect(docs.size).toBe(2);
+    expect(docs.size).toBe(1);
 
     await call(bookingHandler,{
       action:'cancel_pending',bookingId,bookingCode:created.body.booking.bookingCode,
@@ -175,8 +175,59 @@ describe('OR-04 bounded guest rate-limit keys', () => {
       guestToken:'invalid-token-slip-xxxxxxxxxxxxxxxxxxxx',slipUrl:storageUrl('invalid'),idempotencyKey:'invalid-slip-key',
     });
     docs=await db.collection('rate_limits').get();
-    expect(docs.size).toBeLessThanOrEqual(3);
+    expect(docs.size).toBe(1);
     expect(JSON.stringify(docs.docs.map(d=>d.id))).not.toContain('invalid-token');
+  });
+
+  test('100 random tokens with 100 random booking IDs from one IP remain globally bounded', async () => {
+    const ip='198.51.100.78';
+    for(let i=0;i<100;i++){
+      await call(bookingHandler,{
+        action:'guest_booking',bookingId:`random-booking-${String(i).padStart(3,'0')}`,
+        guestToken:`invalid-random-token-${String(i).padStart(3,'0')}-xxxxxxxxxxxxxxxx`,
+      },{ip});
+    }
+    const docs=await db.collection('rate_limits').get();
+    expect(docs.size).toBe(1);
+    expect(docs.docs[0].data().bucket).toBe('guestInvalid');
+  });
+
+  test('a blocked global IP creates no new per-booking documents across read, cancel, and slip', async () => {
+    const ip='198.51.100.79';
+    for(let i=0;i<6;i++){
+      await call(bookingHandler,{
+        action:'guest_booking',bookingId:`block-${i}`,
+        guestToken:`invalid-block-token-${i}-xxxxxxxxxxxxxxxxxxxx`,
+      },{ip});
+    }
+    const before=await db.collection('rate_limits').get();
+    const ids=before.docs.map(d=>d.id).sort();
+    expect(before.size).toBe(1);
+
+    const read=await call(bookingHandler,{action:'guest_booking',bookingId:'new-read-id',guestToken:'invalid-read-token-xxxxxxxxxxxxxxxxxxxx'},{ip});
+    const cancel=await call(bookingHandler,{action:'cancel_pending',bookingId:'new-cancel-id',bookingCode:'CODE',guestToken:'invalid-cancel-token-xxxxxxxxxxxxxxxx'},{ip});
+    const slip=await call(slipHandler,{action:'submit_slip',bookingId:'new-slip-id',bookingCode:'CODE',guestToken:'invalid-slip-token-xxxxxxxxxxxxxxxxxx',slipUrl:storageUrl('blocked'),idempotencyKey:'blocked-slip-key'},{ip});
+    expect([read.statusCode,cancel.statusCode,slip.statusCode]).toEqual([429,429,429]);
+    const after=await db.collection('rate_limits').get();
+    expect(after.docs.map(d=>d.id).sort()).toEqual(ids);
+  });
+
+  test('valid guest read, cancel, and slip retain per-IP+booking limits', async () => {
+    const readBooking=await createGuest('10:00');
+    const read=await call(bookingHandler,{action:'guest_booking',bookingId:readBooking.body.booking.id,guestToken:readBooking.body.guestAccessToken},{ip:'198.51.100.80'});
+    expect(read.statusCode).toBe(200);
+
+    const cancelBooking=await createGuest('11:00');
+    const cancel=await call(bookingHandler,{action:'cancel_pending',bookingId:cancelBooking.body.booking.id,bookingCode:cancelBooking.body.booking.bookingCode,guestToken:cancelBooking.body.guestAccessToken},{ip:'198.51.100.81'});
+    expect(cancel.statusCode).toBe(200);
+
+    const slipBooking=await createGuest('12:00');
+    const slip=await submitGuestSlip(slipBooking,'valid-rate-limit',{ip:'198.51.100.82'});
+    expect(slip.statusCode).toBe(200);
+
+    const docs=await db.collection('rate_limits').get();
+    expect(docs.size).toBe(3);
+    expect(docs.docs.map(d=>d.data().bucket).sort()).toEqual(['guestMutation','guestMutation','guestRead']);
   });
 
   test('oversized credentials fail before hashing or lookup', async () => {

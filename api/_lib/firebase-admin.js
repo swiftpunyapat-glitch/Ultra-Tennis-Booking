@@ -9,6 +9,7 @@ import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { getStorage } from 'firebase-admin/storage';
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
+import { isIP } from 'node:net';
 
 export function getAdminDb() {
   if (!getApps().length) {
@@ -340,11 +341,33 @@ export async function revokeGuestAccess(db, bookingId, reason) {
 // expiresAt = windowEnd + 24h.
 const RATE_LIMIT_TTL_GRACE_MS = 24 * 60 * 60 * 1000;
 
+function rateLimitRef(db, bucket, key) {
+  const docId = `${bucket}__${createHash('sha256').update(String(key)).digest('hex').slice(0, 32)}`;
+  return db.collection('rate_limits').doc(docId);
+}
+
+// Read-only global gate. It never creates a limiter document, so a blocked
+// source cannot grow cardinality by rotating booking IDs. Read failures deny.
+export async function readRateLimitGate(db, { bucket, key }) {
+  const nowMs = Date.now();
+  try {
+    const snap = await rateLimitRef(db, bucket, key).get();
+    if (!snap.exists) return { allowed: true };
+    const blockedUntil = snap.data()?.blockedUntil?.toMillis?.() ?? 0;
+    if (blockedUntil > nowMs) {
+      return { allowed: false, retryAfterSec: Math.ceil((blockedUntil - nowMs) / 1000) };
+    }
+    return { allowed: true };
+  } catch (e) {
+    console.error('[rate-limit] global gate read failed → denying:', e.message);
+    return { allowed: false, retryAfterSec: 60 };
+  }
+}
+
 export async function checkRateLimit(db, { bucket, key, limit, windowMs, blockMs = 0 }) {
   // One document per (bucket, key) — reused across windows, never one per
   // attempt. windowStart is what rolls the window, not the document id.
-  const docId = `${bucket}__${createHash('sha256').update(String(key)).digest('hex').slice(0, 32)}`;
-  const ref   = db.collection('rate_limits').doc(docId);
+  const ref   = rateLimitRef(db, bucket, key);
   const nowMs = Date.now();
 
   try {
@@ -403,10 +426,32 @@ export const RATE_LIMITS = {
   guestMutation: { limit: 5,  windowMs: 15 * 60 * 1000, blockMs: 0 },
 };
 
+export function canonicalIp(value) {
+  let raw = String(value || '').trim();
+  if (!raw || raw.length > 128) return 'unknown';
+  if (raw.startsWith('[')) {
+    const end = raw.indexOf(']');
+    raw = end > 0 ? raw.slice(1, end) : raw;
+  } else if (!isIP(raw)) {
+    const ipv4WithPort = raw.match(/^([^:]+):\d+$/);
+    if (ipv4WithPort && isIP(ipv4WithPort[1]) === 4) raw = ipv4WithPort[1];
+  }
+  const mapped = raw.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (mapped && isIP(mapped[1]) === 4) return mapped[1];
+  const version = isIP(raw);
+  if (version === 4) return raw;
+  if (version === 6) {
+    try {
+      return new URL(`http://[${raw}]/`).hostname.slice(1, -1).toLowerCase();
+    } catch { return 'unknown'; }
+  }
+  return 'unknown';
+}
+
 export function clientIp(req) {
   const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd) return fwd.split(',')[0].trim();
-  return req.socket?.remoteAddress || 'unknown';
+  if (typeof fwd === 'string' && fwd) return canonicalIp(fwd.split(',')[0]);
+  return canonicalIp(req.socket?.remoteAddress);
 }
 
 // ── Idempotency (review remediation RB-02 / RB-09) ──────────────────
