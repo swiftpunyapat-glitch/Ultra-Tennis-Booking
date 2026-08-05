@@ -45,6 +45,7 @@ const VALID_ACTIONS = [
   'coach_whoami', 'coach_update_profile', 'coach_link_line',
   'coach_availability_get', 'coach_availability_set', 'coach_availability_batch_set', 'coach_update_rates',
   'shop_open_days', 'coach_delete',
+  'admin_read',
 ];
 
 // Coach V2: actions a coach may call with a LINE-derived Firebase ID token
@@ -99,7 +100,8 @@ const normalHours  = () => { const a = []; for (let i = SLOT_OPEN_HOUR; i < SLOT
 // expired. Expiry field is `expiresAt` (a Firestore Timestamp on the slot doc).
 function isLiveBookedSlot(slotData, nowMs = Date.now()) {
   if (!slotData) return false;
-  if (slotData.bookingStatus === 'confirmed') return true;
+  if (slotData.bookingStatus === 'confirmed' || slotData.bookingStatus === 'pending_review') return true;
+  if (['paid', 'package', 'pending_review'].includes(slotData.paymentStatus)) return true;
   if (slotData.bookingStatus === 'pending_payment') {
     const exp = slotData.expiresAt;
     const expMs = exp && typeof exp.toMillis === 'function' ? exp.toMillis() : null;
@@ -257,9 +259,81 @@ export default async function handler(req, res) {
     case 'coach_update_rates':     return handleCoachUpdateRates(res, session, body);
     case 'shop_open_days':         return handleShopOpenDays(res, session, body);
     case 'coach_delete':           return handleCoachDelete(res, session, body);
+    case 'admin_read':             return handleAdminRead(res, session, body);
     default:
       // Unreachable (VALID_ACTIONS gate above) — defensive.
       return res.status(400).json({ ok: false, error: `Unknown action "${action}"` });
+  }
+}
+
+const ADMIN_READ_LIMIT_MAX = 500;
+const BOOKING_READ_FIELDS = [
+  'bookingCode','branchId','resourceId','bookingSlotIds','bookingType','serviceType','source','createdVia',
+  'lineUserId','lineDisplayName','customerName','customerPhone','customerPhoneNormalized','customerNote',
+  'date','startTime','endTime','durationMinutes','durationHours','price','amount','originalPrice','finalPrice',
+  'basePrice','effectivePrice','pricingType','pricingMode','promoCode','voucherCode','discountAmount','qrAmount','qrType','paymentQrType',
+  'bookingStatus','status','paymentStatus','paymentExpiresAt','slipUrl','slipUploadedAt','paymentVerification',
+  'packageId','packageType','packageName','usedPackageId','usedPackageType','packageMinutesUsed','isEventBooking',
+  'coachId','coachName','coachPayoutStatus','coachPayoutAmount','studentCount',
+  'googleCalendarEventId','googleCalendarHtmlLink','googleCalendarSyncStatus','googleCalendarSyncedAt','googleCalendarSyncError',
+  'pendingReschedule','pendingRescheduleStatus','pendingRescheduleFromDate','pendingRescheduleFromStartTime','pendingRescheduleFromEndTime',
+  'previousDate','previousStartTime','previousEndTime','cancelReason','cancelledAt','cancelledBy',
+  'refundStatus','refundAmount','refundReason','refundMode','accountingType','createdAt','updatedAt','paidAt','confirmedAt',
+];
+const PACKAGE_READ_FIELDS = [
+  'branchId','resourceId','lineUserId','lineDisplayName','customerName','customerPhone','customerPhoneNormalized',
+  'packageType','packageName','status','remainingMinutes','totalMinutes','weeklyLimitHours','monthlyLimitHours',
+  'weeklyUsage','monthlyUsage','validFrom','validUntil','eventName','eventUsedAt','lastUsedAt','lastUsedBooking','createdAt','updatedAt',
+];
+const USER_READ_FIELDS = ['lineUserId','lineDisplayName','pictureUrl','name','phone','phoneNormalized','createdAt','updatedAt'];
+const PII_FIELDS = new Set(['lineUserId','lineDisplayName','customerName','customerPhone','customerPhoneNormalized','customerNote','name','phone','phoneNormalized','pictureUrl']);
+const SLIP_REVIEW_ROLES = new Set(['owner','ultra_admin','branch_manager','branch_staff']);
+
+function projectAdminDoc(id, data, fields, { pii, slip }) {
+  const out = { id };
+  for (const key of fields) {
+    if (!pii && PII_FIELDS.has(key)) continue;
+    if (key === 'slipUrl' && !slip) continue;
+    if (data[key] !== undefined) out[key] = serializeFsDoc({ value: data[key] }).value;
+  }
+  return out;
+}
+
+async function handleAdminRead(res, session, body) {
+  const resource = typeof body.resource === 'string' ? body.resource : '';
+  const requested = Number(body.limit);
+  const limit = Number.isInteger(requested) ? Math.min(Math.max(requested, 1), ADMIN_READ_LIMIT_MAX) : 250;
+  const pii = session.role !== 'viewer';
+  const slip = SLIP_REVIEW_ROLES.has(session.role);
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    if (resource === 'bookings') {
+      let q = db.collection('bookings').orderBy('createdAt', 'desc');
+      if (typeof body.cursorCreatedAt === 'string') {
+        const cursor = new Date(body.cursorCreatedAt);
+        if (!Number.isFinite(cursor.getTime())) return res.status(400).json({ ok:false, error:'Invalid cursorCreatedAt' });
+        q = q.startAfter(Timestamp.fromDate(cursor));
+      }
+      const snap = await q.limit(limit).get();
+      const scoped = filterToSessionBranches(session, snap.docs.map(d => ({ id:d.id, ...d.data() })));
+      const items = scoped.map(d => projectAdminDoc(d.id, d, BOOKING_READ_FIELDS, { pii, slip }));
+      const last = snap.docs.at(-1)?.data()?.createdAt?.toDate?.()?.toISOString?.() ?? null;
+      return res.status(200).json({ ok:true, items, nextCursor: snap.size === limit ? last : null, limit });
+    }
+    if (resource === 'packages') {
+      const snap = await db.collection('customer_packages').limit(limit).get();
+      const scoped = filterToSessionBranches(session, snap.docs.map(d => ({ id:d.id, ...d.data() })));
+      return res.status(200).json({ ok:true, items:scoped.map(d=>projectAdminDoc(d.id,d,PACKAGE_READ_FIELDS,{pii,slip:false})), limit });
+    }
+    if (resource === 'registered_users') {
+      if (!requireRole(session,'owner','ultra_admin','branch_manager','branch_staff')) return res.status(403).json({ok:false,error:'Role cannot list customers'});
+      const snap = await db.collection('registered_users').limit(limit).get();
+      return res.status(200).json({ ok:true, items:snap.docs.map(d=>projectAdminDoc(d.id,d.data(),USER_READ_FIELDS,{pii:true,slip:false})), limit });
+    }
+    return res.status(400).json({ ok:false, error:'Unknown admin_read resource' });
+  } catch (e) {
+    console.error('[admin_read]', resource, e.message);
+    return res.status(500).json({ ok:false, error:'Failed to read admin data' });
   }
 }
 

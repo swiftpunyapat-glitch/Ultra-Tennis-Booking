@@ -27,7 +27,7 @@ vi.mock('firebase-admin/auth', async (orig) => {
   };
 });
 
-let db, handler;
+let db, handler, entitlementTypeForPackage, readHolidayInTransaction;
 
 beforeAll(async () => {
   if (!process.env.FIRESTORE_EMULATOR_HOST) {
@@ -35,7 +35,10 @@ beforeAll(async () => {
   }
   const fa = await import('../api/_lib/firebase-admin.js');
   db = fa.getAdminDb();
-  handler = (await import('../api/booking.js')).default;
+  const bookingModule = await import('../api/booking.js');
+  handler = bookingModule.default;
+  entitlementTypeForPackage = bookingModule.entitlementTypeForPackage;
+  readHolidayInTransaction = bookingModule.readHolidayInTransaction;
 });
 
 // Minimal req/res doubles matching what the Vercel handler uses.
@@ -67,7 +70,7 @@ const baseBody = (overrides = {}) => ({
 });
 
 async function wipe() {
-  for (const c of ['bookings', 'booking_slots', 'booking_slot_claims', 'idempotency_records', 'customer_package_logs']) {
+  for (const c of ['bookings', 'booking_slots', 'booking_slot_claims', 'idempotency_records', 'customer_package_logs', 'holidays']) {
     const snap = await db.collection(c).get();
     await Promise.all(snap.docs.map(d => d.ref.delete()));
   }
@@ -140,6 +143,91 @@ describe('Single request writes one of everything', () => {
     const claim = (await db.collection('booking_slot_claims').get()).docs[0].data();
     expect(claim.bookingId).toBe(res.body.booking.id);
     expect(claim.bookingCode).toBe(res.body.booking.bookingCode);
+    expect(claim.branchId).toBe('ladprao1');
+    expect(claim.resourceId).toBe('room1');
+    expect(claim.status).toBe('confirmed');
+    expect(claim.createdAt).toBeTruthy();
+    expect(claim.updatedAt).toBeTruthy();
+  });
+});
+
+describe('OR-01 stored package type is authoritative', () => {
+  const storedTypes = {
+    ultra: 'ultra_pass_10',
+    offpeak: 'offpeak',
+    event: 'monstr_event_pass',
+  };
+  const packageFields = {
+    ultra: {},
+    offpeak: { weeklyLimitHours:5, monthlyLimitHours:20, weeklyUsage:{}, monthlyUsage:{} },
+    event: { branchId:'ladprao1', resourceId:'room1' },
+  };
+
+  test('maps every currently recognized packageType and fails closed for unknown types', () => {
+    for (const type of ['ultra_starter_3','ultra_pass_10','ultra_pass_20','ultra_10','ultra_20']) {
+      expect(entitlementTypeForPackage(type)).toBe('ultra');
+    }
+    expect(entitlementTypeForPackage('offpeak')).toBe('offpeak');
+    expect(entitlementTypeForPackage('monstr_event_pass')).toBe('event');
+    expect(entitlementTypeForPackage('future_unreviewed_type')).toBeNull();
+  });
+
+  test('rejects every cross-type spoof and accepts each matching assertion', async () => {
+    for (const stored of Object.keys(storedTypes)) {
+      for (const asserted of ['ultra','offpeak','event']) {
+        await wipe();
+        await db.collection('customer_packages').doc(PKG).update({
+          packageType:storedTypes[stored], ...packageFields[stored],
+        });
+        const res = await call(baseBody({ payType:asserted, idempotencyKey:`cross-${stored}-${asserted}` }));
+        if (stored === asserted) {
+          expect(res.statusCode, `${stored} asserted as ${asserted}`).toBe(200);
+        } else {
+          expect(res.statusCode, `${stored} asserted as ${asserted}`).toBe(409);
+          expect(res.body.code).toBe('PASS_TYPE_MISMATCH');
+          expect(await countOf('bookings')).toBe(0);
+          expect(await balance()).toBe(600);
+        }
+      }
+    }
+  });
+
+  test('unknown stored type is rejected without mutation', async () => {
+    await db.collection('customer_packages').doc(PKG).update({ packageType:'unknown_new_pass' });
+    const res = await call(baseBody({ idempotencyKey:'unknown-type' }));
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('PASS_TYPE_UNSUPPORTED');
+    expect(await countOf('bookings')).toBe(0);
+    expect(await balance()).toBe(600);
+  });
+});
+
+describe('OR-02 holiday validation fails closed', () => {
+  beforeEach(async () => {
+    await db.collection('customer_packages').doc(PKG).update({
+      packageType:'offpeak', weeklyLimitHours:5, monthlyLimitHours:20,
+      weeklyUsage:{}, monthlyUsage:{},
+    });
+  });
+
+  test('missing holiday document means non-holiday', async () => {
+    const res = await call(baseBody({ payType:'offpeak', idempotencyKey:'holiday-missing' }));
+    expect(res.statusCode).toBe(200);
+  });
+
+  test('holiday document blocks a restricted entitlement', async () => {
+    await db.collection('holidays').doc(DATE).set({ isHoliday:true });
+    const res = await call(baseBody({ payType:'offpeak', idempotencyKey:'holiday-true' }));
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('PASS');
+    expect(await countOf('bookings')).toBe(0);
+    expect(await balance()).toBe(600);
+  });
+
+  test('transaction read failure is controlled and never becomes non-holiday', async () => {
+    const tx = { get: vi.fn().mockRejectedValue(new Error('emulator read failed')) };
+    await expect(readHolidayInTransaction(tx, { path:`holidays/${DATE}` }))
+      .rejects.toThrow('HOLIDAY_CHECK_UNAVAILABLE');
   });
 });
 

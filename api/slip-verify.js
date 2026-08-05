@@ -1,8 +1,9 @@
 // ════════════════════════════════════════════════════════════════════
 // POST /api/slip-verify — Phase 1A slip pre-check (Auto Verify Slip)
 // ════════════════════════════════════════════════════════════════════
-// Called by index.html AFTER the existing slip-upload transaction has
-// already set paymentStatus:"pending_review". This route:
+// Called by index.html after the authenticated submit_slip action atomically
+// sets paymentStatus:"pending_review" on the booking, slots, and claims.
+// This verification route:
 //
 //   1. Re-reads the booking server-side (bookingCode must match).
 //   2. Reads slipUrl FROM FIRESTORE (never from the request), downloads
@@ -31,8 +32,9 @@
 //   "rejected" and "verified" are reserved for Phase 2 (trusted bank
 //   verification) and are never produced here.
 //
-// Public route (no session) — mirrors the slip-upload threat model: the
-// caller must know both the Firestore doc id AND the bookingCode.
+// The pre-check endpoint is a server-side follow-up to that submission.
+// This follow-up reads only the slip already accepted by authenticated or
+// verified-guest submission; bookingCode is not used as authentication.
 // Repeat calls for an unchanged slipUrl return the stored result without
 // re-downloading or re-notifying (cost/spam guard).
 // ════════════════════════════════════════════════════════════════════
@@ -42,6 +44,7 @@ import {
   getAdminDb, getAdminBucket, writeAuditLog, getAdminAuth,
   verifyGuestToken, checkRateLimit, RATE_LIMITS, clientIp,
   idempotencyRef, fingerprintOf, readIdempotencyInTx, writeIdempotencyInTx,
+  GUEST_BOOKING_ID_MAX_LENGTH, GUEST_TOKEN_MAX_LENGTH, isValidIdempotencyKey,
 } from './_lib/firebase-admin.js';
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -53,6 +56,9 @@ const ALLOWED_BUCKETS  = [
 ];
 const ALLOWED_PATH_RE  = /^(payment_slips|pass_slips)\//;
 const SHA256_RE        = /^[a-f0-9]{64}$/i;
+const MAX_DOCUMENT_ID_LENGTH = 128;
+const MAX_BOOKING_CODE_LENGTH = 128;
+const MAX_SLIP_URL_LENGTH = 2048;
 
 // Mirrors the customer-facing dynamic-QR routing in index.html (read-only
 // metadata for the admin — Phase 1A never compares receivers itself).
@@ -144,9 +150,9 @@ async function computeServerSlipHash(slipUrl) {
 //   • The active rules allow any caller to perform that update on any
 //     booking, so "confirmed" was never a trustworthy state (SEC-03).
 //
-// Here the slip only ever moves payment into pending_review. bookingStatus
-// is left untouched, so the admin approval step remains the sole path to
-// confirmed. Slots keep their existing hold rather than being locked early.
+// Here the slip moves the booking, every public slot, and every private claim
+// into pending_review atomically. Admin approval remains the sole path to
+// confirmed, and pending_review remains occupied regardless of hold expiry.
 //
 // Auth: a LINE customer presents a Firebase ID token; a guest presents the
 // capability token issued when the booking was created.
@@ -176,12 +182,16 @@ async function authorizeSlipCaller(req, db, { bookingId, ownerLineUserId, idToke
   }
   if (guestToken) {
     const gate = await checkRateLimit(db, {
-      bucket: 'guestMutation', key: `${guestToken}|${clientIp(req)}`, ...RATE_LIMITS.guestMutation,
+      bucket: 'guestMutation', key: `${clientIp(req)}|${bookingId}`, ...RATE_LIMITS.guestMutation,
     });
     if (!gate.allowed) return { ok: false, status: 429, error: 'Too many requests', retryAfterSec: gate.retryAfterSec };
     const v = await verifyGuestToken(db, bookingId, guestToken, 'slip:submit');
     if (v.ok) return { ok: true, actor: 'guest', actorRole: 'guest' };
   }
+  const bad = await checkRateLimit(db, {
+    bucket: 'guestInvalid', key: `${clientIp(req)}|${bookingId}`, ...RATE_LIMITS.guestInvalid,
+  });
+  if (!bad.allowed) return { ok: false, status: 429, error: 'Too many attempts', retryAfterSec: bad.retryAfterSec };
   return { ok: false, status: 403, error: 'ยืนยันตัวตนไม่ผ่าน' };
 }
 
@@ -215,11 +225,19 @@ function bookingSlotIdsOf(b) {
 }
 
 async function handleSubmitBookingSlip(req, res, body, db) {
-  const bookingId   = typeof body.bookingId === 'string' ? body.bookingId.trim() : '';
-  const bookingCode = typeof body.bookingCode === 'string' ? body.bookingCode.trim() : '';
-  const slipUrl     = typeof body.slipUrl === 'string' ? body.slipUrl.trim() : '';
+  const bookingIdRaw = typeof body.bookingId === 'string' ? body.bookingId : '';
+  const bookingCodeRaw = typeof body.bookingCode === 'string' ? body.bookingCode : '';
+  const slipUrlRaw = typeof body.slipUrl === 'string' ? body.slipUrl : '';
+  const guestTokenRaw = typeof body.guestToken === 'string' ? body.guestToken : '';
+  if (bookingIdRaw.length > GUEST_BOOKING_ID_MAX_LENGTH || bookingCodeRaw.length > MAX_BOOKING_CODE_LENGTH ||
+      slipUrlRaw.length > MAX_SLIP_URL_LENGTH || guestTokenRaw.length > GUEST_TOKEN_MAX_LENGTH) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Request field is too long' });
+  }
+  const bookingId   = bookingIdRaw.trim();
+  const bookingCode = bookingCodeRaw.trim();
+  const slipUrl     = slipUrlRaw.trim();
   const idToken     = typeof body.idToken === 'string' ? body.idToken.trim() : '';
-  const guestToken  = typeof body.guestToken === 'string' ? body.guestToken.trim() : '';
+  const guestToken  = guestTokenRaw.trim();
   const idemKey     = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : '';
 
   if (!bookingId)   return res.status(400).json({ ok: false, error: 'Missing bookingId' });
@@ -227,7 +245,7 @@ async function handleSubmitBookingSlip(req, res, body, db) {
   if (!slipUrl || !isOwnStorageUrl(slipUrl)) {
     return res.status(400).json({ ok: false, error: 'slipUrl must be a Firebase Storage URL for this project' });
   }
-  if (!idemKey) return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey is required' });
+  if (!isValidIdempotencyKey(idemKey)) return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey has invalid format or length' });
 
   const bookingRef = db.collection('bookings').doc(bookingId);
   let booking;
@@ -240,10 +258,6 @@ async function handleSubmitBookingSlip(req, res, body, db) {
     return res.status(500).json({ ok: false, error: 'Server error' });
   }
 
-  if (bookingCode !== booking.bookingCode) {
-    return res.status(403).json({ ok: false, error: 'ไม่ใช่การจองของคุณ' });
-  }
-
   const auth = await authorizeSlipCaller(req, db, {
     bookingId, ownerLineUserId: booking.lineUserId, idToken, guestToken,
   });
@@ -252,12 +266,20 @@ async function handleSubmitBookingSlip(req, res, body, db) {
     return res.status(auth.status).json({ ok: false, error: auth.error });
   }
 
+  // bookingCode is checked only after the caller has authenticated.
+  if (bookingCode !== booking.bookingCode) {
+    return res.status(403).json({ ok: false, error: 'ไม่ใช่การจองของคุณ' });
+  }
+
   // RB-02/RB-09: the idempotency record lives in the same transaction as the
   // state change, so a rolled-back submission leaves no record and a replay
   // always finds a complete response.
-  const idemRef = idempotencyRef(db, idemKey, 'submit_slip');
+  const idemScope = auth.actorRole === 'guest'
+    ? `submit_slip:guest:${bookingId}`
+    : `submit_slip:customer:${auth.actor}`;
+  const idemRef = idempotencyRef(db, idemKey, idemScope);
   const idemFp  = fingerprintOf({ bookingId, slipUrl, actor: auth.actor });
-  const response = { ok: true, paymentStatus: 'pending_review', bookingStatus: booking.bookingStatus };
+  const response = { ok: true, paymentStatus: 'pending_review', bookingStatus: 'pending_review' };
   let replayed = null;
 
   try {
@@ -297,11 +319,10 @@ async function handleSubmitBookingSlip(req, res, body, db) {
         if (cs.data().bookingId !== bookingId) throw new Error('SLOT_OWNERSHIP_MISMATCH');
       });
 
-      // 4. Payment moves to pending_review. bookingStatus is deliberately
-      // NOT written — confirming a booking is the admin's action
-      // (Addendum 02 sec 12), and the slip pipeline only ever reaches
-      // pre_verified, which is explicitly not bank-verified.
+      // 4. pending_review is an occupied pre-confirmation state. Only admin
+      // approval promotes it to confirmed.
       t.update(bookingRef, {
+        bookingStatus:  'pending_review',
         paymentStatus:  'pending_review',
         slipUrl,
         slipUploadedAt: FieldValue.serverTimestamp(),
@@ -309,19 +330,22 @@ async function handleSubmitBookingSlip(req, res, body, db) {
         updatedAt:      FieldValue.serverTimestamp(),
       });
 
-      // 5/6. Public slots follow payment into pending_review, and the hold is
-      // preserved rather than released, so the reservation survives while the
-      // admin reviews. expiresAt is left untouched: extending or clearing it
-      // here would either confirm the slot early or let it lapse mid-review.
+      // 5/6. Slots and claims move atomically to the same occupied state.
       slotSnaps.forEach((ss, i) => {
         if (!ss.exists) return;
         if (ss.data().bookingStatus === 'confirmed') return;   // already settled
         t.update(db.collection('booking_slots').doc(slotIds[i]), {
+          bookingStatus: 'pending_review',
           paymentStatus: 'pending_review',
         });
+        if (claimSnaps[i]?.exists) {
+          t.update(db.collection('booking_slot_claims').doc(slotIds[i]), {
+            status: 'pending_review', updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
       });
 
-      writeIdempotencyInTx(t, idemRef, { scope: 'submit_slip', fingerprint: idemFp, response });
+      writeIdempotencyInTx(t, idemRef, { scope: idemScope, fingerprint: idemFp, response });
     });
   } catch (e) {
     if (e.message === 'IDEMPOTENCY_CONFLICT') {
@@ -351,7 +375,7 @@ async function handleSubmitBookingSlip(req, res, body, db) {
     branchId: booking.branchId ?? null,
     action: 'slip_submitted', targetId: bookingId,
     before: { paymentStatus: booking.paymentStatus, bookingStatus: booking.bookingStatus },
-    after:  { paymentStatus: 'pending_review', bookingStatus: booking.bookingStatus },
+    after:  { paymentStatus: 'pending_review', bookingStatus: 'pending_review' },
     note: bookingCode,
   });
 
@@ -359,8 +383,13 @@ async function handleSubmitBookingSlip(req, res, body, db) {
 }
 
 async function handleSubmitPassSlip(req, res, body, db) {
-  const purchaseId = typeof body.purchaseId === 'string' ? body.purchaseId.trim() : '';
-  const slipUrl    = typeof body.slipUrl === 'string' ? body.slipUrl.trim() : '';
+  const purchaseIdRaw = typeof body.purchaseId === 'string' ? body.purchaseId : '';
+  const slipUrlRaw = typeof body.slipUrl === 'string' ? body.slipUrl : '';
+  if (purchaseIdRaw.length > MAX_DOCUMENT_ID_LENGTH || slipUrlRaw.length > MAX_SLIP_URL_LENGTH) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Request field is too long' });
+  }
+  const purchaseId = purchaseIdRaw.trim();
+  const slipUrl    = slipUrlRaw.trim();
   const idToken    = typeof body.idToken === 'string' ? body.idToken.trim() : '';
   const idemKey    = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : '';
 
@@ -368,7 +397,7 @@ async function handleSubmitPassSlip(req, res, body, db) {
   if (!slipUrl || !isOwnStorageUrl(slipUrl)) {
     return res.status(400).json({ ok: false, error: 'slipUrl must be a Firebase Storage URL for this project' });
   }
-  if (!idemKey) return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey is required' });
+  if (!isValidIdempotencyKey(idemKey)) return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey has invalid format or length' });
 
   // Passes are a LINE-only product (Addendum 02 sec 9.4) — no guest path.
   let uid = null;
@@ -389,7 +418,8 @@ async function handleSubmitPassSlip(req, res, body, db) {
 
   if (purchase.lineUserId !== uid) return res.status(403).json({ ok: false, error: 'ไม่ใช่รายการของบัญชีนี้' });
 
-  const idemRef  = idempotencyRef(db, idemKey, 'submit_pass_slip');
+  const idemScope = `submit_pass_slip:${uid}`;
+  const idemRef  = idempotencyRef(db, idemKey, idemScope);
   const idemFp   = fingerprintOf({ purchaseId, slipUrl, actor: uid });
   const response = { ok: true, paymentStatus: 'pending_review' };
   let replayed   = null;
@@ -412,7 +442,7 @@ async function handleSubmitPassSlip(req, res, body, db) {
         updatedAt: FieldValue.serverTimestamp(),
       });
 
-      writeIdempotencyInTx(t, idemRef, { scope: 'submit_pass_slip', fingerprint: idemFp, response });
+      writeIdempotencyInTx(t, idemRef, { scope: idemScope, fingerprint: idemFp, response });
     });
   } catch (e) {
     if (e.message === 'IDEMPOTENCY_CONFLICT') {
@@ -446,8 +476,7 @@ export default async function handler(req, res) {
   if (!body) return res.status(400).json({ ok: false, error: 'Invalid request body' });
 
   // ── Security Hotfix 2026-08-04: server-side slip submission ────────
-  // Moves the mutation that index.html:3387 / :3369 performed from the
-  // browser to here. Gated by a fail-closed flag so Stage A is inert.
+  // Moves the protected mutation from the browser to this fail-closed action.
   if (body.action === 'submit_slip' || body.action === 'submit_pass_slip') {
     let db0;
     try { db0 = getAdminDb(); }

@@ -984,8 +984,8 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
 import {
-  getFirestore,collection,doc,getDocs,getDoc,updateDoc,writeBatch,addDoc,
-  runTransaction,setDoc,query,where,orderBy,serverTimestamp,Timestamp
+  getFirestore,collection,doc,getDocs,getDoc,
+  query,where,orderBy,serverTimestamp,Timestamp
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 import { createAvailabilityBatchSelector } from "./availability-batch.js?v=20260722-batch1";
 
@@ -1065,7 +1065,8 @@ function todayLocalISO(){
 
 function isLiveBookedSlot(slotData, now = new Date()) {
   if (!slotData) return false;
-  if (slotData.bookingStatus === "confirmed") return true;
+  if (["confirmed","pending_review"].includes(slotData.bookingStatus)) return true;
+  if (["paid","package","pending_review"].includes(slotData.paymentStatus)) return true;
   if (slotData.bookingStatus === "pending_payment") {
     const exp = slotData.expiresAt?.toDate?.();
     return !!exp && exp > now;
@@ -1118,6 +1119,21 @@ async function checkSession(){
     if(data.ok&&data.name){currentAdminName=data.name;currentAdminRole=data.role||null;showApp(data.name);return true;}
   }catch{}
   return false;
+}
+function reviveAdminValue(value){
+  if(typeof value==="string"&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)){
+    const ms=Date.parse(value);
+    if(Number.isFinite(ms)) return {seconds:Math.floor(ms/1000),nanoseconds:(ms%1000)*1e6,toDate:()=>new Date(ms)};
+  }
+  if(Array.isArray(value)) return value.map(reviveAdminValue);
+  if(value&&typeof value==="object") return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,reviveAdminValue(v)]));
+  return value;
+}
+async function adminRead(resource,options={}){
+  const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"admin_read",resource,...options})});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
+  return Array.isArray(data.items)?data.items.map(reviveAdminValue):[];
 }
 function showApp(n){
   $("loginScreen").style.display="none";
@@ -1354,8 +1370,7 @@ async function copyConfirmedTextToClipboard(b) {
 async function loadBookings(){
   $("bookingsList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading...</p></div>`;
   try{
-    const snap=await getDocs(query(collection(db,"bookings"),orderBy("createdAt","desc")));
-    allBookings=snap.docs.map(d=>({id:d.id,...d.data()}));
+    allBookings=await adminRead("bookings",{limit:500});
     updateStats();renderBookings();
     $("lastUpd").textContent=`Updated ${new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}`;
   }catch(e){console.error(e);$("bookingsList").innerHTML=`<div class="estate">❌ Failed to load. Check Firestore rules.</div>`;}
@@ -1507,13 +1522,8 @@ async function renderCoachTab(){
         if(np.length<9){ showToast("เบอร์โทรไม่ถูกต้อง",true); return; }
         btn.disabled=true;
         try{
-          const [snapNorm,snapRaw]=await Promise.all([
-            getDocs(query(collection(db,"bookings"),where("customerPhoneNormalized","==",np))),
-            getDocs(query(collection(db,"bookings"),where("customerPhone","==",phoneRaw.trim()))),
-          ]);
           const cand={};
-          [...snapNorm.docs,...snapRaw.docs].forEach(d=>{
-            const b=d.data();
+          allBookings.filter(b=>(b.customerPhoneNormalized||normalizePhone(b.customerPhone))===np).forEach(b=>{
             if(b.lineUserId&&b.lineUserId!=="guest"&&b.lineUserId!=="manual"&&/^U[0-9a-f]{32}$/i.test(b.lineUserId)){
               cand[b.lineUserId]={name:b.customerName||"—",lineName:b.lineDisplayName||""};
             }
@@ -1593,8 +1603,7 @@ async function renderPayoutList(){
   if(!box) return;
   box.innerHTML=`<div class="smempty">Loading...</div>`;
   try{
-    const snap=await getDocs(query(collection(db,"bookings"),where("coachPayoutStatus","==","payable")));
-    const items=snap.docs.map(d=>({id:d.id,...d.data()}))
+    const items=allBookings.filter(b=>b.coachPayoutStatus==="payable")
       .sort((a,b)=>`${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
     if(!items.length){ box.innerHTML=`<div class="smempty">ไม่มีรายการค้างโอน 🎉</div>`; return; }
     const total=items.reduce((s,b)=>s+(Number(b.coachPayoutAmount)||0),0);
@@ -2101,7 +2110,7 @@ async function markPaid(b,opts={}){
       const syncFields=gcalResult.ok
         ?{googleCalendarEventId:gcalResult.eventId,googleCalendarHtmlLink:gcalResult.htmlLink,googleCalendarSyncStatus:"created",googleCalendarSyncedAt:serverTimestamp()}
         :{googleCalendarSyncStatus:"failed",googleCalendarSyncError:gcalResult.error??"Sync failed",googleCalendarSyncedAt:serverTimestamp()};
-      await updateDoc(doc(db,"bookings",b.id),syncFields);
+      await saveCalendarSync(b.id,syncFields);
     }catch(e){
       // Payment is already confirmed in Firestore — a gcal error must never revert that.
       // The booking will surface with the "Sync to Calendar" retry button.
@@ -2233,6 +2242,18 @@ async function callGcal(payload){
   }
 }
 
+async function saveCalendarSync(bookingId, fields){
+  const payload={operation:"calendar_sync_fields",bookingId};
+  for(const key of ["googleCalendarEventId","googleCalendarHtmlLink","googleCalendarSyncStatus","googleCalendarSyncError"]){
+    if(Object.prototype.hasOwnProperty.call(fields,key)) payload[key]=fields[key];
+  }
+  const res=await fetch("/api/admin-edit-booking-accounting",{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload),
+  });
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok||!data.ok) throw new Error(data.error||"Failed to save calendar sync state");
+}
+
 // gcalChip: renders the calendar sync status row on a booking card.
 // Status field is the source of truth; booking state is used to decide
 // whether to surface the "Sync to Calendar" button for unsynced paid bookings.
@@ -2296,7 +2317,7 @@ async function retrySyncGcal(b){
         :{googleCalendarSyncStatus:"delete_failed",
           googleCalendarSyncError:gcalResult.error??"Sync failed",
           googleCalendarSyncedAt:serverTimestamp()};
-      await updateDoc(doc(db,"bookings",b.id),syncFields);
+      await saveCalendarSync(b.id,syncFields);
       showToast(gcalResult.ok?"📅 Calendar event removed":"⚠ Sync failed — try again",!gcalResult.ok);
 
     // ── Update: confirmed paid with existing event (rescheduled) ──
@@ -2309,7 +2330,7 @@ async function retrySyncGcal(b){
         :{googleCalendarSyncStatus:"update_failed",
           googleCalendarSyncError:gcalResult.error??"Sync failed",
           googleCalendarSyncedAt:serverTimestamp()};
-      await updateDoc(doc(db,"bookings",b.id),syncFields);
+      await saveCalendarSync(b.id,syncFields);
       showToast(gcalResult.ok?"📅 Calendar updated":"⚠ Sync failed — try again",!gcalResult.ok);
 
     // ── Create: confirmed paid with no event yet ──────────────────
@@ -2322,7 +2343,7 @@ async function retrySyncGcal(b){
         :{googleCalendarSyncStatus:"failed",
           googleCalendarSyncError:gcalResult.error??"Sync failed",
           googleCalendarSyncedAt:serverTimestamp()};
-      await updateDoc(doc(db,"bookings",b.id),syncFields);
+      await saveCalendarSync(b.id,syncFields);
       showToast(gcalResult.ok?"📅 Calendar synced":"⚠ Sync failed — try again",!gcalResult.ok);
     }
 
@@ -2452,8 +2473,7 @@ $("exportBookingsBtn").addEventListener("click",()=>{
 $("exportPassesBtn").addEventListener("click",async()=>{
   const btn=$("exportPassesBtn"); btn.disabled=true; btn.textContent="…";
   try{
-    const snap=await getDocs(collection(db,"customer_packages"));
-    const passes=snap.docs.map(d=>d.data());
+    const passes=await adminRead("packages",{limit:500});
     if(!passes.length){ showToast("No passes to export.",true); return; }
     const headers=["customerName","lineDisplayName","lineUserId","customerPhone","packageType","packageName","remainingMinutes","validFrom","validUntil","status","createdAt","updatedAt"];
     const rows=passes.map(p=>({
@@ -2480,8 +2500,7 @@ $("exportCustomersBtn").addEventListener("click",async()=>{
   if(!allBookings.length){ showToast("No bookings loaded — click Refresh first.",true); return; }
   const btn=$("exportCustomersBtn"); btn.disabled=true; btn.textContent="…";
   try{
-    const snap=await getDocs(collection(db,"customer_packages"));
-    const allPkgs=snap.docs.map(d=>d.data());
+    const allPkgs=await adminRead("packages",{limit:500});
     // Aggregate bookings per customer, keyed by normalizedPhone (fallback: lineUserId).
     const map=new Map();
     allBookings.forEach(b=>{
@@ -2844,10 +2863,9 @@ $("searchUserBtn").addEventListener("click", async()=>{
   $("addPassBtn").disabled = true;
 
   try {
-    const snap = await getDocs(collection(db, "registered_users"));
+    const users = await adminRead("registered_users",{limit:500});
     const matched = [];
-    snap.forEach(docSnap => {
-      const u = { id: docSnap.id, ...docSnap.data() };
+    users.forEach(u => {
       const name = (u.name || "").toLowerCase();
       const phone = (u.phone || "");
       const phoneNorm = (u.phoneNormalized || "");
@@ -3047,8 +3065,7 @@ $("refreshPassPurchasesBtn").addEventListener("click",loadPendingPurchases);
 async function loadActivePasses(){
   $("activePassesList").innerHTML=`<div class="smload"><div class="spinner"></div><p>Loading...</p></div>`;
   try{
-    const snap=await getDocs(query(collection(db,"customer_packages"),where("status","==","active")));
-    const passes=snap.docs.map(d=>({id:d.id,...d.data()}))
+    const passes=(await adminRead("packages",{limit:500})).filter(p=>p.status==="active")
       .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
     activePasses=passes; // cached for the minute-adjust modal lookup
 
@@ -3226,21 +3243,39 @@ async function loadDailyView(){
   $("dvSlotAlertText").value="";
 
   try{
-    const [avSnap,bkSnap,bookSnap,pkgSnap,allBookSnap]=await Promise.all([
+    const [avSnap,bkSnap,serverBookings,serverPackages]=await Promise.all([
       getDocs(query(collection(db,"available_slots"),where("date","==",date),where("resourceId","==",RESOURCE_ID))),
       getDocs(query(collection(db,"booking_slots"),where("date","==",date),where("resourceId","==",RESOURCE_ID))),
-      getDocs(query(collection(db,"bookings"),where("date","==",date))),
-      getDocs(collection(db,"customer_packages")),
-      getDocs(collection(db,"bookings")),
+      adminRead("bookings",{limit:500}),
+      adminRead("packages",{limit:500}),
     ]);
 
     const avByTime={}; avSnap.forEach(d=>{ const dd=d.data(); avByTime[dd.startTime]=dd; });
     const bsByHour={}; bkSnap.forEach(d=>{ const dd=d.data(); bsByHour[dd.hour]=dd; });
     dvSlotAlertData={date,avByTime,bsByHour,loadedAt:new Date()};
-    const bookingsOnDay=bookSnap.docs.map(d=>({id:d.id,...d.data()}));
+    const bookingsOnDay=serverBookings.filter(b=>b.date===date);
     const bookingByCode={}; bookingsOnDay.forEach(b=>{ if(b.bookingCode) bookingByCode[b.bookingCode]=b; });
-    const allPkgs=pkgSnap.docs.map(d=>d.data());
-    const allBks=allBookSnap.docs.map(d=>d.data());
+    const bookingBySlotId={};
+    bookingsOnDay.forEach(b=>{
+      let ids=Array.isArray(b.bookingSlotIds)?b.bookingSlotIds.filter(Boolean):[];
+      if(!ids.length&&b.startTime){
+        let m=Number(b.startTime.slice(0,2))*60+Number(b.startTime.slice(3,5)||0);
+        const duration=Number(b.durationMinutes)||(parseInt(b.durationHours,10)||1)*60;
+        const end=Math.min(m+duration,1440);ids=[];
+        while(m<end){
+          ids.push(`${b.resourceId||RESOURCE_ID}_${b.date}_${String(Math.floor(m/60)).padStart(2,"0")}${String(m%60).padStart(2,"0")}`);
+          m+=(m%60===0&&m+60<=end)?60:30;
+        }
+      }
+      ids.forEach(id=>{bookingBySlotId[id]=b;});
+    });
+    const bookingForSlot=bs=>{
+      if(!bs) return null;
+      const id=`${bs.resourceId||RESOURCE_ID}_${bs.date||date}_${String(bs.hour||"").replace(":","")}`;
+      return bookingBySlotId[id]||bookingByCode[bs.bookingCode]||null;
+    };
+    const allPkgs=serverPackages;
+    const allBks=serverBookings;
 
     // Aggregate per phone: confirmed/cancelled counts, last visit, active passes.
     function lookupHistory(phone,lineUid){
@@ -3286,9 +3321,10 @@ async function loadDailyView(){
       if(liveDocs.length){
         status="booked";
         const bs=liveDocs[0];
-        booking=bookingByCode[bs.bookingCode]||null;
-        if(liveDocs[1]&&liveDocs[1].bookingCode!==bs.bookingCode){
-          booking2=bookingByCode[liveDocs[1].bookingCode]||null;
+        booking=bookingForSlot(bs);
+        if(liveDocs[1]){
+          const candidate=bookingForSlot(liveDocs[1]);
+          if(candidate?.id!==booking?.id) booking2=candidate;
         }
         if(bs.bookingStatus==="pending_payment") countPending++;
         else countConfirmed++;
@@ -3302,7 +3338,7 @@ async function loadDailyView(){
       // both halves; a span-30 HH:00 document owns only the first half, while
       // an HH:30 document owns the second half independently.
       const baseHalfStatus = av?.status==="open" ? "open" : av?.status==="closed" ? "closed" : "not_set";
-      const bookingFor = bs => bs ? (bookingByCode[bs.bookingCode]||null) : null;
+      const bookingFor = bs => bookingForSlot(bs);
       const half00 = firstBusy
         ? { status:"booked", booking:bookingFor(bs00), slot:bs00 }
         : { status:baseHalfStatus, booking:null, slot:null };
@@ -3681,16 +3717,8 @@ $("manPhone").addEventListener("input",()=>{
 
 async function doManualPhoneLookup(np){
   try{
-    const [snapNorm,snapRaw,pkgSnap]=await Promise.all([
-      getDocs(query(collection(db,"bookings"),where("customerPhoneNormalized","==",np))),
-      getDocs(query(collection(db,"bookings"),where("customerPhone","==",$("manPhone").value.trim()))),
-      getDocs(query(collection(db,"customer_packages"),where("status","==","active"))),
-    ]);
-    const seen=new Set(); const docs=[];
-    [...snapNorm.docs,...snapRaw.docs].forEach(d=>{
-      if(seen.has(d.id)) return;
-      seen.add(d.id); docs.push(d.data());
-    });
+    const [serverBookings,serverPackages]=await Promise.all([adminRead("bookings",{limit:500}),adminRead("packages",{limit:500})]);
+    const docs=serverBookings.filter(b=>(b.customerPhoneNormalized||normalizePhone(b.customerPhone))===np);
     if(!docs.length){
       $("manHistory").style.display="block";
       $("manHistory").innerHTML=`<strong>New customer</strong> — no previous bookings found.`;
@@ -3701,7 +3729,7 @@ async function doManualPhoneLookup(np){
     const confirmed=docs.filter(x=>x.bookingStatus==="confirmed").length;
     const cancelled=docs.filter(x=>x.bookingStatus==="cancelled").length;
     const lastDate=docs.reduce((m,x)=>(x.date||"")>m?(x.date||""):m,"");
-    const activePasses=pkgSnap.docs.map(d=>d.data()).filter(p=>{
+    const activePasses=serverPackages.filter(p=>p.status==="active").filter(p=>{
       const pnp=p.customerPhoneNormalized||normalizePhone(p.customerPhone);
       if(pnp&&pnp===np) return true;
       if(latest.lineUserId&&latest.lineUserId!=="guest"&&latest.lineUserId!=="manual"&&p.lineUserId===latest.lineUserId) return true;
@@ -3723,17 +3751,12 @@ async function doManualPhoneLookup(np){
   }
 }
 
-function genManualCode(){
-  return `MANUAL-${new Date().getFullYear()}-${Math.floor(1000+Math.random()*9000)}`;
-}
-
 $("manConfirm").addEventListener("click",async()=>{
   const name=$("manName").value.trim();
   const phone=$("manPhone").value.trim();
   const date=$("manDate").value;
   const time=$("manTime").value;
   const bookingType=$("manType").value;
-  const paymentStatus=$("manPayStatus").value;
   const note=$("manNote").value.trim();
 
   if(!name)  { $("manName").focus();  showToast("Customer name required.",true); return; }
@@ -3743,90 +3766,19 @@ $("manConfirm").addEventListener("click",async()=>{
 
   const startH=parseInt(time,10);
   const endTime=fEnd(startH);
-  const code=genManualCode();
+  let code="";
   const adminName=currentAdminName||"admin";
-  // Pricing v2: price comes from the (server-quoted, admin-editable) field —
-  // package types are always ฿0 regardless of what the disabled input holds.
-  const priceRaw=$("manPrice").value;
-  const price=MANUAL_PACKAGE_TYPES.has(bookingType)?0:Math.max(0,Number(priceRaw));
-  if(!MANUAL_PACKAGE_TYPES.has(bookingType)&&(priceRaw===""||!Number.isFinite(Number(priceRaw)))){
-    $("manPrice").focus(); showToast("Price required.",true); return;
-  }
-  const slotId=`${RESOURCE_ID}_${date}_${time.replace(":","")}`;
-  const slotRef=doc(db,"booking_slots",slotId);
-  // Phase B: a customer half-hour booking may hold a separate HH:30 doc —
-  // a manual full-hour booking must not overwrite/overlap it.
-  const slotRef30=doc(db,"booking_slots",`${RESOURCE_ID}_${date}_${String(startH).padStart(2,"0")}30`);
-  const availRef=doc(db,"available_slots",slotId);
-  const bookingRef=doc(collection(db,"bookings"));
-  const paidMeta=paymentStatus==="paid"
-    ?{paidAt:serverTimestamp(),paidByAdmin:true,paymentNote:note||"Manual booking marked paid by admin"}
-    :{};
 
   const btn=$("manConfirm"); btn.disabled=true; btn.textContent="Saving...";
   try{
-    await runTransaction(db,async t=>{
-      const [slotSnap,slot30Snap,availSnap]=await Promise.all([t.get(slotRef),t.get(slotRef30),t.get(availRef)]);
-      if(!availSnap.exists())
-        throw new Error("Slot is not set. Open it in Slot Manager first.");
-      if(availSnap.data().status!=="open")
-        throw new Error("Slot is closed. Open it in Slot Manager first.");
-      if(slotSnap.exists()){
-        const sd=slotSnap.data();
-        if(isLiveBookedSlot(sd)) throw new Error(sd.bookingStatus==="pending_payment"?"Slot is held by a pending payment.":"Slot is already booked.");
-        // "rescheduled" and "cancelled" slot rows are released → allowed to overwrite.
-      }
-      if(slot30Snap.exists()&&isLiveBookedSlot(slot30Snap.data()))
-        throw new Error("The second half of this hour is booked (30-min booking).");
-
-      t.set(bookingRef,{
-        bookingCode:             code,
-        resourceId:              RESOURCE_ID,
-        branchId:                DEFAULT_BRANCH_ID,
-        bookingType:             bookingType,
-        lineUserId:              "manual",
-        lineDisplayName:         "Manual Booking",
-        customerName:            name,
-        customerPhone:           phone,
-        customerPhoneNormalized: normalizePhone(phone),
-        customerNote:            note,
-        date:                    date,
-        startTime:               time,
-        endTime:                 endTime,
-        durationHours:           1,
-        price:                   price,
-        bookingStatus:           "confirmed",
-        paymentStatus:           paymentStatus,
-        source:                  "admin_manual",
-        createdBy:               adminName,
-        createdAt:               serverTimestamp(),
-        updatedAt:               serverTimestamp(),
-        ...paidMeta,
-      });
-      t.set(slotRef,{
-        bookingCode:    code,
-        bookingId:      bookingRef.id,
-        resourceId:     RESOURCE_ID,
-        branchId:       DEFAULT_BRANCH_ID,
-        date:           date,
-        hour:           time,
-        bookingStatus:  "confirmed",
-        paymentStatus:  paymentStatus,
-        source:         "admin_manual",
-        createdBy:      adminName,
-        createdAt:      serverTimestamp(),
-        updatedAt:      serverTimestamp(),
-        ...paidMeta,
-      });
+    const res=await fetch("/api/admin-edit-booking-accounting",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({operation:"manual_create",customerName:name,customerPhone:phone,customerNote:note,date,startTime:time,bookingType}),
     });
-
-    reportAdminActivity({
-      auditAction:"manual_booking_client",
-      targetId:bookingRef.id,
-      branchId:DEFAULT_BRANCH_ID,
-      after:{bookingStatus:"confirmed",paymentStatus,date,startTime:time},
-      note:`สร้างจอง Manual ${code} ให้ ${name}`,
-    });
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok) throw new Error(data.error||"Failed to save manual booking.");
+    code=data.booking.bookingCode;
+    const authoritativePaymentStatus=data.booking.paymentStatus;
 
     // Fire-and-forget: tell all admins a manual booking was created.
     // notifyAdmins never throws; failure is logged in notification_logs only
@@ -3842,7 +3794,7 @@ $("manConfirm").addEventListener("click",async()=>{
         startTime:time,
         endTime:endTime,
         bookingType:bookingType,
-        paymentStatus:paymentStatus,
+        paymentStatus:authoritativePaymentStatus,
         note:note||"",
         actionBy:adminName,
       });
@@ -3924,7 +3876,7 @@ async function moveToPendingReschedule(){
           :{googleCalendarSyncStatus:"delete_failed",
             googleCalendarSyncError:gcalResult.error??"Sync failed",
             googleCalendarSyncedAt:serverTimestamp()};
-        await updateDoc(doc(db,"bookings",reschBooking.id),gcalFields);
+        await saveCalendarSync(reschBooking.id,gcalFields);
       }catch(e){
         // Batch commit already done — calendar error must not revert the reschedule.
         console.error("[moveToPendingReschedule] gcal delete error:",e);
@@ -4056,7 +4008,7 @@ $("mConfirm").addEventListener("click",async()=>{
               googleCalendarSyncError:gcalResult.error??"Sync failed",
               googleCalendarSyncedAt:serverTimestamp()};
         }
-        await updateDoc(doc(db,"bookings",reschBooking.id),gcalFields);
+        await saveCalendarSync(reschBooking.id,gcalFields);
       }catch(e){
         console.error("[mConfirm] gcal sync error (reschedule already saved):",e);
       }
@@ -4103,7 +4055,7 @@ async function cancelPendingReschedule(b) {
           const calBooking = { ...b, date: origDate, startTime: origStart, endTime: origEnd, bookingStatus: "confirmed" };
           const gcalResult = await callGcal({ action: "create", booking: calBooking });
           if (gcalResult.ok) {
-            await updateDoc(doc(db, "bookings", b.id), {
+            await saveCalendarSync(b.id, {
               googleCalendarEventId: gcalResult.eventId,
               googleCalendarHtmlLink: gcalResult.htmlLink,
               googleCalendarSyncStatus: "created",
@@ -4188,7 +4140,7 @@ $("mpConfirmBtn").addEventListener("click",async()=>{
         const syncFields=gcalResult.ok
           ?{googleCalendarEventId:gcalResult.eventId,googleCalendarHtmlLink:gcalResult.htmlLink,googleCalendarSyncStatus:"created",googleCalendarSyncedAt:serverTimestamp()}
           :{googleCalendarSyncStatus:"failed",googleCalendarSyncError:gcalResult.error??"Sync failed",googleCalendarSyncedAt:serverTimestamp()};
-        await updateDoc(doc(db,"bookings",markPaidBooking.id),syncFields);
+        await saveCalendarSync(markPaidBooking.id,syncFields);
       }catch(e){console.error("[mpModal] gcal sync error (payment already saved):",e);}
     }
 

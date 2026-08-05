@@ -143,8 +143,8 @@ export async function writeAuditLog(db, { actor, actorRole, branchId, action, ta
 // persisted. It is returned to the caller exactly once, in the response of
 // the request that created it.
 //
-// NOTE: bookingCode / bookingId are PUBLIC values (they are readable in
-// booking_slots). They must never form part of the token — see RD-01.
+// NOTE: bookingCode / bookingId are identifiers, not authentication secrets.
+// They must never form part of the token — see RD-01.
 // ════════════════════════════════════════════════════════════════════
 
 const GUEST_TOKEN_BYTES     = 32;
@@ -181,6 +181,8 @@ export const GUEST_REVOKE_REASONS = [
 // proves the caller is entitled to it.
 export const GUEST_ACCESS_COLLECTION = 'guest_booking_access';
 export const GUEST_SCOPES = ['booking:read', 'booking:cancel', 'slip:submit'];
+export const GUEST_TOKEN_MAX_LENGTH = 128;
+export const GUEST_BOOKING_ID_MAX_LENGTH = 128;
 
 // Opaque, unguessable, and not derived from any public value.
 export function generateGuestToken() {
@@ -197,6 +199,29 @@ export function guestTokenExpiryMs(bookingEndMs, nowMs = Date.now()) {
   const hardCap = nowMs + GUEST_TTL_MAX_MS;
   if (!Number.isFinite(bookingEndMs)) return hardCap;
   return Math.min(bookingEndMs + GUEST_TTL_AFTER_END_MS, hardCap);
+}
+
+// Build the one-time raw token and its Firestore record before a booking
+// transaction starts. New guest bookings write this record with the booking
+// and every slot/claim in the same commit (OR-05). Reissue keeps using the
+// transaction below because it must preserve/increment tokenVersion.
+export function prepareGuestAccess({ bookingEndMs = null, scopes = GUEST_SCOPES, nowMs = Date.now() } = {}) {
+  const token = generateGuestToken();
+  const expires = guestTokenExpiryMs(bookingEndMs, nowMs);
+  return {
+    token,
+    expiresAt: new Date(expires).toISOString(),
+    tokenVersion: 1,
+    record: {
+      tokenHash: hashGuestToken(token),
+      scopes: Array.isArray(scopes) ? scopes : GUEST_SCOPES,
+      issuedAt: Timestamp.fromMillis(nowMs),
+      expiresAt: Timestamp.fromMillis(expires),
+      revokedAt: null,
+      revokeReason: null,
+      tokenVersion: 1,
+    },
+  };
 }
 
 // Issue (or reissue) the token for ONE booking, atomically.
@@ -242,8 +267,12 @@ export async function issueGuestToken(db, { bookingId, bookingEndMs = null, scop
 //
 // `reason` stays coarse so it cannot be used as an oracle.
 export async function verifyGuestToken(db, bookingId, token, requiredScope = null) {
-  if (!bookingId) return { ok: false, reason: 'invalid' };
-  if (typeof token !== 'string' || token.length < 20) return { ok: false, reason: 'invalid' };
+  if (typeof bookingId !== 'string' || !bookingId || bookingId.length > GUEST_BOOKING_ID_MAX_LENGTH) {
+    return { ok: false, reason: 'invalid' };
+  }
+  if (typeof token !== 'string' || token.length < 20 || token.length > GUEST_TOKEN_MAX_LENGTH) {
+    return { ok: false, reason: 'invalid' };
+  }
 
   let snap;
   try {
@@ -399,9 +428,16 @@ export function clientIp(req) {
 // Same key + same fingerprint replays; same key + different fingerprint is
 // a client bug and returns 409 rather than silently applying either one.
 const IDEMPOTENCY_TTL_MS = 90 * 24 * 60 * 60 * 1000;   // 90 days
+export const IDEMPOTENCY_KEY_MAX_LENGTH = 80;
+const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/;
+
+export function isValidIdempotencyKey(key) {
+  return typeof key === 'string' && key.length <= IDEMPOTENCY_KEY_MAX_LENGTH && IDEMPOTENCY_KEY_RE.test(key);
+}
 
 export function idempotencyRef(db, key, scope) {
-  const id = `${scope}__${createHash('sha256').update(String(key)).digest('hex').slice(0, 40)}`;
+  if (!isValidIdempotencyKey(key)) throw new Error('INVALID_IDEMPOTENCY_KEY');
+  const id = createHash('sha256').update(`${String(scope)}\0${key}`).digest('hex');
   return db.collection('idempotency_records').doc(id);
 }
 

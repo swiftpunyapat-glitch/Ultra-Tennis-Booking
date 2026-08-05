@@ -11,7 +11,7 @@
 //                                           count down; same request/response)
 // ════════════════════════════════════════════════════════════════════
 
-import { verifySession, requireRole, DEFAULT_BRANCH_ID } from './_lib/admin-auth.js';
+import { verifySession, requireRole, hasBranchAccess, resolveBranchId, DEFAULT_BRANCH_ID } from './_lib/admin-auth.js';
 import { getAdminDb, writeAuditLog } from './_lib/firebase-admin.js';
 import { sendAndLog, loadActiveAdmins } from './_lib/notify.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
@@ -608,8 +608,8 @@ async function handleAdjustPassMinutes({ req, res, adminName, session }) {
     return res.status(400).json({ ok: false, error: `Invalid adjustAction. Must be one of: ${VALID_ADJUST.join(', ')}` });
   }
   const value = Number(rawValue);
-  if (!Number.isInteger(value) || value <= 0) {
-    return res.status(400).json({ ok: false, error: 'value must be a positive whole number of minutes' });
+  if (!Number.isInteger(value) || value <= 0 || value > 100000) {
+    return res.status(400).json({ ok: false, error: 'value must be a positive whole number of minutes up to 100000' });
   }
 
   let db;
@@ -624,6 +624,7 @@ async function handleAdjustPassMinutes({ req, res, adminName, session }) {
       const snap = await t.get(pkgRef);
       if (!snap.exists) throw new Error('NOT_FOUND');
       const pkg = snap.data();
+      if (!hasBranchAccess(session, resolveBranchId(pkg))) throw new Error('NO_BRANCH');
 
       // Minute controls apply to Ultra (minute-based) passes only.
       // Off-Peak passes track usage maps, not a minute counter.
@@ -662,6 +663,7 @@ async function handleAdjustPassMinutes({ req, res, adminName, session }) {
       NOT_FOUND:  [404, 'Pass not found'],
       NOT_ULTRA:  [409, 'Minute controls apply to Ultra Pass only'],
       BELOW_ZERO: [400, 'Remaining minutes cannot go below 0'],
+      NO_BRANCH:   [403, 'No access to this branch'],
     };
     const [code, msg] = map[e.message] || [500, 'Failed to adjust minutes'];
     if (code === 500) console.error('[adjust_pass_minutes] tx:', e.message);
@@ -709,6 +711,10 @@ async function handleDeactivatePass({ req, res, adminName, session }) {
   } catch (e) {
     console.error('[deactivate_pass] read:', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to read pass' });
+  }
+
+  if (!hasBranchAccess(session, resolveBranchId(pkg))) {
+    return res.status(403).json({ ok:false, error:'No access to this branch' });
   }
 
   if (pkg.status === 'inactive') {

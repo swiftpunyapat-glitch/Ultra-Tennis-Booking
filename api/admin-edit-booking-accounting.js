@@ -57,9 +57,10 @@
 // Does NOT touch: paymentStatus, price, slipUrl, package fields, Google Calendar.
 // ════════════════════════════════════════════════════════════════════
 
-import { verifySession, requireRole, resolveBranchId, hasBranchAccess, coachSessionFromToken } from './_lib/admin-auth.js';
+import { DEFAULT_BRANCH_ID, verifySession, requireRole, resolveBranchId, hasBranchAccess, coachSessionFromToken } from './_lib/admin-auth.js';
 import { getAdminDb, getAdminAuth, writeAuditLog, revokeGuestAccess } from './_lib/firebase-admin.js';
 import { FieldValue }          from 'firebase-admin/firestore';
+import { computeQuote }        from './_lib/pricing.js';
 
 // ── Shared constants ──────────────────────────────────────────────
 const RESOURCE_ID = 'room1';
@@ -141,13 +142,41 @@ const endAfterMin = (startTime, durMin) => toHHMM(toMin(startTime) + durMin);
 // `expiresAt` (a Firestore Timestamp on the slot doc).
 function isLiveBookedSlot(slotData, nowMs = Date.now()) {
   if (!slotData) return false;
-  if (slotData.bookingStatus === 'confirmed') return true;
+  if (slotData.bookingStatus === 'confirmed' || slotData.bookingStatus === 'pending_review') return true;
+  if (['paid', 'package', 'pending_review'].includes(slotData.paymentStatus)) return true;
   if (slotData.bookingStatus === 'pending_payment') {
     const exp = slotData.expiresAt;
     const expMs = exp && typeof exp.toMillis === 'function' ? exp.toMillis() : null;
     return expMs !== null && expMs > nowMs;
   }
   return false;
+}
+
+const slotClaimRef = (db, slotId) => db.collection('booking_slot_claims').doc(slotId);
+
+function claimOwnsBooking(claimSnap, slotData, bookingId, bookingCode) {
+  if (claimSnap?.exists) return claimSnap.data().bookingId === bookingId;
+  return slotData && (slotData.bookingId === bookingId || slotData.bookingCode === bookingCode);
+}
+
+function setClaimStatus(t, db, slotId, claimSnap, slotData, booking, bookingId, status) {
+  const ref = slotClaimRef(db, slotId);
+  if (claimSnap?.exists) {
+    t.update(ref, { status, updatedAt: FieldValue.serverTimestamp() });
+    return;
+  }
+  t.set(ref, {
+    bookingId,
+    bookingCode: booking.bookingCode,
+    branchId: resolveBranchId(booking),
+    resourceId: booking.resourceId || RESOURCE_ID,
+    status,
+    date: slotData?.date || booking.date,
+    hour: slotData?.hour || booking.startTime,
+    slotSpanMinutes: slotData?.slotSpanMinutes || 60,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
 }
 
 // ── accounting_edit constants ─────────────────────────────────────
@@ -292,7 +321,7 @@ export default async function handler(req, res) {
   // ── Route by operation ────────────────────────────────────────────
   const operation = body.operation || 'accounting_edit';
 
-  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach', 'coach_lesson_update', 'coach_payout_paid'];
+  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach', 'coach_lesson_update', 'coach_payout_paid', 'manual_create', 'calendar_sync_fields'];
   if (!VALID_OPERATIONS.includes(operation)) {
     return res.status(400).json({ ok: false, error: `Invalid operation. Must be one of: ${VALID_OPERATIONS.join(', ')}.` });
   }
@@ -359,6 +388,18 @@ export default async function handler(req, res) {
     }
   }
 
+  if (operation === 'manual_create') {
+    if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager', 'branch_staff')) {
+      return res.status(403).json({ ok:false, error:'Role cannot create manual bookings' });
+    }
+    return handleManualCreate({ res, adminName, session, body });
+  }
+
+  if (operation === 'calendar_sync_fields' &&
+      !requireRole(session, 'owner', 'ultra_admin', 'branch_manager', 'branch_staff')) {
+    return res.status(403).json({ ok:false, error:'Role cannot update calendar sync state' });
+  }
+
   // ── bookingId — required for all operations ──────────────────────
   const { bookingId } = body;
   if (!bookingId || typeof bookingId !== 'string' || !bookingId.trim())
@@ -382,6 +423,10 @@ export default async function handler(req, res) {
   } catch (e) {
     console.error(`[${operation}] read booking:`, e.message);
     return res.status(500).json({ ok: false, error: 'Failed to read booking' });
+  }
+
+  if (!hasBranchAccess(session, resolveBranchId(booking))) {
+    return res.status(403).json({ ok: false, error: 'No access to this branch' });
   }
 
   // ── Dispatch ──────────────────────────────────────────────────────
@@ -418,7 +463,129 @@ export default async function handler(req, res) {
   if (operation === 'coach_payout_paid') {
     return handleCoachPayoutPaid({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
   }
+  if (operation === 'calendar_sync_fields') {
+    return handleCalendarSyncFields({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+  }
   return handleMarkPaid({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+}
+
+const MANUAL_BOOKING_TYPES = new Set(['Manual Single Use','Paid Outside','Pay at Counter','Ultra Pass Manual','Off-Peak Manual']);
+const MANUAL_PACKAGE_TYPES = new Set(['Ultra Pass Manual','Off-Peak Manual']);
+const manualCode = () => `UTM${Date.now().toString(36).toUpperCase().slice(-6)}${Math.random().toString(36).toUpperCase().slice(2,4)}`;
+
+async function handleManualCreate({ res, adminName, session, body }) {
+  const name = typeof body.customerName === 'string' ? body.customerName.trim().slice(0,120) : '';
+  const phone = typeof body.customerPhone === 'string' ? body.customerPhone.trim().slice(0,40) : '';
+  const note = typeof body.customerNote === 'string' ? body.customerNote.trim().slice(0,500) : '';
+  const date = typeof body.date === 'string' ? body.date.trim() : '';
+  const startTime = typeof body.startTime === 'string' ? body.startTime.trim() : '';
+  const bookingType = typeof body.bookingType === 'string' ? body.bookingType : '';
+  if (!name || !phone || !RESCHED_DATE_RE.test(date) || !/^\d{2}:00$/.test(startTime) || !MANUAL_BOOKING_TYPES.has(bookingType)) {
+    return res.status(400).json({ ok:false, error:'Invalid manual booking fields' });
+  }
+  const branchId = DEFAULT_BRANCH_ID;
+  if (!hasBranchAccess(session, branchId)) return res.status(403).json({ok:false,error:'No access to this branch'});
+  let db;
+  try { db=getAdminDb(); } catch(e){ return res.status(500).json({ok:false,error:'Database not available'}); }
+  const slotId=reschedSlotId(RESOURCE_ID,date,startTime);
+  const halfId=reschedSlotId(RESOURCE_ID,date,`${startTime.slice(0,2)}:30`);
+  const slotRef=db.collection('booking_slots').doc(slotId);
+  const halfRef=db.collection('booking_slots').doc(halfId);
+  const availRef=db.collection('available_slots').doc(slotId);
+  const bookingRef=db.collection('bookings').doc();
+  const claimRef=slotClaimRef(db,slotId);
+  const code=manualCode();
+  const packageMode=MANUAL_PACKAGE_TYPES.has(bookingType);
+  const paymentStatus=packageMode?'package':bookingType==='Paid Outside'?'paid':'unpaid';
+  let price=0;
+  try {
+    if(!packageMode){
+      const [pricingSnap,holidaySnap]=await Promise.all([
+        db.collection('system_settings').doc('pricing').get(),
+        db.collection('holidays').doc(date).get(),
+      ]);
+      const q=computeQuote({date,startTime,nowMs:Date.now(),isHoliday:holidaySnap.exists&&holidaySnap.data().isHoliday===true,promoConfig:pricingSnap.exists?pricingSnap.data():null,payType:'single',lineUserId:'manual'});
+      price=Number(q.finalPrice)||0;
+    }
+    await db.runTransaction(async t=>{
+      const [slotSnap,halfSnap,availSnap]=await Promise.all([t.get(slotRef),t.get(halfRef),t.get(availRef)]);
+      if(!availSnap.exists||availSnap.data().status!=='open') throw new Error('SLOT_NOT_OPEN');
+      if((slotSnap.exists&&isLiveBookedSlot(slotSnap.data()))||(halfSnap.exists&&isLiveBookedSlot(halfSnap.data()))) throw new Error('SLOT_TAKEN');
+      t.create(bookingRef,{
+        bookingCode:code,resourceId:RESOURCE_ID,branchId,bookingSlotIds:[slotId],bookingType,
+        lineUserId:'manual',lineDisplayName:'Manual Booking',customerName:name,customerPhone:phone,
+        customerPhoneNormalized:String(phone).replace(/\D/g,''),customerNote:note,
+        date,startTime,endTime:nextHourEnd(startTime),durationMinutes:60,durationHours:1,
+        price,amount:price,finalPrice:price,originalPrice:price,pricingType:packageMode?'package':'manual',
+        bookingStatus:'confirmed',status:'confirmed',paymentStatus,source:'admin_manual',createdBy:adminName,
+        ...(paymentStatus==='paid'?{paidAt:FieldValue.serverTimestamp(),paidBy:adminName}:{}),
+        createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp(),
+      });
+      t.set(slotRef,{resourceId:RESOURCE_ID,branchId,date,hour:startTime,slotSpanMinutes:60,bookingStatus:'confirmed',paymentStatus,expiresAt:null});
+      t.set(claimRef,{bookingId:bookingRef.id,bookingCode:code,branchId,resourceId:RESOURCE_ID,status:'confirmed',date,hour:startTime,slotSpanMinutes:60,createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});
+    });
+  } catch(e){
+    const map={SLOT_NOT_OPEN:[409,'Slot is not open'],SLOT_TAKEN:[409,'Slot is already occupied']};
+    const [status,msg]=map[e.message]||[500,'Failed to create manual booking'];
+    if(status===500) console.error('[manual_create]',e.message);
+    return res.status(status).json({ok:false,error:msg});
+  }
+  await writeAuditLog(db,{actor:adminName,actorRole:session.role,branchId,action:'manual_booking_created',targetId:bookingRef.id,after:{bookingCode:code,date,startTime,bookingType,paymentStatus,price}});
+  return res.status(200).json({ok:true,booking:{id:bookingRef.id,bookingCode:code,date,startTime,endTime:nextHourEnd(startTime),bookingType,paymentStatus,price}});
+}
+
+const CALENDAR_SYNC_STATUSES = new Set([
+  'created', 'updated', 'failed', 'update_failed', 'delete_failed',
+  'pending_reschedule_removed', 'cancelled',
+]);
+
+async function handleCalendarSyncFields({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+  const branchId = resolveBranchId(booking);
+  if (!hasBranchAccess(session, branchId)) {
+    return res.status(403).json({ ok:false, error:'No access to this branch' });
+  }
+  const status = typeof body.googleCalendarSyncStatus === 'string'
+    ? body.googleCalendarSyncStatus.trim()
+    : '';
+  if (!CALENDAR_SYNC_STATUSES.has(status)) {
+    return res.status(400).json({ ok:false, error:'Invalid calendar sync status' });
+  }
+  const nullableString = (value, max) => {
+    if (value === null) return null;
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    return trimmed.length <= max ? trimmed : undefined;
+  };
+  const hasEventId = Object.prototype.hasOwnProperty.call(body, 'googleCalendarEventId');
+  const hasHtmlLink = Object.prototype.hasOwnProperty.call(body, 'googleCalendarHtmlLink');
+  const hasSyncError = Object.prototype.hasOwnProperty.call(body, 'googleCalendarSyncError');
+  const eventId = nullableString(body.googleCalendarEventId, 512);
+  const htmlLink = nullableString(body.googleCalendarHtmlLink, 2048);
+  const syncError = nullableString(body.googleCalendarSyncError, 300);
+  if ((hasEventId && eventId === undefined) || (hasHtmlLink && htmlLink === undefined) ||
+      (hasSyncError && syncError === undefined)) {
+    return res.status(400).json({ ok:false, error:'Invalid calendar sync fields' });
+  }
+  const fields = {
+    googleCalendarSyncStatus: status,
+    googleCalendarSyncedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    ...(hasEventId ? { googleCalendarEventId:eventId } : {}),
+    ...(hasHtmlLink ? { googleCalendarHtmlLink:htmlLink } : {}),
+    ...(hasSyncError ? { googleCalendarSyncError:syncError } : {}),
+  };
+  try {
+    await bookingRef.update(fields);
+    await writeAuditLog(db, {
+      actor:adminName, actorRole:session.role, branchId,
+      action:'calendar_sync_state_updated', targetId:bookingId,
+      after:{ googleCalendarSyncStatus:status, hasEventId:!!eventId, hasError:!!syncError },
+    });
+    return res.status(200).json({ ok:true });
+  } catch (e) {
+    console.error('[calendar_sync_fields]', e.message);
+    return res.status(500).json({ ok:false, error:'Failed to update calendar sync state' });
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -612,20 +779,33 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
   try {
     for (const slotId of bookingSlotIds(booking)) {
       const slotRef  = db.collection('booking_slots').doc(slotId);
-      const slotSnap = await slotRef.get();
-      if (!slotSnap.exists) continue;   // Admin SDK: .exists is a boolean property, not a method
-      const slotData = slotSnap.data();
-      const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+      const claimRef = slotClaimRef(db, slotId);
+      const [slotSnap, claimSnap] = await Promise.all([slotRef.get(), claimRef.get()]);
+      const slotData = slotSnap.exists ? slotSnap.data() : null;
+      const ownsSlot = claimOwnsBooking(claimSnap, slotData, bookingId, booking.bookingCode);
       if (ownsSlot) {
-        batch.update(slotRef, {
-          paymentStatus: accountingFields.paymentStatus,
-          bookingStatus: accountingFields.bookingStatus || booking.bookingStatus,
-          updatedAt:     FieldValue.serverTimestamp(),
-        });
+        const cancelled = accountingFields.bookingStatus === 'cancelled';
+        if (cancelled) {
+          if (slotSnap.exists) batch.delete(slotRef);
+          if (claimSnap.exists) batch.delete(claimRef);
+        } else {
+          if (slotSnap.exists) {
+            batch.update(slotRef, {
+              paymentStatus: accountingFields.paymentStatus,
+              bookingStatus: accountingFields.bookingStatus || booking.bookingStatus,
+              updatedAt:     FieldValue.serverTimestamp(),
+            });
+          }
+          setClaimStatus(
+            batch, db, slotId, claimSnap, slotData, booking, bookingId,
+            accountingFields.paymentStatus === 'pending_review' ? 'pending_review' : 'confirmed',
+          );
+        }
       }
     }
   } catch (e) {
-    console.error('[acct-edit] slot read (non-fatal):', e.message);
+    console.error('[acct-edit] slot/claim read:', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to verify booking slot ownership' });
   }
 
   // ── Commit ────────────────────────────────────────────────────────
@@ -753,13 +933,16 @@ async function handleRefund({ res, adminName, session, db, booking, bookingRef, 
         const slotSnap = await slotRef.get();
         if (!slotSnap.exists) continue;   // Admin SDK: .exists is a boolean property, not a method
         const slotData = slotSnap.data();
-        const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+        const claimRef = slotClaimRef(db, slotId);
+        const claimSnap = await claimRef.get();
+        const ownsSlot = claimOwnsBooking(claimSnap, slotData, bookingId, booking.bookingCode);
         if (ownsSlot) {
           batch.update(slotRef, {
             bookingStatus: 'cancelled',
             paymentStatus: 'refunded',   // distinct from normal "rejected" cancels
             updatedAt:     FieldValue.serverTimestamp(),
           });
+          if (claimSnap.exists) batch.delete(claimRef);
         }
         // NOTE: available_slots intentionally NOT reopened — machine/safety incidents
         // warrant admin review before the slot is offered again (use Slot Manager).
@@ -846,10 +1029,12 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
   try {
     await db.runTransaction(async (t) => {
       const slotSnaps = await Promise.all(slotRefs.map(r => t.get(r)));
-      for (const slotSnap of slotSnaps) {
+      const claimSnaps = await Promise.all(slotRefs.map(r => t.get(slotClaimRef(db, r.id))));
+      for (let i = 0; i < slotSnaps.length; i++) {
+        const slotSnap = slotSnaps[i];
         if (!slotSnap.exists) throw new Error('SLOT_MISSING');
         const slotData = slotSnap.data();
-        const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+        const ownsSlot = claimOwnsBooking(claimSnaps[i], slotData, bookingId, booking.bookingCode);
         if (!ownsSlot) throw new Error('SLOT_CONFLICT');
       }
 
@@ -873,7 +1058,10 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
         confirmedAt:     FieldValue.serverTimestamp(),
         updatedAt:       FieldValue.serverTimestamp(),
       });
-      slotRefs.forEach(r => t.update(r, { paymentStatus: 'paid', bookingStatus: 'confirmed' }));
+      slotRefs.forEach((r, i) => {
+        t.update(r, { paymentStatus: 'paid', bookingStatus: 'confirmed' });
+        setClaimStatus(t, db, r.id, claimSnaps[i], slotSnaps[i].data(), booking, bookingId, 'confirmed');
+      });
     });
   } catch (e) {
     const map = {
@@ -930,10 +1118,12 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
   try {
     await db.runTransaction(async (t) => {
       const slotSnaps = await Promise.all(slotRefs.map(r => t.get(r)));
-      for (const slotSnap of slotSnaps) {
+      const claimSnaps = await Promise.all(slotRefs.map(r => t.get(slotClaimRef(db, r.id))));
+      for (let i = 0; i < slotSnaps.length; i++) {
+        const slotSnap = slotSnaps[i];
         if (!slotSnap.exists) throw new Error('SLOT_MISSING');
         const slotData = slotSnap.data();
-        const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+        const ownsSlot = claimOwnsBooking(claimSnaps[i], slotData, bookingId, booking.bookingCode);
         if (!ownsSlot) throw new Error('SLOT_CONFLICT');
       }
 
@@ -960,12 +1150,10 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
         update.paymentNote          = 'Admin confirmed payment without slip';
       }
       t.update(bookingRef, update);
-      slotRefs.forEach(r => t.update(r, {
-        paymentStatus: 'paid',
-        bookingStatus: 'confirmed',
-        bookingId,
-        bookingCode:   booking.bookingCode,
-      }));
+      slotRefs.forEach((r, i) => {
+        t.update(r, { paymentStatus: 'paid', bookingStatus: 'confirmed' });
+        setClaimStatus(t, db, r.id, claimSnaps[i], slotSnaps[i].data(), booking, bookingId, 'confirmed');
+      });
     });
   } catch (e) {
     const map = {
@@ -1038,6 +1226,7 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
       if (bNow.paymentStatus === 'paid') throw new Error('ALREADY_PAID');
 
       const slotSnaps = await Promise.all(slotRefs.map(r => t.get(r)));
+      const claimSnaps = await Promise.all(slotRefs.map(r => t.get(slotClaimRef(db, r.id))));
       const caSnap = coachAvailRef ? await t.get(coachAvailRef) : null;
 
       t.update(bookingRef, {
@@ -1052,9 +1241,10 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
       slotSnaps.forEach((slotSnap, i) => {
         if (!slotSnap.exists) return;
         const slotData = slotSnap.data();
-        const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === booking.bookingCode;
+        const ownsSlot = claimOwnsBooking(claimSnaps[i], slotData, bookingId, booking.bookingCode);
         if (ownsSlot) {
           t.update(slotRefs[i], { bookingStatus: 'cancelled', paymentStatus: 'rejected' });
+          if (claimSnaps[i]?.exists) t.delete(slotClaimRef(db, slotRefs[i].id));
         }
       });
       // Reopen the coach hour only when this booking still owns the lock.
@@ -1144,13 +1334,16 @@ async function handleDeleteBooking({ res, adminName, session, db, booking, booki
       const slotRef = db.collection('booking_slots').doc(slotId);
       try {
         const slotSnap = await slotRef.get();
+        const claimRef = slotClaimRef(db, slotId);
+        const claimSnap = await claimRef.get();
         if (!slotSnap.exists) {
           console.log(`[delete-booking] booking_slot ${slotId} — not found, skipped`);
         } else {
           const slotData = slotSnap.data();
-          const ownsSlot = slotData.bookingId === bookingId || slotData.bookingCode === bookingCode;
+          const ownsSlot = claimOwnsBooking(claimSnap, slotData, bookingId, bookingCode);
           if (ownsSlot) {
             await slotRef.delete();
+            if (claimSnap.exists) await claimRef.delete();
             console.log(`[delete-booking] booking_slot deleted: ${slotId}`);
           } else {
             // Slot belongs to a different booking — do NOT touch it.
@@ -1213,6 +1406,7 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
   try {
     await db.runTransaction(async (t) => {
       const slotSnaps = await Promise.all(oldSlotRefs.map(r => t.get(r)));
+      const claimSnaps = await Promise.all(oldSlotRefs.map(r => t.get(slotClaimRef(db, r.id))));
       const bSnap = await t.get(bookingRef);
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       const bNow = bSnap.data();
@@ -1233,13 +1427,14 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
       slotSnaps.forEach((slotSnap, i) => {
         if (!slotSnap.exists) return;
         const sd = slotSnap.data();
-        if (sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode) {
+        if (claimOwnsBooking(claimSnaps[i], sd, bookingId, booking.bookingCode)) {
           t.update(oldSlotRefs[i], {
             bookingStatus:               'rescheduled',
             paymentStatus:               booking.paymentStatus,
             pendingRescheduleReleasedAt: FieldValue.serverTimestamp(),
             updatedAt:                   FieldValue.serverTimestamp(),
           });
+          if (claimSnaps[i]?.exists) t.delete(slotClaimRef(db, oldSlotRefs[i].id));
         }
       });
     });
@@ -1328,6 +1523,8 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
         Promise.all(oldSlotRefs.map(r => t.get(r))),
         t.get(bookingRef),
       ]);
+      const cellClaimSnaps = await Promise.all(cellIds.map(id => t.get(slotClaimRef(db, id))));
+      const oldClaimSnaps = await Promise.all(oldSlotIds.map(id => t.get(slotClaimRef(db, id))));
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       const bNow = bSnap.data();
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
@@ -1339,7 +1536,7 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
         // A doc this booking already owns (same-date overlap moves) is fine.
         if (oldSlotIds.includes(cellIds[i])) return;
         const nd = snap.data();
-        const ownsNew = nd.bookingId === bookingId || nd.bookingCode === booking.bookingCode;
+        const ownsNew = claimOwnsBooking(cellClaimSnaps[i], nd, bookingId, booking.bookingCode);
         if (ownsNew || !isLiveBookedSlot(nd)) return;
         const docMin  = touchedHours[Math.floor(i / 2)] * 60 + (i % 2) * 30;
         const docSpan = nd.slotSpanMinutes === 30 ? 30 : 60;   // legacy docs = full hour
@@ -1347,10 +1544,11 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       });
 
       const wasPending = isPendingRescheduleBooking(bNow);
-      const nextStatus = wasPending ? 'confirmed' : bNow.bookingStatus;
+      const occupiedStatus = bNow.paymentStatus === 'pending_review' ? 'pending_review' : 'confirmed';
+      const nextStatus = wasPending ? occupiedStatus : bNow.bookingStatus;
       // QC: the slot lock must ALWAYS be "confirmed" regardless of the booking's
       // own flow status, or the customer UI would treat the slot as free.
-      const slotNextStatus = 'confirmed';
+      const slotNextStatus = occupiedStatus;
 
       const update = {
         date: newDate, startTime: newStartTime, endTime: newEndTime,
@@ -1372,22 +1570,29 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       oldSnaps.forEach((oldSnap, i) => {
         if (!oldSnap.exists || newSlotIds.includes(oldSlotIds[i])) return;
         const sd = oldSnap.data();
-        if (sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode) {
+        if (claimOwnsBooking(oldClaimSnaps[i], sd, bookingId, booking.bookingCode)) {
           t.update(oldSlotRefs[i], { bookingStatus: 'rescheduled', paymentStatus: booking.paymentStatus });
+          if (oldClaimSnaps[i]?.exists) t.delete(slotClaimRef(db, oldSlotRefs[i].id));
         }
       });
 
       newSlotRefs.forEach((r, i) => {
         t.set(r, {
-          bookingCode:   booking.bookingCode,
-          bookingId,
           resourceId,
+          branchId: resolveBranchId(booking),
           date:          newDate,
           hour:          newSegs[i].start,
           slotSpanMinutes: newSegs[i].span,
           bookingStatus: slotNextStatus,
           paymentStatus: booking.paymentStatus,
           expiresAt:     null,
+        });
+        t.set(slotClaimRef(db, r.id), {
+          bookingId, bookingCode: booking.bookingCode,
+          branchId: resolveBranchId(booking), resourceId,
+          status: slotNextStatus,
+          date: newDate, hour: newSegs[i].start, slotSpanMinutes: newSegs[i].span,
+          createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
         });
       });
 
@@ -1464,8 +1669,10 @@ async function handleRescheduleCancel({ res, adminName, session, db, booking, bo
         Promise.all(cellRefs.map(r => t.get(r))),
         t.get(bookingRef),
       ]);
+      const cellClaimSnaps = await Promise.all(cellIds.map(id => t.get(slotClaimRef(db, id))));
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
-      if (!isPendingRescheduleBooking(bSnap.data())) throw new Error('NOT_PENDING');
+      const bNow = bSnap.data();
+      if (!isPendingRescheduleBooking(bNow)) throw new Error('NOT_PENDING');
 
       // Every touched hour must be open; every needed cell must be free of
       // OTHER bookings' live docs (span-aware; this booking's own docs are ok).
@@ -1473,7 +1680,7 @@ async function handleRescheduleCancel({ res, adminName, session, db, booking, bo
       const cellsFree = cellSnaps.every((snap, i) => {
         if (!snap.exists) return true;
         const sd = snap.data();
-        if (sd.bookingId === bookingId || sd.bookingCode === booking.bookingCode) return true;
+        if (claimOwnsBooking(cellClaimSnaps[i], sd, bookingId, booking.bookingCode)) return true;
         if (!isLiveBookedSlot(sd)) return true;
         const docMin  = touchedHours[Math.floor(i / 2)] * 60 + (i % 2) * 30;
         const docSpan = sd.slotSpanMinutes === 30 ? 30 : 60;
@@ -1482,17 +1689,25 @@ async function handleRescheduleCancel({ res, adminName, session, db, booking, bo
       const allRestorable = origSegs.length > 0 && hoursOpen && cellsFree;
 
       if (origDate && origStart && origEnd && allRestorable) {
+        const restoredStatus = bNow.paymentStatus === 'pending_review' ? 'pending_review' : 'confirmed';
         slotRefs.forEach((r, i) => {
           t.set(r, {
-            bookingCode: booking.bookingCode, bookingId, resourceId,
+            resourceId, branchId: resolveBranchId(booking),
             date: origDate, hour: origSegs[i].start, slotSpanMinutes: origSegs[i].span,
-            bookingStatus: 'confirmed', paymentStatus: booking.paymentStatus,
+            bookingStatus: restoredStatus, paymentStatus: booking.paymentStatus,
             expiresAt: null, updatedAt: FieldValue.serverTimestamp(),
+          });
+          t.set(slotClaimRef(db, r.id), {
+            bookingId, bookingCode: booking.bookingCode,
+            branchId: resolveBranchId(booking), resourceId,
+            status: restoredStatus,
+            date: origDate, hour: origSegs[i].start, slotSpanMinutes: origSegs[i].span,
+            createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
           });
         });
         t.update(bookingRef, {
           date: origDate, startTime: origStart, endTime: origEnd,
-          bookingStatus: 'confirmed', pendingReschedule: false,
+          bookingStatus: restoredStatus, pendingReschedule: false,
           pendingRescheduleStatus: 'cancelled_restored',
           cancelledRestoredAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),

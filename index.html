@@ -897,8 +897,8 @@
 import { initializeApp }             from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
 import { isSupported, getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
 import {
-  getFirestore, collection, doc, getDoc, getDocs, getDocFromServer, getDocsFromServer, addDoc, updateDoc,
-  runTransaction, setDoc, query, where, limit, orderBy, serverTimestamp, Timestamp,
+  getFirestore, collection, doc, getDoc, getDocs, getDocFromServer, getDocsFromServer,
+  setDoc, query, where, limit, orderBy, serverTimestamp,
   disableNetwork, enableNetwork
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 import {
@@ -980,6 +980,16 @@ const BUILD_VERSION = "2026-07-22-p0.5";
 function slotDateTime(dateKey,time="00:00"){
   return new Date(`${dateKey}T${time}:00+07:00`);
 }
+
+async function protectedIdToken(){
+  const uid=state.lineProfile?.userId;
+  if(!uid || uid==="guest" || uid==="manual") return null;
+  const ok=await ensureFirebaseAuth(uid);
+  if(!ok || !fbAuth.currentUser || fbAuth.currentUser.uid!==uid){
+    throw new Error(currentLang==="th"?"กรุณาเข้าสู่ระบบ LINE ใหม่":"Please sign in with LINE again");
+  }
+  return fbAuth.currentUser.getIdToken();
+}
 function bangkokDateParts(value=new Date()){
   const parts=new Intl.DateTimeFormat("en-CA",{
     timeZone:BANGKOK_TZ,year:"numeric",month:"2-digit",day:"2-digit",
@@ -1000,9 +1010,7 @@ function dayOfWeekDateKey(dateKey){
   const [y,m,d]=String(dateKey).split("-").map(Number);
   return new Date(Date.UTC(y,m-1,d)).getUTCDay();
 }
-// Pricing v2 Stage 2: server-authoritative create for single-use.
-const USE_SERVER_CREATE     = true;   // route single-use create through /api/booking (server prices it)
-const ALLOW_LEGACY_FALLBACK = true;   // if server-create hits a SYSTEM error, fall back to legacy client-create
+// Pricing v2 cutover: every single-use create is server-authoritative.
 const OFFPEAK     = { startHour:9, endHour:15 }; // 09:00–15:00
 // Late Night Session: 00:00–06:00 · ฿450 · opened manually by Admin only.
 const LN_START    = 0, LN_END = 6;
@@ -1067,6 +1075,7 @@ const state = {
   currentBookingCode: null,
   currentBookingDocId: null,
   currentBookingData: null,
+  currentGuestToken: null,
   currentPurchaseCode: null,
   currentPurchaseDocId: null,
   currentPurchaseData: null,
@@ -1569,10 +1578,11 @@ async function initLiff() {
   if(state.lineProfile.pictureUrl) av.innerHTML=`<img src="${state.lineProfile.pictureUrl}" alt="Avatar"/>`;
   else av.textContent = state.lineProfile.displayName.charAt(0).toUpperCase();
 
-  // Phase 2 / Stage 0 (additive): authenticate with Firebase using the verified
-  // LINE identity (uid = lineUserId). Fire-and-forget — must never block boot or
-  // the booking flow; it resolves long before the first customer write.
-  ensureFirebaseAuth(state.lineProfile?.userId).catch(()=>{});
+  // Rules-cutover contract: authentication completes before any owner-only
+  // booking/package/pass read is started.
+  if(state.lineProfile?.userId && state.lineProfile.userId!=="guest"){
+    await ensureFirebaseAuth(state.lineProfile.userId);
+  }
 
   // Set default pricing text first, then immediately hide loading screen
   updateHomeSingleUsePricing();
@@ -1608,8 +1618,17 @@ async function initLiff() {
       if (pending && pending.expiresAt > now) {
         console.log("[perf] Found pending booking in cache. Checking document status...");
         const t0 = performance.now();
+        const bookingRead = state.lineProfile.userId==="guest"
+          ? (async()=>{
+              if(!pending.guestToken) throw new Error("Guest access token missing");
+              const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"guest_booking",bookingId:pending.docId,guestToken:pending.guestToken})});
+              const d=await r.json().catch(()=>({}));
+              if(!r.ok||!d.ok) throw new Error(d.error||"Guest booking read failed");
+              return {exists:()=>true,data:()=>d.booking};
+            })()
+          : getDoc(doc(db, "bookings", pending.docId));
         const bDoc = await Promise.race([
-          getDoc(doc(db, "bookings", pending.docId)),
+          bookingRead,
           new Promise((_,rej)=>setTimeout(()=>rej(new Error("Pending booking restore timeout")),5000))
         ]);
         console.log(`[perf] Verified booking status in ${(performance.now() - t0).toFixed(1)}ms`);
@@ -1617,7 +1636,7 @@ async function initLiff() {
           const bData = bDoc.data();
           const dbExpiresAt = bData.paymentExpiresAt?.toDate?.() || (bData.paymentExpiresAt ? new Date(bData.paymentExpiresAt) : null);
           const isUnexpired = dbExpiresAt ? dbExpiresAt.getTime() > now : pending.expiresAt > now;
-          const isCorrectUser = bData.lineUserId === state.lineProfile.userId;
+          const isCorrectUser = state.lineProfile.userId==="guest" ? !!pending.guestToken : bData.lineUserId === state.lineProfile.userId;
           const isPending = bData.bookingStatus === "pending_payment";
 
           if (isPending && isCorrectUser && isUnexpired) {
@@ -1625,6 +1644,7 @@ async function initLiff() {
             state.paymentMode = "booking";
             state.currentBookingCode = pending.code;
             state.currentBookingDocId = pending.docId;
+            state.currentGuestToken = pending.guestToken||null;
             state.currentBookingData = { ...bData, expiresAt: dbExpiresAt || new Date(pending.expiresAt) };
             showPaymentPanel(
               pending.code,
@@ -1669,6 +1689,7 @@ const EVENT_PASS_TYPES = ["monstr_event_pass"];
 async function checkEligibility() {
   state.eligibility = { hasUltra: false, ultraPkg: null, hasOffpeak: false, offpeakPkg: null, hasEvent: false, eventPkg: null };
   if(state.lineProfile.userId === "guest") return;
+  await protectedIdToken();
   try {
     const snap = await getDocs(query(
       collection(db,"customer_packages"),
@@ -1846,6 +1867,7 @@ async function openRegisterView() {
     showToast("Please log in with LINE to register your profile.", true);
     return;
   }
+  await protectedIdToken();
   
   $("loverlay").style.display = "flex";
   $("ltext").textContent = t("loading");
@@ -1950,6 +1972,7 @@ async function openRegisterView() {
 }
 
 async function saveRegisterProfile() {
+  await protectedIdToken();
   const userId = state.lineProfile.userId;
   const name = $("regName").value.trim();
   const phone = $("regPhone").value.trim();
@@ -2136,6 +2159,7 @@ async function prefillCustomerInfo() {
   let reg=null;
   if(uid && uid!=="guest"){
     try {
+      await protectedIdToken();
       const snap=await getDoc(doc(db,"registered_users",uid));
       if(snap.exists()) reg=snap.data();
     } catch(e){ console.warn("[prefill] registered_users read failed:", e?.code||e?.message||e); }
@@ -2677,6 +2701,7 @@ $("bkVoucher")?.addEventListener("input", ()=>{ clearTimeout(_voucherQuoteTimer)
 // fall back to legacy client-create).
 async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
   try{
+    const idToken=state.lineProfile.userId==="guest"?null:await protectedIdToken();
     const res = await fetch("/api/booking", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
@@ -2684,6 +2709,7 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
         durationMinutes: state.durationMinutes || 60,
         customerName:name, customerPhone:phone, customerNote:note,
         lineUserId:state.lineProfile.userId, lineDisplayName:state.lineProfile.displayName,
+        idToken:idToken||undefined,
         voucherCode: voucherCode || undefined,
       }),
     });
@@ -2711,7 +2737,7 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
       try {
         await fetch("/api/booking", {
           method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ action:"cancel_pending", bookingId:b.id, bookingCode:b.bookingCode, lineUserId:state.lineProfile.userId }),
+          body: JSON.stringify({ action:"cancel_pending", bookingId:b.id, bookingCode:b.bookingCode, lineUserId:state.lineProfile.userId, idToken:idToken||undefined, guestToken:d.guestAccessToken||undefined }),
         });
       } catch(_){ /* best-effort — the unpaid hold expires by itself in 15 min */ }
       showToast(currentLang==="th"
@@ -2723,6 +2749,7 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
     const endTime = b.endTime;
     state.currentBookingCode  = b.bookingCode;
     state.currentBookingDocId = b.id;
+    state.currentGuestToken   = d.guestAccessToken||null;
     // bookingStatus/paymentStatus are known at creation but the server create
     // response omits them — renderPaymentQr's canDownload gate needs both, so
     // set them explicitly or the Download QR button never shows (Stage 1 fix).
@@ -2732,14 +2759,50 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
     }
     state.paymentMode="booking";
     try{
-      localStorage.setItem("ut_pending_booking", JSON.stringify({ code:b.bookingCode, docId:b.id, expiresAt:expiresAt.getTime(), date:dateISO, startTime:state.time, endTime, durationMinutes:b.durationMinutes||60, price:b.finalPrice, isLN:b.qrType==="late_night" }));
+      localStorage.setItem("ut_pending_booking", JSON.stringify({ code:b.bookingCode, docId:b.id, guestToken:d.guestAccessToken||null, expiresAt:expiresAt.getTime(), date:dateISO, startTime:state.time, endTime, durationMinutes:b.durationMinutes||60, price:b.finalPrice, isLN:b.qrType==="late_night" }));
     }catch(_){}
     showPaymentPanel(b.bookingCode, b.finalPrice, expiresAt, dateISO, `${state.time} – ${endTime}`, b.qrType==="late_night");
     showView("viewPayment");
     return true;
   }catch(e){
-    console.warn("[booking] server-create failed —", (ALLOW_LEGACY_FALLBACK?"falling back to legacy client-create:":"no fallback:"), e);
+    console.warn("[booking] server-create failed — no direct-write fallback:", e);
     return false;
+  }
+}
+
+async function tryServerPassCreate({dateISO,name,phone,note,payType}){
+  const pkg=payType==="ultra"?state.eligibility.ultraPkg:payType==="offpeak"?state.eligibility.offpeakPkg:state.eligibility.eventPkg;
+  if(!pkg){ showToast(t("invalidPayment"),true); return "handled"; }
+  try{
+    const idToken=await protectedIdToken();
+    const res=await fetch("/api/booking",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        action:"create_pass_booking",idToken,
+        idempotencyKey:`pass-${crypto.randomUUID()}`,
+        payType,packageId:pkg.id,date:dateISO,startTime:state.time,
+        durationMinutes:state.durationMinutes||60,
+        customerName:name,customerPhone:phone,customerNote:note,
+        lineDisplayName:state.lineProfile.displayName,
+      }),
+    });
+    const d=await res.json().catch(()=>({}));
+    if(!res.ok||!d.ok){ showToast(d.error||t("bookingFailed"),true); return "handled"; }
+    const b=d.booking;
+    state.currentBookingCode=b.bookingCode;
+    state.currentBookingDocId=b.id;
+    state.currentBookingData={...b,customerName:name,customerPhone:phone,customerNote:note};
+    state.eligibility={hasUltra:false,ultraPkg:null,hasOffpeak:false,offpeakPkg:null,hasEvent:false,eventPkg:null};
+    if(window.notifyAdmins){
+      window.notifyAdmins({type:"new_booking_admin",bookingCode:b.bookingCode,customerName:name,customerPhone:phone,date:dateISO,startTime:state.time,endTime:b.endTime});
+    }
+    showSuccess("✅",t("bookingConfirmed"),b.bookingCode,`${name} · ${dateISO} · ${state.time}–${b.endTime}`);
+    showView("viewSuccess");
+    return true;
+  }catch(e){
+    console.warn("[booking] server pass create failed; no direct-write fallback",e);
+    showToast(e.message||t("bookingFailed"),true);
+    return "handled";
   }
 }
 
@@ -2768,307 +2831,18 @@ $("confirmBkBtn").addEventListener("click", async()=>{
 
   const btn=$("confirmBkBtn"); btn.disabled=true; btn.textContent=t("saving");
   try {
-    // Pricing v2 Stage 2: server-authoritative create for single-use only.
-    // Passes (ultra/offpeak/event) always use the legacy client path below.
-    if (payType === "single" && USE_SERVER_CREATE) {
-      const r = await tryServerCreate({ dateISO:getSelectedDateISO(), name, phone, note:$("bkNote").value.trim(), voucherCode:($("bkVoucher")?.value||"").trim().toUpperCase() });
-      if (r === true) { if($("bkVoucher")) $("bkVoucher").value=""; return; }   // success (finally resets btn)
-      if (r === "handled") return;                                              // legit rejection already shown
-      // Multi-hour/half bookings exist ONLY on the server path — the legacy
-      // client-create can't lock several slots atomically. No fallback.
-      if ((state.durationMinutes||60) !== 60){ showToast(t("bookingFailed"),true); return; }
-      // Voucher redemption is transactional on the server — never fall back to
-      // client-create with a voucher (it would book at full price and skip the
-      // usedCount bookkeeping).
-      if (($("bkVoucher")?.value||"").trim()){
-        showToast(currentLang==="th"
-          ? "ระบบส่วนลดขัดข้องชั่วคราว กรุณาลองใหม่ หรือลบโค้ดส่วนลดแล้วจองอีกครั้ง"
-          : "Voucher service is temporarily unavailable. Please retry, or remove the code and book again.", true);
-        return;
-      }
-      if (!ALLOW_LEGACY_FALLBACK) { showToast(t("bookingFailed"),true); return; }
-      // else: fall through to legacy client-create as a fallback ↓
+    if(payType!=="single"){
+      await tryServerPassCreate({dateISO:getSelectedDateISO(),name,phone,note:$("bkNote").value.trim(),payType});
+      return;
     }
-    const code      = generateCode("UT");
-    const dateISO   = getSelectedDateISO();
-    const endTime   = formatEndTime(state.time);
-    const slotDocId = `${RESOURCE_ID}_${dateISO}_${state.time.replace(":","")}`;
-    const isSingle  = payType==="single";
-    const isLN      = isSingle && isLateNightHour(parseInt(state.time,10));
-    const promo     = isSingle && !isLN ? getPromoState() : { active: false };
-    const morning   = isSingle && !isLN && !promo.active ? morningFallbackQuote(dateISO, state.time) : null;
-    const singlePrice = isLN ? LATE_NIGHT_PRICE : promo.active ? promo.price : morning ? morning.price : 350;
-    const singleType  = isLN ? "Late Night Session" : "Single Use";
-    const expiresAt = isSingle ? new Date(Date.now()+PAY_MINS*60*1000) : null;
-    const expiresTS = isSingle ? Timestamp.fromDate(expiresAt) : null;
-
-    const selectedPkg = payType==="ultra" ? state.eligibility.ultraPkg : null;
-    const bookingPayload = {
-      bookingCode:             code,
-      resourceId:              RESOURCE_ID,
-      branchId:                DEFAULT_BRANCH_ID,
-      bookingType:             isSingle ? singleType : payType==="ultra" ? (selectedPkg?.packageName || "Package Booking") : payType==="event" ? "MONSTR Event Pass" : "Off-Peak Pass",
-      lineUserId:              state.lineProfile.userId,
-      lineDisplayName:         state.lineProfile.displayName,
-      customerName:            name,
-      customerPhone:           phone,
-      customerPhoneNormalized: normalizePhone(phone),
-      customerNote:            $("bkNote").value.trim(),
-      date:                    dateISO,
-      startTime:               state.time,
-      endTime,
-      durationHours:           1,
-      price:                   isSingle?singlePrice:0,
-      bookingStatus:           isSingle?"pending_payment":"confirmed",
-      paymentStatus:           isSingle?"unpaid":"package",
-      paymentExpiresAt:        expiresTS,
-      slipUrl:                 null, slipUploadedAt:null, cancelReason:null,
-      createdVia:              (payType==="single" && USE_SERVER_CREATE) ? "legacy_fallback" : "client",
-    };
-
-    if (isSingle) {
-      if (isLN) {
-        bookingPayload.basePrice = LATE_NIGHT_PRICE;
-        bookingPayload.effectivePrice = LATE_NIGHT_PRICE;
-        bookingPayload.pricingMode = "late_night";
-        bookingPayload.promoApplied = false;
-        bookingPayload.paymentQrType = "late_night";
-      } else if (promo.active) {
-        bookingPayload.basePrice = 350;
-        bookingPayload.effectivePrice = promo.price;
-        bookingPayload.pricingMode = "special_promotion";
-        bookingPayload.promoApplied = true;
-        bookingPayload.promoName = promo.name || "";
-        bookingPayload.promoPrice = promo.price;
-        bookingPayload.promoLabel = promo.label || "";
-        bookingPayload.promoStartAt = promo.startsAt ? Timestamp.fromDate(promo.startsAt) : null;
-        bookingPayload.promoEndAt = promo.endsAt ? Timestamp.fromDate(promo.endsAt) : null;
-        bookingPayload.promoSnapshotAt = serverTimestamp();
-        bookingPayload.paymentQrType = "special";
-      } else {
-        bookingPayload.basePrice = morning ? morning.price : 350;
-        bookingPayload.effectivePrice = morning ? morning.price : 350;
-        bookingPayload.pricingMode = morning ? morning.mode : "normal_single_use";
-        bookingPayload.promoApplied = false;
-        bookingPayload.paymentQrType = "normal";
-      }
-    }
-
-    if (payType==="ultra" && selectedPkg) {
-      bookingPayload.packageId = selectedPkg.id;
-      bookingPayload.packageType = selectedPkg.packageType;
-      bookingPayload.packageName = selectedPkg.packageName;
-      bookingPayload.usedPackageId = selectedPkg.id;
-      bookingPayload.usedPackageType = selectedPkg.packageType;
-      bookingPayload.usedPackageName = selectedPkg.packageName;
-    }
-
-    if (payType==="event") {
-      const ep = state.eligibility.eventPkg;
-      bookingPayload.packageId = ep.id;
-      bookingPayload.packageType = ep.packageType;
-      bookingPayload.packageName = ep.packageName;
-      bookingPayload.usedPackageId = ep.id;
-      bookingPayload.usedPackageType = ep.packageType;
-      bookingPayload.usedPackageName = ep.packageName;
-      bookingPayload.isEventBooking = true;
-    }
-
-    const bookingRef = doc(collection(db,"bookings"));
-    const slotRef    = doc(db,"booking_slots",slotDocId);
-    const availRef   = doc(db,"available_slots",slotDocId);
-
-    // Build the reads plan first — all reads must complete before any writes in a transaction.
-    const pkgRef = payType==="ultra"
-      ? doc(db,"customer_packages",state.eligibility.ultraPkg.id)
-      : payType==="offpeak"
-      ? doc(db,"customer_packages",state.eligibility.offpeakPkg.id)
-      : payType==="event"
-      ? doc(db,"customer_packages",state.eligibility.eventPkg.id)
-      : null;
-    const holRef = (payType==="offpeak"||payType==="event") ? doc(db,"holidays",dateISO) : null;
-
-    await runTransaction(db, async t=>{
-      const readPromises = [t.get(slotRef), t.get(availRef)];
-      if(pkgRef) readPromises.push(t.get(pkgRef));
-      if(holRef) readPromises.push(t.get(holRef));
-      const reads = await Promise.all(readPromises);
-      const slotSnap = reads[0], availSnap = reads[1];
-      const pkgSnap  = pkgRef ? reads[2] : null;
-      const holSnap  = holRef ? reads[pkgRef?3:2] : null;
-
-      // ── Slot availability ─────────────────────────────────────
-      if(!availSnap.exists()||availSnap.data().status!=="open")
-        throw new Error("This slot is no longer open. Please pick another time.");
-      if(slotSnap.exists()){
-        const sd=slotSnap.data();
-        if(sd.bookingStatus==="confirmed") throw new Error("This slot was just booked. Please pick another time.");
-        if(sd.bookingStatus==="pending_payment"){
-          const exp=sd.expiresAt?.toDate?.();
-          if(!exp||exp>new Date()) throw new Error("Slot is temporarily held. Try again shortly.");
-        }
-      }
-
-      // ── Pass validation: ULTRA ────────────────────────────────
-      if(payType==="ultra"){
-        if(!pkgSnap||!pkgSnap.exists()) throw new Error("Ultra Pass not found.");
-        const pd=pkgSnap.data();
-        if(pd.lineUserId!==state.lineProfile.userId) throw new Error("Pass does not belong to this account.");
-        if(pd.status!=="active") throw new Error("Pass is not active.");
-        const validUntil=pd.validUntil?.toDate?.();
-        if(!validUntil||validUntil<new Date()) throw new Error("Pass has expired.");
-        if((pd.remainingMinutes||0)<60) throw new Error("Not enough minutes left on your pass.");
-        t.update(pkgRef,{
-          remainingMinutes: pd.remainingMinutes-60,
-          updatedAt:        serverTimestamp(),
-        });
-      }
-
-      // ── Pass validation: MONSTR EVENT PASS ────────────────────
-      // Single-use 1hr, Mon-Fri, non-holiday, ladprao1/room1. Deduct 60 → 0.
-      if(payType==="event"){
-        if(!pkgSnap||!pkgSnap.exists()) throw new Error("Event pass not found.");
-        const pd=pkgSnap.data();
-        if(pd.lineUserId!==state.lineProfile.userId) throw new Error("Pass does not belong to this account.");
-        if(pd.status!=="active") throw new Error("Pass is not active.");
-        const validUntil=pd.validUntil?.toDate?.();
-        if(!validUntil||validUntil<new Date()) throw new Error("Event pass has expired.");
-        if((pd.remainingMinutes||0)<60) throw new Error("This event pass has already been used.");
-        // Branch/resource scope — only enforced when the field exists on the pass.
-        if(pd.branchId && pd.branchId!==DEFAULT_BRANCH_ID) throw new Error("Event pass is for a different branch.");
-        if(pd.resourceId && pd.resourceId!==RESOURCE_ID)   throw new Error("Event pass is for a different resource.");
-        // Mon-Fri only.
-        const dow=getSelectedDate().getDay(); // 0=Sun..6=Sat
-        if(dow<1||dow>5) throw new Error("MONSTR Event Pass: Mon–Fri only.");
-        // No holidays.
-        if(holSnap?.exists?.() && holSnap.data().isHoliday===true) throw new Error("MONSTR Event Pass: holidays excluded.");
-        // Single use: deduct 60 → 0 (no status:"used" flip).
-        t.update(pkgRef,{
-          remainingMinutes: pd.remainingMinutes-60,
-          eventUsedAt:      serverTimestamp(),
-          updatedAt:        serverTimestamp(),
-        });
-      }
-
-      // ── Pass validation: OFF-PEAK + quota ─────────────────────
-      if(payType==="offpeak"){
-        if(!pkgSnap||!pkgSnap.exists()) throw new Error("Off-Peak Pass not found.");
-        const pd=pkgSnap.data();
-        if(pd.lineUserId!==state.lineProfile.userId) throw new Error("Pass does not belong to this account.");
-        if(pd.status!=="active") throw new Error("Pass is not active.");
-        const validUntil=pd.validUntil?.toDate?.();
-        if(!validUntil||validUntil<new Date()) throw new Error("Pass has expired.");
-
-        // Day/time restrictions (also enforced in UI but re-checked here).
-        const sel=getSelectedDate();
-        const dow=sel.getDay(); // 0=Sun..6=Sat
-        if(dow<1||dow>5) throw new Error("Off-Peak: Mon–Fri only.");
-        if(holSnap?.exists?.() && holSnap.data().isHoliday===true)
-          throw new Error("Off-Peak: holidays are excluded.");
-        const startH=parseInt(state.time,10);
-        if(startH<OFFPEAK.startHour||startH+1>OFFPEAK.endHour)
-          throw new Error("Off-Peak: 09:00–15:00 only.");
-
-        // Quota check (weekly + monthly) against per-period counters on the pass doc.
-        const weekKey=getISOWeekKey(sel);
-        const monthKey=getMonthKey(sel);
-        const wkUsage=pd.weeklyUsage||{};
-        const moUsage=pd.monthlyUsage||{};
-        const wkUsed=Number(wkUsage[weekKey])||0;
-        const moUsed=Number(moUsage[monthKey])||0;
-        const wkLimitMin=(Number(pd.weeklyLimitHours)||0)*60;
-        const moLimitMin=(Number(pd.monthlyLimitHours)||0)*60;
-        // If a limit is configured but no value is set, we treat it as "block until set" so
-        // booking can never silently bypass the quota. weeklyLimitHours/monthlyLimitHours
-        // are seeded by admin.html PACKAGES (5/20 for offpeak) at addPass time.
-        if(!wkLimitMin || !moLimitMin) throw new Error("Off-Peak quota is not configured on this pass. Contact staff.");
-        if(wkUsed+60>wkLimitMin) throw new Error(`Off-Peak weekly limit reached (${wkLimitMin/60} hrs).`);
-        if(moUsed+60>moLimitMin) throw new Error(`Off-Peak monthly limit reached (${moLimitMin/60} hrs).`);
-
-        // 2026-07 Off-Peak rules: hard TOTAL cap (16 hrs = totalMinutes 960)
-        // tracked via remainingMinutes — same mechanism as Ultra passes.
-        // Legacy passes without totalMinutes skip this (monthly cap governs).
-        const opHasTotal=Number(pd.totalMinutes)>0;
-        const opRemaining=Number(pd.remainingMinutes);
-        if(opHasTotal){
-          if(!Number.isFinite(opRemaining)) throw new Error("Off-Peak pass hours are not configured. Contact staff.");
-          if(opRemaining<60) throw new Error("Off-Peak Pass hours are used up.");
-        }
-
-        t.update(pkgRef,{
-          ...(opHasTotal?{ remainingMinutes: opRemaining-60 }:{}),
-          weeklyUsage:  { ...wkUsage,  [weekKey]:  wkUsed+60 },
-          monthlyUsage: { ...moUsage,  [monthKey]: moUsed+60 },
-          updatedAt:    serverTimestamp(),
-        });
-      }
-
-      // ── Writes ────────────────────────────────────────────────
-      t.set(bookingRef,{ ...bookingPayload, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
-      t.set(slotRef,{
-        bookingCode:code,
-        bookingId:bookingRef.id,
-        resourceId:RESOURCE_ID,
-        branchId:DEFAULT_BRANCH_ID,
-        date:dateISO,
-        hour:state.time,
-        bookingStatus:bookingPayload.bookingStatus,
-        paymentStatus:bookingPayload.paymentStatus,
-        expiresAt:expiresTS,
-      });
+    const result = await tryServerCreate({
+      dateISO:getSelectedDateISO(),
+      name,
+      phone,
+      note:$("bkNote").value.trim(),
+      voucherCode:($("bkVoucher")?.value||"").trim().toUpperCase(),
     });
-
-    state.currentBookingCode   = code;
-    state.currentBookingDocId  = bookingRef.id;
-    state.currentBookingData   = { ...bookingPayload, expiresAt };
-
-    // Fire-and-forget: notify admins of the new booking. Must not block or
-    // disrupt the customer flow — no await, no error surfaced.
-    if (window.notifyAdmins) {
-      window.notifyAdmins({
-        type: "new_booking_admin",
-        bookingCode: code,
-        customerName: name,
-        customerPhone: phone,
-        date: dateISO,
-        startTime: state.time,
-        endTime,
-        // Lets the template distinguish Pass bookings ("package" → confirmed,
-        // no slip coming) from single-use ("unpaid" → waiting for payment).
-        paymentStatus: bookingPayload.paymentStatus,
-        bookingType: bookingPayload.bookingType
-      });
-    }
-
-    if(isSingle){
-      state.paymentMode="booking";
-
-      // Save pending booking state in localStorage to survive potential page reloads
-      try {
-        localStorage.setItem("ut_pending_booking", JSON.stringify({
-          code: code,
-          docId: bookingRef.id,
-          expiresAt: expiresAt.getTime(),
-          date: dateISO,
-          startTime: state.time,
-          endTime: endTime,
-          price: singlePrice,
-          isLN: isLN
-        }));
-        console.log("[perf] Stored pending booking state in localStorage:", code);
-      } catch (err) {
-        console.warn("Failed to store pending booking in localStorage:", err);
-      }
-
-      showPaymentPanel(code, singlePrice, expiresAt, dateISO, `${state.time} – ${endTime}`, isLN);
-      showView("viewPayment");
-    } else {
-      // Refresh local eligibility so the buttons reflect the just-deducted pass state
-      // next time the user opens the booking view.
-      state.eligibility = { hasUltra:false, ultraPkg:null, hasOffpeak:false, offpeakPkg:null, hasEvent:false, eventPkg:null };
-      try { await checkEligibility(); } catch(_) { /* non-fatal */ }
-      showSuccess("✅",t("bookingConfirmed"),code,`${name} · ${dateISO} · ${state.time}–${endTime} · ${displayBookingType(bookingPayload.bookingType)}`);
-    }
+    if (result !== true && result !== "handled") showToast(t("bookingFailed"),true);
   } catch(e){
     console.error(e); showToast(e.message||t("bookingFailed"),true);
   } finally {
@@ -3335,6 +3109,17 @@ async function runSlipPrecheck(file,bookingDocId,bookingCode,bd){
   }
 }
 
+async function submitSlipState({isPass,url}){
+  const idToken=state.lineProfile.userId==="guest"?null:await protectedIdToken();
+  const payload=isPass
+    ? {action:"submit_pass_slip",purchaseId:state.currentPurchaseDocId,slipUrl:url,idToken:idToken||undefined,idempotencyKey:`slip-${crypto.randomUUID()}`}
+    : {action:"submit_slip",bookingId:state.currentBookingDocId,bookingCode:state.currentBookingCode,slipUrl:url,idToken:idToken||undefined,guestToken:state.currentGuestToken||undefined,idempotencyKey:`slip-${crypto.randomUUID()}`};
+  const res=await fetch("/api/slip-verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  const d=await res.json().catch(()=>({}));
+  if(!res.ok||!d.ok) throw new Error(d.error||"Slip submission failed");
+  return d;
+}
+
 // Submit slip
 $("submitSlipBtn").addEventListener("click", async()=>{
   const file=$("slipIn").files[0];
@@ -3363,11 +3148,10 @@ $("submitSlipBtn").addEventListener("click", async()=>{
 
     const url=await getDownloadURL(ref);
     console.log("Download URL received");
+    await submitSlipState({isPass,url});
 
     if(isPass){
-      const pRef=doc(db,"pass_purchases",state.currentPurchaseDocId);
-      await updateDoc(pRef,{ status:"pending_review", paymentStatus:"pending_review", slipUrl:url, slipUploadedAt:serverTimestamp(), updatedAt:serverTimestamp() });
-      console.log("Pass purchase updated");
+      console.log("Pass purchase updated by server");
       clearTimeout(warningTimer);
       // Fire-and-forget slip pre-check for the PASS purchase (Stage D): the
       // server hashes the slip, checks duplicates, and notifies admins itself
@@ -3376,41 +3160,9 @@ $("submitSlipBtn").addEventListener("click", async()=>{
       runSlipPrecheckPass(file, state.currentPurchaseDocId, code, state.currentPurchaseData||{});
       showSuccess("📨",t("slipReceived"),code,t("passPending"));
     } else {
-      // Phase B: the booking may hold hour + half slot segments — verify
-      // ownership of and update EVERY one, atomically with the booking doc.
       const bd=state.currentBookingData;
-      const bdDurRaw=Number(bd.durationMinutes);
-      const bdDur=(Number.isInteger(bdDurRaw)&&bdDurRaw>=30&&bdDurRaw%30===0)
-        ? Math.min(bdDurRaw,360)
-        : Math.min(Math.max(parseInt(bd.durationHours,10)||1,1),6)*60;
-      const slotIds=segmentsOfB(toMinB(bd.startTime),bdDur).map(s=>`${RESOURCE_ID}_${bd.date}_${toHHMMB(s.start).replace(":","")}`);
-      await runTransaction(db, async (t) => {
-        const bookingRef = doc(db, "bookings", state.currentBookingDocId);
-        const slotRefs = slotIds.map(id=>doc(db,"booking_slots",id));
-        const slotSnaps = await Promise.all(slotRefs.map(r=>t.get(r)));
-        for(const slotSnap of slotSnaps){
-          if (!slotSnap.exists()) {
-            throw new Error("Hold expired and slot has been rebooked.");
-          }
-          const slotData = slotSnap.data();
-          const ownsSlot = slotData.bookingId === state.currentBookingDocId || slotData.bookingCode === state.currentBookingCode;
-          if (!ownsSlot) {
-            throw new Error("Hold expired and slot has been rebooked.");
-          }
-        }
-        t.update(bookingRef, {
-          bookingStatus: "confirmed",
-          paymentStatus: "pending_review",
-          slipUrl: url,
-          slipUploadedAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-        slotRefs.forEach(r=>t.update(r, {
-          bookingStatus: "confirmed",
-          paymentStatus: "pending_review"
-        }));
-      });
-      console.log("Booking + slot updated");
+      state.currentBookingData={...bd,bookingStatus:"pending_review",paymentStatus:"pending_review",slipUrl:url};
+      console.log("Booking + slots updated by server");
       clearTimeout(warningTimer);
       
       // Clear recovered booking state from localStorage since it was successfully submitted
@@ -3461,6 +3213,7 @@ $("cancelBookingBtn").addEventListener("click", async()=>{
         bookingCode: state.currentBookingCode,
         lineUserId: state.lineProfile.userId,
         idToken: idToken || undefined,
+        guestToken: state.currentGuestToken || undefined,
       }),
     });
     const d = await res.json().catch(()=>({}));
@@ -3570,6 +3323,7 @@ async function openMyBookings() {
     myBookingsFullError();
     return;
   }
+  await protectedIdToken();
 
   $("myContent").innerHTML=`<div style="text-align:center;padding:32px"><div class="spinner" style="margin:0 auto 10px"></div><p style="color:var(--muted);font-size:.82rem">${t("loading")}</p></div>`;
 
@@ -3695,6 +3449,7 @@ function renderMyBookings(bookings, packages, purchases) {
 // Resume payment for pending booking from My Bookings
 window.resumeBookingPayment = async(docId)=>{
   try {
+    await protectedIdToken();
     const snap=await getDoc(doc(db,"bookings",docId));
     if(!snap.exists()) return;
     const b={id:snap.id,...snap.data()};
@@ -3729,6 +3484,7 @@ window.resumeBookingPayment = async(docId)=>{
 // Resume payment for pending pass purchase from My Bookings
 window.resumePassPayment = async(docId)=>{
   try {
+    await protectedIdToken();
     const snap=await getDoc(doc(db,"pass_purchases",docId));
     if(!snap.exists()) return;
     const p={id:snap.id,...snap.data()};

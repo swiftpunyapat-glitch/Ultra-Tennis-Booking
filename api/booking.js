@@ -7,16 +7,17 @@
 //       validates holiday/promo/voucher, and writes bookings + booking_slots
 //       (+ voucher.usedCount++) in ONE transaction with a double-booking guard.
 //
-// Public (no session) — mirrors the existing client-direct create threat model;
-// the win is that PRICE is now computed server-side. Passes (ultra/offpeak/event)
-// are NOT handled here — they stay on the legacy client path.
+// Standard guest creation is public but server-validated; signed customer,
+// pass, cancellation and protected-read actions authenticate in their handlers.
 // ════════════════════════════════════════════════════════════════════
 
 import {
   getAdminDb, getAdminAuth, writeAuditLog,
-  issueGuestToken, verifyGuestToken, revokeGuestAccess,
+  prepareGuestAccess, verifyGuestToken, revokeGuestAccess,
+  GUEST_ACCESS_COLLECTION, GUEST_BOOKING_ID_MAX_LENGTH, GUEST_TOKEN_MAX_LENGTH,
   checkRateLimit, RATE_LIMITS, clientIp,
   idempotencyRef, fingerprintOf, readIdempotencyInTx, writeIdempotencyInTx,
+  isValidIdempotencyKey,
 } from './_lib/firebase-admin.js';
 import { computeQuote } from './_lib/pricing.js';
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
@@ -204,6 +205,17 @@ function bookingSegments(booking) {
   for (let i = 0; i < nH && h0 + i < 24; i++) segs.push({ start: `${String(h0 + i).padStart(2, '0')}:00`, span: 60 });
   return segs;
 }
+
+function isOccupiedSlot(slot, nowMs = Date.now()) {
+  if (!slot) return false;
+  if (slot.bookingStatus === 'confirmed' || slot.bookingStatus === 'pending_review') return true;
+  if (['paid', 'package', 'pending_review'].includes(slot.paymentStatus)) return true;
+  if (slot.bookingStatus === 'pending_payment') {
+    const exp = slot.expiresAt?.toMillis?.() ?? 0;
+    return !exp || exp > nowMs;
+  }
+  return false;
+}
 function genBookingCode() {
   const t = Date.now().toString(36).toUpperCase().slice(-5);
   const r = Math.random().toString(36).toUpperCase().slice(2, 4);
@@ -291,8 +303,12 @@ function writeSlotDoc(t, db, slotId, publicFields, claimFields) {
     bookingId:   claimFields.bookingId,
     bookingCode: claimFields.bookingCode,
     ...(claimFields.coachId ? { coachId: claimFields.coachId } : {}),
+    branchId: publicFields.branchId || DEFAULT_BRANCH_ID,
+    resourceId: publicFields.resourceId || RESOURCE_ID,
+    status: publicFields.bookingStatus,
     date: publicFields.date, hour: publicFields.hour,
     slotSpanMinutes: publicFields.slotSpanMinutes ?? 60,
+    createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   });
   return publicRef;
@@ -328,8 +344,13 @@ function guestBookingProjection(id, b) {
 async function handleGuestBooking(req, res, body) {
   // RB-03/RB-06: access documents are keyed by bookingId, so the caller
   // supplies both. The token proves entitlement; the id only locates.
-  const bookingId = typeof body.bookingId === 'string' ? body.bookingId.trim() : '';
-  const token     = typeof body.guestToken === 'string' ? body.guestToken.trim() : '';
+  const bookingIdRaw = typeof body.bookingId === 'string' ? body.bookingId : '';
+  const tokenRaw     = typeof body.guestToken === 'string' ? body.guestToken : '';
+  if (bookingIdRaw.length > GUEST_BOOKING_ID_MAX_LENGTH || tokenRaw.length > GUEST_TOKEN_MAX_LENGTH) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Credential is too long' });
+  }
+  const bookingId = bookingIdRaw.trim();
+  const token     = tokenRaw.trim();
   const ip        = clientIp(req);
 
   let db;
@@ -338,9 +359,9 @@ async function handleGuestBooking(req, res, body) {
 
   if (!bookingId || !token) return res.status(400).json({ ok: false, code: 'TOKEN', error: 'Missing credentials' });
 
-  // Read limiter first, keyed on token+IP (GT-02: 30 / 15 min).
+  // Bounded key: arbitrary tokens for one IP+booking consume the same bucket.
   const readGate = await checkRateLimit(db, {
-    bucket: 'guestRead', key: `${token}|${ip}`, ...RATE_LIMITS.guestRead,
+    bucket: 'guestRead', key: `${ip}|${bookingId}`, ...RATE_LIMITS.guestRead,
   });
   if (!readGate.allowed) {
     res.setHeader('Retry-After', String(readGate.retryAfterSec));
@@ -352,7 +373,7 @@ async function handleGuestBooking(req, res, body) {
     // Invalid attempts are counted separately and trigger the 60-minute
     // lockout (GT-02). Keyed on IP so guessing is throttled per source.
     const bad = await checkRateLimit(db, {
-      bucket: 'guestInvalid', key: `${ip}`, ...RATE_LIMITS.guestInvalid,
+      bucket: 'guestInvalid', key: `${ip}|${bookingId}`, ...RATE_LIMITS.guestInvalid,
     });
     if (!bad.allowed) {
       res.setHeader('Retry-After', String(bad.retryAfterSec));
@@ -380,11 +401,10 @@ export default async function handler(req, res) {
   if (body.action === 'guest_booking') return handleGuestBooking(req, res, body);
 
   if (body.action === 'price_quote')   return handlePriceQuote(res, body);
-  if (body.action === 'create')        return handleCreate(res, body);
+  if (body.action === 'create')        return handleCreate(req, res, body);
   // Server-side pass booking (Security Hotfix 2026-08-04 — closes SEC-02).
-  // Gated by system_settings/features.useServerPassBooking; while that flag
-  // is OFF the client keeps using its legacy transaction and this endpoint
-  // simply refuses, so deploying it changes nothing until we switch over.
+  // Gated by system_settings/features.useServerPassBooking. The cutover client
+  // has no direct-write fallback, so a disabled action fails closed.
   if (body.action === 'create_pass_booking') {
     let db;
     try { db = getAdminDb(); }
@@ -561,12 +581,13 @@ async function handlePriceQuote(res, body) {
 }
 
 // ── create — server-authoritative single-use booking (Stage 2) ──────
-async function handleCreate(res, body) {
+async function handleCreate(req, res, body) {
   const date         = typeof body.date === 'string' ? body.date.trim() : '';
   const startTime    = typeof body.startTime === 'string' ? body.startTime.trim() : '';
   const customerName = typeof body.customerName === 'string' ? body.customerName.trim() : '';
   const customerPhone= typeof body.customerPhone === 'string' ? body.customerPhone.trim() : '';
-  const lineUserId   = typeof body.lineUserId === 'string' && body.lineUserId ? body.lineUserId : 'guest';
+  const assertedLineUserId = typeof body.lineUserId === 'string' && body.lineUserId ? body.lineUserId : 'guest';
+  const idToken      = typeof body.idToken === 'string' ? body.idToken.trim() : '';
   const lineDisplayName = typeof body.lineDisplayName === 'string' ? body.lineDisplayName : '';
   const customerNote = typeof body.customerNote === 'string' ? body.customerNote.slice(0, 500) : '';
   const voucherCode  = typeof body.voucherCode === 'string' && body.voucherCode.trim() ? body.voucherCode.trim() : null;
@@ -590,6 +611,17 @@ async function handleCreate(res, body) {
   let db;
   try { db = getAdminDb(); }
   catch (e) { console.error('[create] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
+
+  // Authenticated customer identity is server-derived. Without an ID token
+  // this is a guest booking regardless of a client-stated lineUserId.
+  let lineUserId = 'guest';
+  if (idToken) {
+    try { lineUserId = (await getAdminAuth().verifyIdToken(idToken)).uid; }
+    catch { return res.status(401).json({ ok: false, code: 'AUTH', error: 'Session expired' }); }
+    if (assertedLineUserId !== 'guest' && assertedLineUserId !== lineUserId) {
+      return res.status(409).json({ ok: false, code: 'IDENTITY_MISMATCH', error: 'Authenticated account does not match request' });
+    }
+  }
 
   if (hasHalf && !(await halfHourEnabled(db))) {
     return res.status(409).json({ ok: false, code: 'SHAPE', error: 'ยังไม่เปิดจองครึ่งชั่วโมง' });
@@ -665,6 +697,13 @@ async function handleCreate(res, body) {
   ]);
   const availRefs   = touchedHours.map(H => db.collection('available_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:00`)));
   const voucherRef  = quote.voucherApplied ? db.collection('vouchers').doc(voucherCode) : null;
+  const bookingEndMs = Date.parse(`${date}T${endTime}:00+07:00`);
+  const guestAccess = lineUserId === 'guest'
+    ? prepareGuestAccess({ bookingEndMs: Number.isFinite(bookingEndMs) ? bookingEndMs : null, nowMs })
+    : null;
+  const guestAccessRef = guestAccess
+    ? db.collection(GUEST_ACCESS_COLLECTION).doc(bookingRef.id)
+    : null;
 
   try {
     await db.runTransaction(async (t) => {
@@ -687,10 +726,9 @@ async function handleCreate(res, body) {
         const docSpan = sd.slotSpanMinutes === 30 ? 30 : 60;   // legacy docs = full hour
         const overlaps = needCells.some(c => c >= docMin && c < docMin + docSpan);
         if (!overlaps) return;
-        if (sd.bookingStatus === 'confirmed') throw new Error('SLOT_TAKEN');
-        if (sd.bookingStatus === 'pending_payment') {
-          const exp = sd.expiresAt?.toMillis?.() ?? 0;
-          if (!exp || exp > nowMs) throw new Error('SLOT_HELD');
+        if (isOccupiedSlot(sd, nowMs)) {
+          throw new Error(sd.bookingStatus === 'pending_payment' && sd.paymentStatus !== 'pending_review'
+            ? 'SLOT_HELD' : 'SLOT_TAKEN');
         }
       });
 
@@ -750,6 +788,7 @@ async function handleCreate(res, body) {
           expiresAt: paymentExpiresAt,
         }, { bookingId: bookingRef.id, bookingCode });
       });
+      if (guestAccessRef) t.create(guestAccessRef, guestAccess.record);
     });
   } catch (e) {
     const msg = e.message || '';
@@ -761,31 +800,15 @@ async function handleCreate(res, body) {
       return res.status(409).json({ ok: false, code: 'VOUCHER', error: mapVoucherReason(msg.slice(8)) });
     }
     console.error('[create] tx:', msg);
-    return res.status(500).json({ ok: false, error: 'Failed to create booking' }); // no code → client may fall back
+    return res.status(500).json({ ok: false, error: 'Failed to create booking' });
   }
 
   console.log(`[create] ${bookingCode} ${quote.pricingType} ${durationMinutes}min ฿${finalPrice}${quote.voucherApplied ? ' voucher=' + voucherCode : ''}`);
 
   // ── Guest capability token (Security Hotfix 2026-08-04) ─────────────
-  // Guests have no Firebase Auth, so once the hardened rules land they can
-  // no longer read their own booking from Firestore. Hand them a scoped
-  // token here — this is the ONLY time the raw value exists. Never logged.
-  // Non-fatal: the booking already succeeded, so a token failure must not
-  // turn into a booking failure.
-  let guestAccess = null;
-  if (lineUserId === 'guest') {
-    try {
-      const endMs = Date.parse(`${date}T${endTime}:00+07:00`);
-      guestAccess = await issueGuestToken(db, {
-        bookingId: bookingRef.id,
-        bookingEndMs: Number.isFinite(endMs) ? endMs : null,
-        issuedFor: 'guest_booking',
-      });
-    } catch (e) {
-      console.error('[create] guest token issue failed (non-fatal):', e.message);
-    }
-  }
-
+  // Guests have no Firebase Auth, so hand them the scoped token whose hash
+  // committed atomically with the booking. This is the only response that
+  // contains the raw value; it is never logged or persisted.
   return res.status(200).json({
     ok: true,
     paymentExpiresAt: paymentExpiresAt.toDate().toISOString(),
@@ -819,8 +842,14 @@ async function handleCreate(res, body) {
 // customer. Does NOT touch the admin reject/refund flow, and passes/events
 // (confirmed/package) are excluded.
 async function handleCancelPending(req, res, body) {
-  const bookingId   = typeof body.bookingId === 'string' ? body.bookingId.trim() : '';
-  const bookingCode = typeof body.bookingCode === 'string' ? body.bookingCode.trim() : '';
+  const bookingIdRaw = typeof body.bookingId === 'string' ? body.bookingId : '';
+  const bookingCodeRaw = typeof body.bookingCode === 'string' ? body.bookingCode : '';
+  const guestTokenRaw = typeof body.guestToken === 'string' ? body.guestToken : '';
+  if (bookingIdRaw.length > GUEST_BOOKING_ID_MAX_LENGTH || bookingCodeRaw.length > 128 || guestTokenRaw.length > GUEST_TOKEN_MAX_LENGTH) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Credential is too long' });
+  }
+  const bookingId   = bookingIdRaw.trim();
+  const bookingCode = bookingCodeRaw.trim();
   const lineUserId  = typeof body.lineUserId === 'string' ? body.lineUserId : '';
   const idToken     = typeof body.idToken === 'string' && body.idToken ? body.idToken : null;
   if (!bookingId)   return res.status(400).json({ ok: false, error: 'Missing bookingId' });
@@ -839,9 +868,6 @@ async function handleCancelPending(req, res, body) {
   } catch (e) { console.error('[cancel_pending] read:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
 
   // ── Ownership ─────────────────────────────────────────────────────
-  if (bookingCode !== booking.bookingCode) {
-    return res.status(403).json({ ok: false, error: 'ยกเลิกไม่ได้ (ไม่ใช่การจองของคุณ)' });
-  }
   let owner = false;
 
   // Path 1 — LINE customer. Server-verified Firebase ID token only.
@@ -859,10 +885,10 @@ async function handleCancelPending(req, res, body) {
 
   // Path 2 — guest capability token, rate-limited as a mutation
   // (GT-02: 5 / 15 min per token+IP).
-  const guestToken = typeof body.guestToken === 'string' ? body.guestToken.trim() : '';
+  const guestToken = guestTokenRaw.trim();
   if (!owner && guestToken) {
     const gate = await checkRateLimit(db, {
-      bucket: 'guestMutation', key: `${guestToken}|${clientIp(req)}`, ...RATE_LIMITS.guestMutation,
+      bucket: 'guestMutation', key: `${clientIp(req)}|${bookingId}`, ...RATE_LIMITS.guestMutation,
     });
     if (!gate.allowed) {
       res.setHeader('Retry-After', String(gate.retryAfterSec));
@@ -874,7 +900,21 @@ async function handleCancelPending(req, res, body) {
 
   // No third path. body.lineUserId is accepted as a request field for
   // backward compatibility with older clients but carries no authority.
-  if (!owner) return res.status(403).json({ ok: false, error: 'ยกเลิกไม่ได้ (ยืนยันตัวตนไม่ผ่าน)' });
+  if (!owner) {
+    const bad = await checkRateLimit(db, {
+      bucket: 'guestInvalid', key: `${clientIp(req)}|${bookingId}`, ...RATE_LIMITS.guestInvalid,
+    });
+    if (!bad.allowed) {
+      res.setHeader('Retry-After', String(bad.retryAfterSec));
+      return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'Too many attempts' });
+    }
+    return res.status(403).json({ ok: false, error: 'ยกเลิกไม่ได้ (ยืนยันตัวตนไม่ผ่าน)' });
+  }
+
+  // bookingCode is a client assertion, checked only after authentication.
+  if (bookingCode !== booking.bookingCode) {
+    return res.status(403).json({ ok: false, error: 'ยกเลิกไม่ได้ (ไม่ใช่การจองของคุณ)' });
+  }
 
   // ── Preconditions (customer may only cancel an unpaid, not-yet-expired hold) ──
   if (booking.bookingStatus !== 'pending_payment') {
@@ -1025,6 +1065,32 @@ async function handleCancelPending(req, res, body) {
 
 const PASS_PAY_TYPES   = ['ultra', 'offpeak', 'event'];
 const OFFPEAK_HOURS    = { startHour: 9, endHour: 15 };
+// OR-01: the stored package type, never the request assertion, selects the
+// entitlement policy. These are every room-pass packageType currently issued
+// or recognized by index.html/admin-user-action.js. Coaching types are
+// intentionally absent and unknown values fail closed.
+export const PACKAGE_TYPE_TO_ENTITLEMENT = Object.freeze({
+  ultra_starter_3: 'ultra',
+  ultra_pass_10: 'ultra',
+  ultra_pass_20: 'ultra',
+  ultra_10: 'ultra',
+  ultra_20: 'ultra',
+  offpeak: 'offpeak',
+  monstr_event_pass: 'event',
+});
+
+export function entitlementTypeForPackage(packageType) {
+  return PACKAGE_TYPE_TO_ENTITLEMENT[String(packageType || '')] || null;
+}
+
+export async function readHolidayInTransaction(transaction, holidayRef) {
+  try {
+    const snap = await transaction.get(holidayRef);
+    return snap.exists && snap.data().isHoliday === true;
+  } catch {
+    throw new Error('HOLIDAY_CHECK_UNAVAILABLE');
+  }
+}
 
 // ISO-8601 week key, ported 1:1 from index.html:1482 so quota buckets stay
 // identical across the old and new path during migration.
@@ -1046,7 +1112,7 @@ const dowOfDate  = (dateISO) => {
 // Validates a pass against the booking context and returns the package
 // mutation to apply. Pure apart from the values passed in, so the rules are
 // readable in one place. Throws Error(code) — mapped to Thai text by caller.
-function validatePassAndBuildUpdate({ payType, pkg, uid, dateISO, startTime, durationMinutes, isHoliday, nowMs }) {
+function validatePassAndBuildUpdate({ entitlementType, pkg, uid, dateISO, startTime, durationMinutes, isHoliday, nowMs }) {
   if (pkg.lineUserId !== uid)  throw new Error('PASS_NOT_OWNED');
   if (pkg.status !== 'active') throw new Error('PASS_INACTIVE');
 
@@ -1057,12 +1123,12 @@ function validatePassAndBuildUpdate({ payType, pkg, uid, dateISO, startTime, dur
   const dow       = dowOfDate(dateISO);
   const startH    = parseInt(String(startTime).slice(0, 2), 10);
 
-  if (payType === 'ultra') {
+  if (entitlementType === 'ultra') {
     if (!Number.isFinite(remaining) || remaining < durationMinutes) throw new Error('PASS_INSUFFICIENT');
     return { remainingMinutes: remaining - durationMinutes };
   }
 
-  if (payType === 'event') {
+  if (entitlementType === 'event') {
     if (!Number.isFinite(remaining) || remaining < durationMinutes) throw new Error('PASS_INSUFFICIENT');
     if (pkg.branchId   && pkg.branchId   !== DEFAULT_BRANCH_ID) throw new Error('PASS_WRONG_BRANCH');
     if (pkg.resourceId && pkg.resourceId !== RESOURCE_ID)       throw new Error('PASS_WRONG_RESOURCE');
@@ -1072,6 +1138,7 @@ function validatePassAndBuildUpdate({ payType, pkg, uid, dateISO, startTime, dur
   }
 
   // ── offpeak: day/time window + weekly/monthly quota + total cap ──
+  if (entitlementType !== 'offpeak') throw new Error('PASS_TYPE_UNSUPPORTED');
   if (dow < 1 || dow > 5) throw new Error('PASS_WEEKDAY_ONLY');
   if (isHoliday)          throw new Error('PASS_NO_HOLIDAY');
   if (startH < OFFPEAK_HOURS.startHour || startH + (durationMinutes / 60) > OFFPEAK_HOURS.endHour) {
@@ -1144,7 +1211,9 @@ async function handleCreatePassBooking(res, body) {
   if (!packageId)     return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'packageId is required' });
   // RB-02: mandatory. A pass booking spends real balance; a retry without a
   // key would book twice and deduct twice.
-  if (!idemKey)       return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey is required' });
+  if (!isValidIdempotencyKey(idemKey)) {
+    return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey has invalid format or length' });
+  }
   if (!customerName)  return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerName is required' });
   if (!customerPhone) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'customerPhone is required' });
 
@@ -1176,10 +1245,6 @@ async function handleCreatePassBooking(res, body) {
   }
 
   let isHoliday = false;
-  try {
-    const h = await db.collection('holidays').doc(date).get();
-    isHoliday = h.exists && h.data().isHoliday === true;
-  } catch (e) { console.warn('[create_pass_booking] holiday read failed → treating as non-holiday:', e.message); }
 
   const endTime          = endTimeAfterMin(startTime, durationMinutes);
   const bookingCode      = genBookingCode();
@@ -1195,13 +1260,18 @@ async function handleCreatePassBooking(res, body) {
   ]);
   const availRefs  = touchedHours.map(H => db.collection('available_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:00`)));
   const pkgRef     = db.collection('customer_packages').doc(packageId);
+  const holidayRef = db.collection('holidays').doc(date);
 
   // RB-02: the idempotency record is read and written INSIDE the booking
   // transaction, so the record and the booking commit or roll back together.
   // The fingerprint covers everything that defines "the same request" —
   // reusing a key for a different booking is a client bug, not a replay.
-  const idemRef  = idempotencyRef(db, idemKey, 'create_pass_booking');
-  const idemFp   = fingerprintOf({ uid, payType, packageId, date, startTime, durationMinutes });
+  const idemScope = `create_pass_booking:${uid}`;
+  const idemRef  = idempotencyRef(db, idemKey, idemScope);
+  const idemFp   = fingerprintOf({
+    uid, payType, packageId, date, startTime, durationMinutes,
+    customerName, customerPhone, customerNote, lineDisplayName,
+  });
   const ledgerRef = db.collection('customer_package_logs').doc();
 
   let pkgSnapshot = null;
@@ -1230,10 +1300,9 @@ async function handleCreatePassBooking(res, body) {
         const docSpan = sd.slotSpanMinutes === 30 ? 30 : 60;
         const overlaps = needCells.some(c => c >= docMin && c < docMin + docSpan);
         if (!overlaps) return;
-        if (sd.bookingStatus === 'confirmed') throw new Error('SLOT_TAKEN');
-        if (sd.bookingStatus === 'pending_payment') {
-          const exp = sd.expiresAt?.toMillis?.() ?? 0;
-          if (!exp || exp > nowMs) throw new Error('SLOT_HELD');
+        if (isOccupiedSlot(sd, nowMs)) {
+          throw new Error(sd.bookingStatus === 'pending_payment' && sd.paymentStatus !== 'pending_review'
+            ? 'SLOT_HELD' : 'SLOT_TAKEN');
         }
       });
 
@@ -1241,10 +1310,21 @@ async function handleCreatePassBooking(res, body) {
       const pkg = pkgSnap.data();
       pkgSnapshot = pkg;
 
+      const entitlementType = entitlementTypeForPackage(pkg.packageType);
+      if (!entitlementType) throw new Error('PASS_TYPE_UNSUPPORTED');
+      if (payType !== entitlementType) throw new Error('PASS_TYPE_MISMATCH');
+
+      // OR-02: restricted-entitlement holiday state is read in the same
+      // transaction that spends the package and creates the booking.
+      isHoliday = false;
+      if (entitlementType === 'offpeak' || entitlementType === 'event') {
+        isHoliday = await readHolidayInTransaction(t, holidayRef);
+      }
+
       // Re-validated INSIDE the transaction so a concurrent booking cannot
       // spend the same minutes twice.
       const pkgUpdate = validatePassAndBuildUpdate({
-        payType, pkg, uid, dateISO: date, startTime, durationMinutes, isHoliday, nowMs,
+        entitlementType, pkg, uid, dateISO: date, startTime, durationMinutes, isHoliday, nowMs,
       });
 
       t.set(bookingRef, {
@@ -1265,7 +1345,7 @@ async function handleCreatePassBooking(res, body) {
         packageId, packageType: pkg.packageType, packageName: pkg.packageName || pkg.packageType,
         usedPackageId: packageId, usedPackageType: pkg.packageType, usedPackageName: pkg.packageName || pkg.packageType,
         packageMinutesUsed: durationMinutes,
-        ...(payType === 'event' ? { isEventBooking: true } : {}),
+        ...(entitlementType === 'event' ? { isEventBooking: true } : {}),
         bookingStatus: 'confirmed', paymentStatus: 'package',
         paymentExpiresAt: null,
         slipUrl: null, slipUploadedAt: null, cancelReason: null,
@@ -1317,7 +1397,7 @@ async function handleCreatePassBooking(res, body) {
       // Response snapshot written in the same commit — a retry can never
       // observe a record without one (RB-09).
       writeIdempotencyInTx(t, idemRef, {
-        scope: 'create_pass_booking',
+        scope: idemScope,
         fingerprint: idemFp,
         response: buildPassBookingResponse({
           bookingId: bookingRef.id, bookingCode, date, startTime, endTime,
@@ -1335,6 +1415,15 @@ async function handleCreatePassBooking(res, body) {
         ok: false, code: 'IDEMPOTENCY_CONFLICT',
         error: 'idempotencyKey ถูกใช้กับคำขออื่นแล้ว',
       });
+    }
+    if (msg === 'PASS_TYPE_MISMATCH') {
+      return res.status(409).json({ ok: false, code: 'PASS_TYPE_MISMATCH', error: 'Stored package type does not match requested payType' });
+    }
+    if (msg === 'PASS_TYPE_UNSUPPORTED') {
+      return res.status(409).json({ ok: false, code: 'PASS_TYPE_UNSUPPORTED', error: 'Stored package type is not valid for room booking' });
+    }
+    if (msg === 'HOLIDAY_CHECK_UNAVAILABLE') {
+      return res.status(503).json({ ok: false, code: 'HOLIDAY_CHECK_UNAVAILABLE', error: 'Holiday validation is temporarily unavailable' });
     }
     if (msg.startsWith('SLOT_')) {
       const m = { SLOT_NOT_OPEN: 'ช่องเวลานี้ปิดรับจองแล้ว', SLOT_TAKEN: 'ช่องเวลานี้เพิ่งถูกจอง', SLOT_HELD: 'ช่องเวลานี้ถูกจองค้างอยู่ ลองใหม่อีกครั้ง' };
@@ -1373,7 +1462,7 @@ async function handleCreatePassBooking(res, body) {
 // stored idempotency snapshot can never drift apart.
 function buildPassBookingResponse({
   bookingId, bookingCode, date, startTime, endTime, slotIds, durationMinutes,
-  packageId, packageName, uid, customerName, customerPhone, customerNote,
+  packageId, packageName,
 }) {
   return {
     ok: true,
@@ -1386,7 +1475,6 @@ function buildPassBookingResponse({
       pricingType: 'package',
       bookingStatus: 'confirmed', paymentStatus: 'package',
       packageId, packageName: packageName ?? null,
-      lineUserId: uid, customerName, customerPhone, customerNote,
     },
   };
 }
@@ -1536,12 +1624,7 @@ async function handleCoachSlots(res, body) {
     const nowMs = Date.now();
     const roomLive = new Set(slotSnap.docs.filter(d => {
       const sd = d.data();
-      if (sd.bookingStatus === 'confirmed') return true;
-      if (sd.bookingStatus === 'pending_payment') {
-        const exp = sd.expiresAt?.toMillis?.() ?? 0;
-        return exp > nowMs;
-      }
-      return false;
+      return isOccupiedSlot(sd, nowMs);
     }).map(d => d.data().hour));
 
     const hours = [];
@@ -1691,10 +1774,9 @@ async function handleCreateCoachLesson(res, body) {
       if (!availSnap.exists || availSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
       if (slotSnap.exists) {
         const sd = slotSnap.data();
-        if (sd.bookingStatus === 'confirmed') throw new Error('SLOT_TAKEN');
-        if (sd.bookingStatus === 'pending_payment') {
-          const exp = sd.expiresAt?.toMillis?.() ?? 0;
-          if (!exp || exp > nowMs) throw new Error('SLOT_HELD');
+        if (isOccupiedSlot(sd, nowMs)) {
+          throw new Error(sd.bookingStatus === 'pending_payment' && sd.paymentStatus !== 'pending_review'
+            ? 'SLOT_HELD' : 'SLOT_TAKEN');
         }
       }
 
