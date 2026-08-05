@@ -12,6 +12,18 @@ import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 
 export function getAdminDb() {
   if (!getApps().length) {
+    // Emulator path (SR-01). When FIRESTORE_EMULATOR_HOST is set the SDK
+    // talks to a local emulator and no credential is used or accepted.
+    // Demanding a service account here made the emulator unusable, which
+    // made the hotfix's entire test gate impossible to run.
+    //
+    // This cannot leak into production: the variable is never set there, and
+    // if it somehow were, the SDK would try to reach a local emulator that
+    // does not exist and fail loudly rather than redirect live traffic.
+    if (process.env.FIRESTORE_EMULATOR_HOST) {
+      initializeApp({ projectId: process.env.GCLOUD_PROJECT || 'demo-emulator' });
+      return getFirestore();
+    }
     const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
     if (!raw) throw new Error('FIREBASE_SERVICE_ACCOUNT env var not set');
     let sa;

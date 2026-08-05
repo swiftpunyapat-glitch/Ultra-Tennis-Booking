@@ -1,0 +1,6 @@
+node_modules/
+firebase.json
+firestore.rules.test
+firestore-debug.log
+ui-debug.log
+*.log
