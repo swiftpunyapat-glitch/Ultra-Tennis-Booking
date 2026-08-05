@@ -149,6 +149,21 @@ describe('Single request writes one of everything', () => {
     expect(claim.createdAt).toBeTruthy();
     expect(claim.updatedAt).toBeTruthy();
   });
+
+  test('a released pre-fix package ghost does not block the slot', async () => {
+    const id = `room1_${DATE}_1000`;
+    await db.collection('booking_slots').doc(id).set({
+      resourceId:'room1',branchId:'ladprao1',date:DATE,hour:START,slotSpanMinutes:60,
+      bookingStatus:'rescheduled',paymentStatus:'package',expiresAt:null,
+    });
+    const res = await call(baseBody({ idempotencyKey:'k-released-package-ghost' }));
+    expect(res.statusCode).toBe(200);
+    expect((await db.collection('booking_slots').doc(id).get()).data()).toMatchObject({
+      bookingStatus:'confirmed',paymentStatus:'package',
+    });
+    expect((await db.collection('booking_slot_claims').doc(id).get()).exists).toBe(true);
+    expect(await balance()).toBe(540);
+  });
 });
 
 describe('OR-01 stored package type is authoritative', () => {

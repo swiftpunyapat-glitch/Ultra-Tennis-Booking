@@ -31,6 +31,32 @@ async function call(handler,body,who){const r=makeRes();await handler(makeReq(bo
 const slotId=t=>`room1_${DATE}_${t.replace(':','')}`;
 async function open(t){await db.collection('available_slots').doc(slotId(t)).set({resourceId:'room1',branchId:'ladprao1',date:DATE,startTime:t,endTime:`${String(Number(t.slice(0,2))+1).padStart(2,'0')}:00`,status:'open'});}
 
+async function seedUltraPassBooking(time,{bookingId=`pass_${time.replace(':','')}`,packageId=`pkg_${time.replace(':','')}`}={}){
+  await open(time);
+  const end=`${String(Number(time.slice(0,2))+1).padStart(2,'0')}:00`;
+  const code=`PASS${time.replace(':','')}`;
+  await db.collection('customer_packages').doc(packageId).set({
+    branchId:'ladprao1',lineUserId:'UPASS1',packageType:'ultra_pass_10',packageName:'Ultra Pass 10 Hours',
+    remainingMinutes:540,totalMinutes:600,status:'active',
+  });
+  await db.collection('bookings').doc(bookingId).set({
+    bookingCode:code,resourceId:'room1',branchId:'ladprao1',bookingSlotIds:[slotId(time)],
+    bookingType:'Ultra Pass 10 Hours',lineUserId:'UPASS1',customerName:'Pass User',customerPhone:'0800000001',
+    date:DATE,startTime:time,endTime:end,durationMinutes:60,durationHours:1,
+    packageId,usedPackageId:packageId,packageType:'ultra_pass_10',packageName:'Ultra Pass 10 Hours',
+    packageMinutesUsed:60,createdVia:'server_pass',bookingStatus:'confirmed',paymentStatus:'package',
+  });
+  await db.collection('booking_slots').doc(slotId(time)).set({
+    resourceId:'room1',branchId:'ladprao1',date:DATE,hour:time,slotSpanMinutes:60,
+    bookingStatus:'confirmed',paymentStatus:'package',expiresAt:null,
+  });
+  await db.collection('booking_slot_claims').doc(slotId(time)).set({
+    bookingId,bookingCode:code,branchId:'ladprao1',resourceId:'room1',status:'confirmed',
+    date:DATE,hour:time,slotSpanMinutes:60,
+  });
+  return {bookingId,packageId,code};
+}
+
 async function wipe(){
   for(const c of ['bookings','booking_slots','booking_slot_claims','available_slots','holidays','customer_packages','customer_package_logs','registered_users','audit_logs']){
     const s=await db.collection(c).get();await Promise.all(s.docs.map(d=>d.ref.delete()));
@@ -229,6 +255,56 @@ describe('admin operational mutation matrix',()=>{
     const assigned=await call(accountingHandler,{operation:'reschedule_assign',bookingId,newDate:DATE,newStartTime:'11:00'},'Staff');
     expect(assigned.statusCode).toBe(200);
     expect((await db.collection('booking_slot_claims').doc(slotId('11:00')).get()).data().bookingId).toBe(bookingId);
+  });
+
+  test('Ultra Pass reschedule removes the old package slot and does not alter pass minutes',async()=>{
+    const {bookingId,packageId}=await seedUltraPassBooking('10:00');
+    await open('11:00');
+    const moved=await call(accountingHandler,{operation:'reschedule_assign',bookingId,newDate:DATE,newStartTime:'11:00'},'Art');
+    expect(moved.statusCode).toBe(200);
+    expect((await db.collection('booking_slots').doc(slotId('10:00')).get()).exists).toBe(false);
+    expect((await db.collection('booking_slot_claims').doc(slotId('10:00')).get()).exists).toBe(false);
+    expect((await db.collection('booking_slot_claims').doc(slotId('11:00')).get()).data().bookingId).toBe(bookingId);
+    expect((await db.collection('customer_packages').doc(packageId).get()).data().remainingMinutes).toBe(540);
+  });
+
+  test('Ultra Pass pending-reschedule also removes its old package slot',async()=>{
+    const {bookingId,packageId}=await seedUltraPassBooking('10:00');
+    const parked=await call(accountingHandler,{operation:'reschedule_park',bookingId},'Art');
+    expect(parked.statusCode).toBe(200);
+    expect((await db.collection('booking_slots').doc(slotId('10:00')).get()).exists).toBe(false);
+    expect((await db.collection('booking_slot_claims').doc(slotId('10:00')).get()).exists).toBe(false);
+    expect((await db.collection('customer_packages').doc(packageId).get()).data().remainingMinutes).toBe(540);
+  });
+
+  test('Ultra Pass cancel restores minutes once and releases public/private slot state',async()=>{
+    const {bookingId,packageId}=await seedUltraPassBooking('12:00');
+    const cancelled=await call(accountingHandler,{operation:'reject_payment',bookingId,reason:'customer requested'},'Art');
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.body.booking.restoredMinutes).toBe(60);
+    expect((await db.collection('customer_packages').doc(packageId).get()).data().remainingMinutes).toBe(600);
+    expect((await db.collection('booking_slots').doc(slotId('12:00')).get()).exists).toBe(false);
+    expect((await db.collection('booking_slot_claims').doc(slotId('12:00')).get()).exists).toBe(false);
+    expect((await db.collection('bookings').doc(bookingId).get()).data()).toMatchObject({
+      bookingStatus:'cancelled',paymentStatus:'package',packageMinutesRestored:60,
+    });
+    const logs=await db.collection('customer_package_logs').where('bookingId','==',bookingId).get();
+    expect(logs.docs.map(d=>d.data().action)).toContain('restore_minutes');
+
+    const repeated=await call(accountingHandler,{operation:'reject_payment',bookingId},'Art');
+    expect(repeated.statusCode).toBe(409);
+    expect((await db.collection('customer_packages').doc(packageId).get()).data().remainingMinutes).toBe(600);
+  });
+
+  test('Art delete atomically releases an Ultra Pass slot and restores its minutes',async()=>{
+    const {bookingId,packageId}=await seedUltraPassBooking('14:00');
+    const deleted=await call(accountingHandler,{operation:'delete_booking',bookingId},'Art');
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.body.restoredMinutes).toBe(60);
+    expect((await db.collection('customer_packages').doc(packageId).get()).data().remainingMinutes).toBe(600);
+    expect((await db.collection('booking_slots').doc(slotId('14:00')).get()).exists).toBe(false);
+    expect((await db.collection('booking_slot_claims').doc(slotId('14:00')).get()).exists).toBe(false);
+    expect((await db.collection('bookings').doc(bookingId).get()).exists).toBe(false);
   });
 
   test('accounting and delete paths authorize by branch and use private claims',async()=>{

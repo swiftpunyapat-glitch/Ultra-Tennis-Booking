@@ -142,6 +142,7 @@ const endAfterMin = (startTime, durMin) => toHHMM(toMin(startTime) + durMin);
 // `expiresAt` (a Firestore Timestamp on the slot doc).
 function isLiveBookedSlot(slotData, nowMs = Date.now()) {
   if (!slotData) return false;
+  if (['cancelled', 'rescheduled', 'expired', 'completed', 'no_show'].includes(slotData.bookingStatus)) return false;
   if (slotData.bookingStatus === 'confirmed' || slotData.bookingStatus === 'pending_review') return true;
   if (['paid', 'package', 'pending_review'].includes(slotData.paymentStatus)) return true;
   if (slotData.bookingStatus === 'pending_payment') {
@@ -150,6 +151,61 @@ function isLiveBookedSlot(slotData, nowMs = Date.now()) {
     return expMs !== null && expMs > nowMs;
   }
   return false;
+}
+
+const ULTRA_PACKAGE_TYPES = new Set([
+  'ultra_starter_3', 'ultra_pass_10', 'ultra_pass_20', 'ultra_10', 'ultra_20',
+]);
+
+function packageMinutesUsed(booking) {
+  const explicit = Number(booking?.packageMinutesUsed);
+  if (Number.isInteger(explicit) && explicit > 0) return explicit;
+  return bookingDurationMin(booking);
+}
+
+// Build the exact inverse of the server-side pass deduction.  The booking is
+// the idempotency guard: callers only restore while it is still active, and
+// mark it restored in the same transaction as the package/slot mutation.
+function passRestoreMutation(pkg, booking) {
+  const type = String(booking?.packageType || booking?.usedPackageType || pkg?.packageType || '');
+  const used = packageMinutesUsed(booking);
+  if (!Number.isInteger(used) || used <= 0) throw new Error('PASS_RESTORE_INVALID');
+  if (pkg?.packageType && type && String(pkg.packageType) !== type) throw new Error('PASS_RESTORE_MISMATCH');
+
+  const update = { updatedAt: FieldValue.serverTimestamp() };
+  const remaining = Number(pkg?.remainingMinutes);
+  if (ULTRA_PACKAGE_TYPES.has(type) || type === 'monstr_event_pass') {
+    if (!Number.isFinite(remaining)) throw new Error('PASS_RESTORE_INVALID');
+    update.remainingMinutes = remaining + used;
+    if (type === 'monstr_event_pass') update.eventUsedAt = FieldValue.delete();
+  } else if (type === 'offpeak') {
+    if (Number(pkg?.totalMinutes) > 0) {
+      if (!Number.isFinite(remaining)) throw new Error('PASS_RESTORE_INVALID');
+      update.remainingMinutes = remaining + used;
+    }
+    const weekKey = isoWeekKeyForDate(booking.date);
+    const monthKey = String(booking.date || '').slice(0, 7);
+    const weeklyUsage = { ...(pkg?.weeklyUsage || {}) };
+    const monthlyUsage = { ...(pkg?.monthlyUsage || {}) };
+    weeklyUsage[weekKey] = Math.max(0, (Number(weeklyUsage[weekKey]) || 0) - used);
+    monthlyUsage[monthKey] = Math.max(0, (Number(monthlyUsage[monthKey]) || 0) - used);
+    update.weeklyUsage = weeklyUsage;
+    update.monthlyUsage = monthlyUsage;
+  } else {
+    throw new Error('PASS_RESTORE_UNSUPPORTED');
+  }
+  return { update, used, type, oldRemaining: Number.isFinite(remaining) ? remaining : null };
+}
+
+function isoWeekKeyForDate(dateISO) {
+  const [y, m, d] = String(dateISO || '').split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (!Number.isFinite(dt.getTime())) throw new Error('PASS_RESTORE_INVALID');
+  const dayNum = dt.getUTCDay() || 7;
+  dt.setUTCDate(dt.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((dt - yearStart) / 86400000) + 1) / 7);
+  return `${dt.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
 }
 
 const slotClaimRef = (db, slotId) => db.collection('booking_slot_claims').doc(slotId);
@@ -1206,12 +1262,129 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
 // booking and releases its slot. Paid bookings are blocked (use refund).
 // Legal transition: paymentStatus {pending_review,unpaid}→rejected, bookingStatus→cancelled.
 // ════════════════════════════════════════════════════════════════════
+async function handleCancelPackageBooking({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+  const packageId = String(booking.packageId || booking.usedPackageId || '').trim();
+  const serverPass = booking.createdVia === 'server_pass';
+  if (serverPass && !packageId) {
+    return res.status(409).json({ ok: false, error: 'Cannot cancel pass booking: package reference is missing' });
+  }
+
+  const slotRefs = bookingSlotIds(booking).map(id => db.collection('booking_slots').doc(id));
+  const claimRefs = slotRefs.map(r => slotClaimRef(db, r.id));
+  const pkgRef = packageId ? db.collection('customer_packages').doc(packageId) : null;
+  const logRef = pkgRef ? db.collection('customer_package_logs').doc() : null;
+  const reason = (typeof body.reason === 'string' && body.reason.trim())
+    ? body.reason.trim().slice(0, 400)
+    : 'Package booking cancelled by admin';
+
+  let restored = null;
+  try {
+    await db.runTransaction(async (t) => {
+      const reads = await Promise.all([
+        t.get(bookingRef),
+        ...slotRefs.map(r => t.get(r)),
+        ...claimRefs.map(r => t.get(r)),
+        ...(pkgRef ? [t.get(pkgRef)] : []),
+      ]);
+      const bSnap = reads[0];
+      if (!bSnap.exists) throw new Error('BOOKING_MISSING');
+      const bNow = bSnap.data();
+      if (bNow.bookingStatus === 'cancelled') throw new Error('ALREADY_CANCELLED');
+      if (bNow.paymentStatus !== 'package') throw new Error('BAD_STATE');
+
+      const slotSnaps = reads.slice(1, 1 + slotRefs.length);
+      const claimSnaps = reads.slice(1 + slotRefs.length, 1 + slotRefs.length + claimRefs.length);
+      const pkgSnap = pkgRef ? reads[reads.length - 1] : null;
+
+      if (pkgRef) {
+        if (!pkgSnap.exists) throw new Error('PASS_MISSING');
+        const pkg = pkgSnap.data();
+        if (!hasBranchAccess(session, resolveBranchId(pkg))) throw new Error('NO_BRANCH');
+        if (pkg.lineUserId && bNow.lineUserId && pkg.lineUserId !== bNow.lineUserId) throw new Error('PASS_RESTORE_MISMATCH');
+        restored = passRestoreMutation(pkg, bNow);
+      }
+
+      slotSnaps.forEach((slotSnap, i) => {
+        if (!slotSnap.exists) return;
+        const sd = slotSnap.data();
+        const owns = claimOwnsBooking(claimSnaps[i], sd, bookingId, bNow.bookingCode);
+        // A released pre-fix ghost has no claim and a terminal status; it is
+        // safe to remove. Never delete a live slot without positive ownership.
+        if (!owns && isLiveBookedSlot(sd)) throw new Error('SLOT_OWNERSHIP_MISMATCH');
+        if (owns || !claimSnaps[i]?.exists) t.delete(slotRefs[i]);
+        if (owns && claimSnaps[i]?.exists) t.delete(claimRefs[i]);
+      });
+
+      if (pkgRef && restored) {
+        t.update(pkgRef, restored.update);
+        t.set(logRef, {
+          packageId, lineUserId: bNow.lineUserId || '',
+          customerName: bNow.customerName || '', customerPhone: bNow.customerPhone || '',
+          packageType: restored.type, packageName: bNow.packageName || '',
+          action: 'restore_minutes',
+          oldRemainingMinutes: restored.oldRemaining,
+          newRemainingMinutes: restored.oldRemaining === null ? null : restored.oldRemaining + restored.used,
+          deltaMinutes: restored.used,
+          reason: `cancelled booking ${bNow.bookingCode || bookingId}`,
+          bookingId, source: 'cancel_package_booking', adminName,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      }
+
+      t.update(bookingRef, {
+        bookingStatus: 'cancelled', status: 'cancelled',
+        cancelReason: reason, cancelledBy: adminName,
+        cancelledAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+        ...(restored ? {
+          packageMinutesRestored: restored.used,
+          packageRestoredAt: FieldValue.serverTimestamp(),
+          packageRestoredBy: adminName,
+        } : {}),
+      });
+    });
+  } catch (e) {
+    const map = {
+      BOOKING_MISSING: [404, 'Booking not found'],
+      ALREADY_CANCELLED: [409, 'Booking is already cancelled'],
+      BAD_STATE: [409, 'Booking is no longer a package booking'],
+      PASS_MISSING: [409, 'Cannot cancel pass booking: package was not found'],
+      PASS_RESTORE_INVALID: [409, 'Cannot safely restore pass balance'],
+      PASS_RESTORE_MISMATCH: [409, 'Cannot safely restore pass balance: package ownership mismatch'],
+      PASS_RESTORE_UNSUPPORTED: [409, 'Cannot safely restore this package type'],
+      SLOT_OWNERSHIP_MISMATCH: [409, 'Cannot safely release slot: ownership changed'],
+      NO_BRANCH: [403, 'No access to this package branch'],
+    };
+    const [code, msg] = map[e.message] || [500, 'Failed to cancel package booking'];
+    if (code === 500) console.error('[cancel_package_booking] tx:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
+    action: 'cancel_package_booking', targetId: bookingId,
+    before: { paymentStatus: booking.paymentStatus, bookingStatus: booking.bookingStatus },
+    after: { paymentStatus: 'package', bookingStatus: 'cancelled', restoredMinutes: restored?.used || 0 },
+    note: reason,
+  });
+  return res.status(200).json({
+    ok: true,
+    booking: {
+      id: bookingId, bookingCode: booking.bookingCode, lineUserId: booking.lineUserId ?? null,
+      date: booking.date, startTime: booking.startTime, endTime: booking.endTime,
+      cancelReason: reason, restoredMinutes: restored?.used || 0,
+    },
+  });
+}
+
 async function handleRejectPayment({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
   if (!hasBranchAccess(session, resolveBranchId(booking))) {
     return res.status(403).json({ ok: false, error: 'No access to this branch' });
   }
   if (booking.bookingStatus === 'cancelled') {
     return res.status(409).json({ ok: false, error: 'Booking is already cancelled' });
+  }
+  if (booking.paymentStatus === 'package') {
+    return handleCancelPackageBooking({ res, adminName, session, db, booking, bookingRef, bookingId, body });
   }
   if (!['pending_review', 'unpaid'].includes(booking.paymentStatus)) {
     return res.status(409).json({ ok: false, error: `Cannot reject: paymentStatus is "${booking.paymentStatus}" (use refund for paid bookings)` });
@@ -1314,78 +1487,99 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
 // notification_logs, unrelated bookings/slots, available_slots.
 // Use case: test data cleanup / mistaken booking records.
 async function handleDeleteBooking({ res, adminName, session, db, booking, bookingRef, bookingId }) {
-  const { resourceId, date, startTime, bookingCode, googleCalendarEventId } = booking;
-  console.log(`[delete-booking] START — admin:${adminName} id:${bookingId} code:${bookingCode}`);
+  const { date, startTime, bookingCode, googleCalendarEventId } = booking;
+  console.log(`[delete-booking] START atomic admin:${adminName} id:${bookingId} code:${bookingCode}`);
 
-  // ── Step 1: delete Google Calendar event (BLOCKING) ─────────────
-  // If the booking has a Calendar event, it MUST be deleted before any
-  // Firestore writes. A failure here stops the entire operation so we
-  // never create an orphan Calendar event with no admin UI record to
-  // retry or clean up from.
-  // 404 from Google = event already gone → treat as success and continue.
   if (googleCalendarEventId) {
     const calOk = await deleteCalendarEvent(googleCalendarEventId);
     if (!calOk) {
-      console.error(`[delete-booking] calendar delete failed for ${googleCalendarEventId} — booking NOT deleted`);
-      return res.status(200).json({
-        ok: false,
-        error: 'Calendar delete failed. Booking was not deleted. Please retry.',
-      });
+      return res.status(200).json({ ok: false, error: 'Calendar delete failed. Booking was not deleted. Please retry.' });
     }
-    console.log(`[delete-booking] calendar event removed: ${googleCalendarEventId}`);
   }
 
-  // ── Step 2: delete booking_slot doc if it belongs to this booking ──
-  // Slot ID pattern: {resourceId}_{date}_{startTime without colon}
-  // Safety: only delete if the slot's bookingId/bookingCode matches.
-  // Protects against accidentally releasing a slot reassigned to another booking.
-  if (resourceId && date && startTime) {
-    for (const slotId of bookingSlotIds(booking)) {
-      const slotRef = db.collection('booking_slots').doc(slotId);
-      try {
-        const slotSnap = await slotRef.get();
-        const claimRef = slotClaimRef(db, slotId);
-        const claimSnap = await claimRef.get();
-        if (!slotSnap.exists) {
-          console.log(`[delete-booking] booking_slot ${slotId} — not found, skipped`);
-        } else {
-          const slotData = slotSnap.data();
-          const ownsSlot = claimOwnsBooking(claimSnap, slotData, bookingId, bookingCode);
-          if (ownsSlot) {
-            await slotRef.delete();
-            if (claimSnap.exists) await claimRef.delete();
-            console.log(`[delete-booking] booking_slot deleted: ${slotId}`);
-          } else {
-            // Slot belongs to a different booking — do NOT touch it.
-            console.log(`[delete-booking] booking_slot ${slotId} belongs to ${slotData.bookingCode} — skipped`);
-          }
-        }
-      } catch (e) {
-        // Non-fatal — log and continue to delete the booking document.
-        console.error('[delete-booking] booking_slot delete error:', e.message);
-      }
-    }
-  } else {
-    console.log(`[delete-booking] missing resourceId/date/startTime — slot cleanup skipped`);
+  const slotRefs = bookingSlotIds(booking).map(id => db.collection('booking_slots').doc(id));
+  const claimRefs = slotRefs.map(r => slotClaimRef(db, r.id));
+  const packageId = String(booking.packageId || booking.usedPackageId || '').trim();
+  const mayRestorePass = booking.paymentStatus === 'package' &&
+    booking.bookingStatus !== 'cancelled' && !booking.packageRestoredAt &&
+    (booking.createdVia === 'server_pass' || (packageId && Number(booking.packageMinutesUsed) > 0));
+  if (booking.createdVia === 'server_pass' && mayRestorePass && !packageId) {
+    return res.status(409).json({ ok: false, error: 'Cannot delete pass booking: package reference is missing' });
   }
+  const pkgRef = mayRestorePass && packageId ? db.collection('customer_packages').doc(packageId) : null;
+  const logRef = pkgRef ? db.collection('customer_package_logs').doc() : null;
+  let restored = null;
 
-  // ── Step 3: delete the booking document ───────────────────────────
   try {
-    await bookingRef.delete();
-    console.log(`[delete-booking] DONE — booking deleted: ${bookingId} code:${bookingCode}`);
+    await db.runTransaction(async (t) => {
+      const reads = await Promise.all([
+        t.get(bookingRef),
+        ...slotRefs.map(r => t.get(r)),
+        ...claimRefs.map(r => t.get(r)),
+        ...(pkgRef ? [t.get(pkgRef)] : []),
+      ]);
+      const bSnap = reads[0];
+      if (!bSnap.exists) throw new Error('BOOKING_MISSING');
+      const bNow = bSnap.data();
+      const slotSnaps = reads.slice(1, 1 + slotRefs.length);
+      const claimSnaps = reads.slice(1 + slotRefs.length, 1 + slotRefs.length + claimRefs.length);
+      const pkgSnap = pkgRef ? reads[reads.length - 1] : null;
+
+      if (pkgRef && bNow.bookingStatus !== 'cancelled' && !bNow.packageRestoredAt) {
+        if (!pkgSnap.exists) throw new Error('PASS_MISSING');
+        const pkg = pkgSnap.data();
+        if (!hasBranchAccess(session, resolveBranchId(pkg))) throw new Error('NO_BRANCH');
+        if (pkg.lineUserId && bNow.lineUserId && pkg.lineUserId !== bNow.lineUserId) throw new Error('PASS_RESTORE_MISMATCH');
+        restored = passRestoreMutation(pkg, bNow);
+      }
+
+      slotSnaps.forEach((slotSnap, i) => {
+        if (!slotSnap.exists) return;
+        const sd = slotSnap.data();
+        const owns = claimOwnsBooking(claimSnaps[i], sd, bookingId, bNow.bookingCode);
+        if (!owns && isLiveBookedSlot(sd)) throw new Error('SLOT_OWNERSHIP_MISMATCH');
+        // Released pre-fix package ghosts have no claim and a terminal status.
+        if (owns || !claimSnaps[i]?.exists) t.delete(slotRefs[i]);
+        if (owns && claimSnaps[i]?.exists) t.delete(claimRefs[i]);
+      });
+
+      if (pkgRef && restored) {
+        t.update(pkgRef, restored.update);
+        t.set(logRef, {
+          packageId, lineUserId: bNow.lineUserId || '',
+          customerName: bNow.customerName || '', customerPhone: bNow.customerPhone || '',
+          packageType: restored.type, packageName: bNow.packageName || '',
+          action: 'restore_minutes', oldRemainingMinutes: restored.oldRemaining,
+          newRemainingMinutes: restored.oldRemaining === null ? null : restored.oldRemaining + restored.used,
+          deltaMinutes: restored.used, reason: `deleted booking ${bNow.bookingCode || bookingId}`,
+          bookingId, source: 'delete_booking', adminName,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      }
+      t.delete(bookingRef);
+    });
   } catch (e) {
-    console.error('[delete-booking] failed to delete booking doc:', e.message);
-    return res.status(500).json({ ok: false, error: 'Failed to delete booking record' });
+    const map = {
+      BOOKING_MISSING: [404, 'Booking not found'],
+      PASS_MISSING: [409, 'Cannot delete pass booking: package was not found'],
+      PASS_RESTORE_INVALID: [409, 'Cannot safely restore pass balance'],
+      PASS_RESTORE_MISMATCH: [409, 'Cannot safely restore pass balance: package ownership mismatch'],
+      PASS_RESTORE_UNSUPPORTED: [409, 'Cannot safely restore this package type'],
+      SLOT_OWNERSHIP_MISMATCH: [409, 'Cannot safely delete booking: slot ownership changed'],
+      NO_BRANCH: [403, 'No access to this package branch'],
+    };
+    const [code, msg] = map[e.message] || [500, 'Failed to delete booking record'];
+    if (code === 500) console.error('[delete-booking] transaction:', e.message);
+    return res.status(code).json({ ok: false, error: msg });
   }
 
   await writeAuditLog(db, {
-    actor: adminName, actorRole: session.role,
-    branchId: resolveBranchId(booking),
+    actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
     action: 'delete_booking', targetId: bookingId,
     before: { bookingCode, date, startTime, bookingStatus: booking.bookingStatus, paymentStatus: booking.paymentStatus },
+    after: { restoredMinutes: restored?.used || 0 },
   });
-
-  return res.status(200).json({ ok: true });
+  return res.status(200).json({ ok: true, restoredMinutes: restored?.used || 0 });
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1438,12 +1632,10 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
         if (!slotSnap.exists) return;
         const sd = slotSnap.data();
         if (claimOwnsBooking(claimSnaps[i], sd, bookingId, booking.bookingCode)) {
-          t.update(oldSlotRefs[i], {
-            bookingStatus:               'rescheduled',
-            paymentStatus:               booking.paymentStatus,
-            pendingRescheduleReleasedAt: FieldValue.serverTimestamp(),
-            updatedAt:                   FieldValue.serverTimestamp(),
-          });
+          // A released slot is availability state, not history. Delete the
+          // public doc with its private claim so package payment metadata can
+          // never keep the old hour occupied.
+          t.delete(oldSlotRefs[i]);
           if (claimSnaps[i]?.exists) t.delete(slotClaimRef(db, oldSlotRefs[i].id));
         }
       });
@@ -1581,7 +1773,7 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
         if (!oldSnap.exists || newSlotIds.includes(oldSlotIds[i])) return;
         const sd = oldSnap.data();
         if (claimOwnsBooking(oldClaimSnaps[i], sd, bookingId, booking.bookingCode)) {
-          t.update(oldSlotRefs[i], { bookingStatus: 'rescheduled', paymentStatus: booking.paymentStatus });
+          t.delete(oldSlotRefs[i]);
           if (oldClaimSnaps[i]?.exists) t.delete(slotClaimRef(db, oldSlotRefs[i].id));
         }
       });

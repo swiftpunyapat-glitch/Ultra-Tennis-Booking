@@ -99,6 +99,7 @@ const normalHours  = () => { const a = []; for (let i = SLOT_OPEN_HOUR; i < SLOT
 // expired. Expiry field is `expiresAt` (a Firestore Timestamp on the slot doc).
 function isLiveBookedSlot(slotData, nowMs = Date.now()) {
   if (!slotData) return false;
+  if (['cancelled', 'rescheduled', 'expired', 'completed', 'no_show'].includes(slotData.bookingStatus)) return false;
   if (slotData.bookingStatus === 'confirmed' || slotData.bookingStatus === 'pending_review') return true;
   if (['paid', 'package', 'pending_review'].includes(slotData.paymentStatus)) return true;
   if (slotData.bookingStatus === 'pending_payment') {

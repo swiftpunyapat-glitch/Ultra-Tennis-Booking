@@ -208,6 +208,11 @@ function bookingSegments(booking) {
 
 function isOccupiedSlot(slot, nowMs = Date.now()) {
   if (!slot) return false;
+  // A terminal/released slot must never stay occupied merely because its
+  // historical paymentStatus was "paid" or "package".  Pass reschedules used
+  // to leave { bookingStatus:"rescheduled", paymentStatus:"package" }, which
+  // permanently blocked the old hour even after its private claim was removed.
+  if (['cancelled', 'rescheduled', 'expired', 'completed', 'no_show'].includes(slot.bookingStatus)) return false;
   if (slot.bookingStatus === 'confirmed' || slot.bookingStatus === 'pending_review') return true;
   if (['paid', 'package', 'pending_review'].includes(slot.paymentStatus)) return true;
   if (slot.bookingStatus === 'pending_payment') {

@@ -1065,6 +1065,7 @@ function todayLocalISO(){
 
 function isLiveBookedSlot(slotData, now = new Date()) {
   if (!slotData) return false;
+  if (["cancelled","rescheduled","expired","completed","no_show"].includes(slotData.bookingStatus)) return false;
   if (["confirmed","pending_review"].includes(slotData.bookingStatus)) return true;
   if (["paid","package","pending_review"].includes(slotData.paymentStatus)) return true;
   if (slotData.bookingStatus === "pending_payment") {
