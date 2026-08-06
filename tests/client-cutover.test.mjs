@@ -56,3 +56,13 @@ describe('active protected direct-write inventory',()=>{
     expect(admin).toContain('action:"deactivate_pass"');
   });
 });
+
+describe('admin pending-reschedule view consistency',()=>{
+  test('Daily View excludes historical pending/terminal slot mappings and refreshes the released date',()=>{
+    expect(admin).toContain('const activeBookingsOnDay=bookingsOnDay.filter');
+    expect(admin).toContain('!isPendingRescheduleBooking(b)');
+    expect(admin).toContain('const releasedDate=reschBooking.date;');
+    expect(admin).toContain('$("dvDate").value===releasedDate');
+    expect(admin).not.toContain('$("dvDate").value===reschBooking.date');
+  });
+});

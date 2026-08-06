@@ -57,6 +57,32 @@ async function seedUltraPassBooking(time,{bookingId=`pass_${time.replace(':','')
   return {bookingId,packageId,code};
 }
 
+async function seedTwoHourPaidBooking(start='10:00',{bookingId=`paid2h_${start.replace(':','')}`}={}){
+  const startHour=Number(start.slice(0,2));
+  const times=[start,`${String(startHour+1).padStart(2,'0')}:00`];
+  const ids=times.map(slotId);
+  const code=`PAID2H${start.replace(':','')}`;
+  for(const time of times) await open(time);
+  await db.collection('bookings').doc(bookingId).set({
+    bookingCode:code,resourceId:'room1',branchId:'ladprao1',bookingSlotIds:ids,
+    bookingType:'Court Booking',lineUserId:'U2H',customerName:'Two Hour User',customerPhone:'0800000002',
+    date:DATE,startTime:start,endTime:`${String(startHour+2).padStart(2,'0')}:00`,
+    durationMinutes:120,durationHours:2,price:700,amount:700,
+    bookingStatus:'confirmed',paymentStatus:'paid',
+  });
+  for(const time of times){
+    await db.collection('booking_slots').doc(slotId(time)).set({
+      resourceId:'room1',branchId:'ladprao1',date:DATE,hour:time,slotSpanMinutes:60,
+      bookingStatus:'confirmed',paymentStatus:'paid',expiresAt:null,
+    });
+    await db.collection('booking_slot_claims').doc(slotId(time)).set({
+      bookingId,bookingCode:code,branchId:'ladprao1',resourceId:'room1',status:'confirmed',
+      date:DATE,hour:time,slotSpanMinutes:60,
+    });
+  }
+  return {bookingId,code,ids};
+}
+
 async function wipe(){
   for(const c of ['bookings','booking_slots','booking_slot_claims','available_slots','holidays','customer_packages','customer_package_logs','registered_users','audit_logs']){
     const s=await db.collection(c).get();await Promise.all(s.docs.map(d=>d.ref.delete()));
@@ -255,6 +281,44 @@ describe('admin operational mutation matrix',()=>{
     const assigned=await call(accountingHandler,{operation:'reschedule_assign',bookingId,newDate:DATE,newStartTime:'11:00'},'Staff');
     expect(assigned.statusCode).toBe(200);
     expect((await db.collection('booking_slot_claims').doc(slotId('11:00')).get()).data().bookingId).toBe(bookingId);
+  });
+
+  test('two-hour pending reschedule clears active slot IDs, releases both hours, and assigns both new IDs',async()=>{
+    const {bookingId,ids}=await seedTwoHourPaidBooking('10:00');
+    const parked=await call(accountingHandler,{operation:'reschedule_park',bookingId},'Staff');
+    expect(parked.statusCode).toBe(200);
+    const pending=(await db.collection('bookings').doc(bookingId).get()).data();
+    expect(pending.bookingSlotIds).toEqual([]);
+    expect(pending.pendingRescheduleFromSlotIds).toEqual(ids);
+    for(const id of ids){
+      expect((await db.collection('booking_slots').doc(id).get()).exists).toBe(false);
+      expect((await db.collection('booking_slot_claims').doc(id).get()).exists).toBe(false);
+    }
+
+    await open('12:00');await open('13:00');
+    const assigned=await call(accountingHandler,{operation:'reschedule_assign',bookingId,newDate:DATE,newStartTime:'12:00'},'Staff');
+    expect(assigned.statusCode).toBe(200);
+    const moved=(await db.collection('bookings').doc(bookingId).get()).data();
+    expect(moved.bookingSlotIds).toEqual([slotId('12:00'),slotId('13:00')]);
+    expect(moved.startTime).toBe('12:00');
+    expect(moved.endTime).toBe('14:00');
+    expect((await db.collection('booking_slot_claims').doc(slotId('12:00')).get()).data().bookingId).toBe(bookingId);
+    expect((await db.collection('booking_slot_claims').doc(slotId('13:00')).get()).data().bookingId).toBe(bookingId);
+  });
+
+  test('cancelling a two-hour pending reschedule restores both original active slot IDs',async()=>{
+    const {bookingId,ids}=await seedTwoHourPaidBooking('10:00',{bookingId:'paid2h_restore'});
+    expect((await call(accountingHandler,{operation:'reschedule_park',bookingId},'Staff')).statusCode).toBe(200);
+    const restored=await call(accountingHandler,{operation:'reschedule_cancel',bookingId},'Staff');
+    expect(restored.statusCode).toBe(200);
+    expect(restored.body.restored).toBe(true);
+    const booking=(await db.collection('bookings').doc(bookingId).get()).data();
+    expect(booking.bookingSlotIds).toEqual(ids);
+    expect(booking.bookingStatus).toBe('confirmed');
+    for(const id of ids){
+      expect((await db.collection('booking_slots').doc(id).get()).exists).toBe(true);
+      expect((await db.collection('booking_slot_claims').doc(id).get()).data().bookingId).toBe(bookingId);
+    }
   });
 
   test('Ultra Pass reschedule removes the old package slot and does not alter pass minutes',async()=>{

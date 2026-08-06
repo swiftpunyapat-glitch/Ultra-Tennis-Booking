@@ -3257,7 +3257,14 @@ async function loadDailyView(){
     const bookingsOnDay=serverBookings.filter(b=>b.date===date);
     const bookingByCode={}; bookingsOnDay.forEach(b=>{ if(b.bookingCode) bookingByCode[b.bookingCode]=b; });
     const bookingBySlotId={};
-    bookingsOnDay.forEach(b=>{
+    // Pending/terminal bookings may retain historical slot metadata from
+    // deployments before bookingSlotIds was cleared on park. They are not
+    // current slot owners and must never win a Daily View customer lookup.
+    const activeBookingsOnDay=bookingsOnDay.filter(b=>
+      !isPendingRescheduleBooking(b)&&
+      !["cancelled","rescheduled","expired","completed","no_show"].includes(b.bookingStatus)
+    );
+    activeBookingsOnDay.forEach(b=>{
       let ids=Array.isArray(b.bookingSlotIds)?b.bookingSlotIds.filter(Boolean):[];
       if(!ids.length&&b.startTime){
         let m=Number(b.startTime.slice(0,2))*60+Number(b.startTime.slice(3,5)||0);
@@ -3836,6 +3843,9 @@ async function moveToPendingReschedule(){
   if(!reschBooking) return;
   if(isPendingRescheduleBooking(reschBooking)){showToast("Booking is already pending reschedule.",true);return;}
   if(!reschBooking.date||!reschBooking.startTime){showToast("Booking date/time is missing.",true);return;}
+  // closeModal() clears reschBooking. Capture the released date now so the
+  // successful server transaction can always refresh the visible Daily View.
+  const releasedDate=reschBooking.date;
   if(!confirm(`Move ${reschBooking.bookingCode||"this booking"} to Pending Reschedule?\n\nThe original slot will be released and no new slot will be assigned yet.`)) return;
   const btn=$("mPendingResch");btn.disabled=true;btn.textContent="Moving...";
   try{
@@ -3886,7 +3896,7 @@ async function moveToPendingReschedule(){
 
     showToast(`Pending reschedule: ${reschBooking.bookingCode||""}`);
     closeModal();await loadBookings();
-    if($("tabDaily").style.display!=="none"&&$("dvDate").value===reschBooking.date) loadDailyView();
+    if($("tabDaily").style.display!=="none"&&$("dvDate").value===releasedDate) await loadDailyView();
   }catch(e){
     console.error(e);showToast(e.message||"Move to pending reschedule failed.",true);
     btn.disabled=false;btn.textContent="Move to Pending";

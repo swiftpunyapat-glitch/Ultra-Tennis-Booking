@@ -1605,7 +1605,8 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
   const fromStart = booking.pendingRescheduleFromStartTime || booking.previousStartTime || booking.startTime;
   const fromEnd   = booking.pendingRescheduleFromEndTime   || booking.previousEndTime   || booking.endTime;
 
-  const oldSlotRefs = bookingSlotIds(booking).map(id => db.collection('booking_slots').doc(id));
+  const oldSlotIds = bookingSlotIds(booking);
+  const oldSlotRefs = oldSlotIds.map(id => db.collection('booking_slots').doc(id));
 
   try {
     await db.runTransaction(async (t) => {
@@ -1626,6 +1627,11 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
         pendingRescheduleFromDate:      fromDate,
         pendingRescheduleFromStartTime: fromStart,
         pendingRescheduleFromEndTime:   fromEnd,
+        // A pending booking owns no active room slots. Keep the released IDs
+        // separately for audit/recovery, otherwise Daily View can associate a
+        // newly-created booking in the same hour with this former customer.
+        pendingRescheduleFromSlotIds:   oldSlotIds,
+        bookingSlotIds:                 [],
         updatedAt:                      FieldValue.serverTimestamp(),
       });
       slotSnaps.forEach((slotSnap, i) => {
@@ -1754,6 +1760,7 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
 
       const update = {
         date: newDate, startTime: newStartTime, endTime: newEndTime,
+        bookingSlotIds: newSlotIds,
         bookingStatus: nextStatus,
         previousDate:      booking.pendingRescheduleFromDate      || booking.previousDate      || booking.date,
         previousStartTime: booking.pendingRescheduleFromStartTime || booking.previousStartTime || booking.startTime,
@@ -1909,6 +1916,7 @@ async function handleRescheduleCancel({ res, adminName, session, db, booking, bo
         });
         t.update(bookingRef, {
           date: origDate, startTime: origStart, endTime: origEnd,
+          bookingSlotIds: slotRefs.map(r => r.id),
           bookingStatus: restoredStatus, pendingReschedule: false,
           pendingRescheduleStatus: 'cancelled_restored',
           cancelledRestoredAt: FieldValue.serverTimestamp(),
