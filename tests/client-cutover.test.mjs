@@ -65,4 +65,14 @@ describe('admin pending-reschedule view consistency',()=>{
     expect(admin).toContain('$("dvDate").value===releasedDate');
     expect(admin).not.toContain('$("dvDate").value===reschBooking.date');
   });
+
+  test('Pending views expose a LINE-only customer alert with an editable preset',()=>{
+    expect(admin).toContain('data-pending-alert=');
+    expect(admin).toContain('data-pt-alert=');
+    expect(admin).toContain('function pendingRescheduleAlertMessage(b)');
+    expect(admin).toContain('openAlertModal(b,pendingRescheduleAlertMessage(b))');
+    expect(admin).toContain('function openAlertModal(c,presetMessage="")');
+    expect(admin).toContain('$("alertMessage").value=presetMessage');
+    expect(admin).toContain('type:"admin_alert_customer"');
+  });
 });

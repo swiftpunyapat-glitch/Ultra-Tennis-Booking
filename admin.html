@@ -1810,12 +1810,19 @@ function renderPendingRescheduleList(){
             <br>${esc(b.bookingType||"—")} · ${esc(b.paymentStatus||"—")}${b.customerNote?` · Note: ${esc(b.customerNote)}`:""}
           </div>
         </div>
-        <button class="smbtn smg" data-pending-assign="${esc(b.id)}">Assign New Slot / ลงวันใหม่</button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+          ${canNotifyLine(b.lineUserId)
+            ?`<button class="smbtn smgr" data-pending-alert="${esc(b.id)}">📢 Alert Customer</button>`
+            :`<button class="smbtn" disabled title="No LINE ID linked">No LINE</button>`}
+          <button class="smbtn smg" data-pending-assign="${esc(b.id)}">Assign New Slot / ลงวันใหม่</button>
+        </div>
       </div>`).join("")}
   </div>`;
   pending.forEach(b=>{
     const btn=panel.querySelector(`[data-pending-assign="${b.id}"]`);
     if(btn) btn.addEventListener("click",()=>openResch(b));
+    const alertBtn=panel.querySelector(`[data-pending-alert="${b.id}"]`);
+    if(alertBtn) alertBtn.addEventListener("click",()=>openPendingAlertModal(b));
   });
 }
 
@@ -1862,6 +1869,9 @@ function renderPendingTab(){
           ${b.customerNote?`<div style="grid-column:1/-1"><div class="fl">Note</div><div class="fv dim">${esc(b.customerNote)}</div></div>`:""}
         </div>
         <div class="acts">
+          ${canNotifyLine(b.lineUserId)
+            ?`<button class="smbtn smgr" data-pt-alert="${esc(b.id)}">📢 Alert Customer</button>`
+            :`<button class="smbtn" disabled title="No LINE ID linked">No LINE</button>`}
           <button class="smbtn smg" data-pt-assign="${esc(b.id)}">📅 Assign New Slot</button>
           <button class="bc" style="background:#2d1e00;border-color:var(--warn);color:var(--warn)" data-pt-cancel-pending="${esc(b.id)}">✕ Cancel Pending</button>
           ${currentAdminName==="Art"?`<button class="bc" style="background:#5a0a0a" data-pt-delete="${esc(b.id)}">🗑 Delete Permanently</button>`:""}
@@ -1872,6 +1882,10 @@ function renderPendingTab(){
   el.querySelectorAll("[data-pt-assign]").forEach(btn=>{
     const bk=pending.find(x=>x.id===btn.dataset.ptAssign);
     if(bk) btn.addEventListener("click",()=>openResch(bk));
+  });
+  el.querySelectorAll("[data-pt-alert]").forEach(btn=>{
+    const bk=pending.find(x=>x.id===btn.dataset.ptAlert);
+    if(bk) btn.addEventListener("click",()=>openPendingAlertModal(bk));
   });
   el.querySelectorAll("[data-pt-cancel-pending]").forEach(btn=>{
     const bk=pending.find(x=>x.id===btn.dataset.ptCancelPending);
@@ -4170,7 +4184,20 @@ $("mpConfirmBtn").addEventListener("click",async()=>{
 // Skipped automatically if customer has no valid LINE userId.
 let alertCustomer=null;
 
-function openAlertModal(c){
+function pendingRescheduleAlertMessage(b){
+  const name=b.customerName||"ลูกค้า";
+  const code=b.bookingCode||"—";
+  const date=b.pendingRescheduleFromDate||b.previousDate||b.date||"—";
+  const start=b.pendingRescheduleFromStartTime||b.previousStartTime||b.startTime||"—";
+  const end=b.pendingRescheduleFromEndTime||b.previousEndTime||b.endTime||"—";
+  return `สวัสดีคุณ ${name}\n\nรายการจอง ${code}\nเวลาเดิม: ${date} ${start}–${end}\n\nขณะนี้รายการอยู่ระหว่างรอจัดเวลาใหม่ หากมีวันและเวลาที่สะดวก กรุณาตอบกลับข้อความนี้เพื่อแจ้งแอดมินค่ะ`;
+}
+
+function openPendingAlertModal(b){
+  openAlertModal(b,pendingRescheduleAlertMessage(b));
+}
+
+function openAlertModal(c,presetMessage=""){
   alertCustomer=c;
   $("alertCustName").textContent=c.customerName||"—";
   let meta = `${c.customerPhone||"—"}${c.lineUserId?` · LINE: ${c.lineUserId.slice(0,16)}…`:" · No LINE ID"}`;
@@ -4179,7 +4206,7 @@ function openAlertModal(c){
   }
   $("alertCustMeta").textContent=meta;
   $("alertCustMeta").style.whiteSpace="pre-line";
-  $("alertMessage").value="";
+  $("alertMessage").value=presetMessage;
   const canSend=canNotifyLine(c.lineUserId);
   $("alertHint").textContent=canSend
     ?"Message will be sent via LINE Push to this customer."
