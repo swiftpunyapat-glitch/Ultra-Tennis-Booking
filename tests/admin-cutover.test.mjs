@@ -251,11 +251,35 @@ describe('manual booking and calendar sync cutover',()=>{
     expect(overlappingHour.statusCode).toBe(409);
   });
 
+  test('manual one-hour booking can cross an hour boundary using two half cells',async()=>{
+    await open('13:00');
+    await open('14:00');
+    const base={operation:'manual_create',customerName:'Cross Manual',date:DATE,bookingType:'Manual Single Use'};
+    const firstHalf=await call(accountingHandler,{...base,customerPhone:'0851111111',startTime:'13:00',durationMinutes:30},'Staff');
+    expect(firstHalf.statusCode).toBe(200);
+
+    const crossed=await call(accountingHandler,{...base,customerPhone:'0852222222',startTime:'13:30',durationMinutes:60},'Staff');
+    expect(crossed.statusCode).toBe(200);
+    expect(crossed.body.booking).toMatchObject({startTime:'13:30',endTime:'14:30',durationMinutes:60,durationHours:1,price:400});
+    expect(crossed.body.booking.bookingSlotIds).toEqual([slotId('13:30'),slotId('14:00')]);
+    expect((await db.collection('booking_slots').doc(slotId('13:30')).get()).data()).toMatchObject({hour:'13:30',slotSpanMinutes:30});
+    expect((await db.collection('booking_slots').doc(slotId('14:00')).get()).data()).toMatchObject({hour:'14:00',slotSpanMinutes:30});
+
+    const overlap=await call(accountingHandler,{...base,customerPhone:'0853333333',startTime:'14:00',durationMinutes:30},'Staff');
+    expect(overlap.statusCode).toBe(409);
+
+    const parked=await call(accountingHandler,{operation:'reschedule_park',bookingId:crossed.body.booking.id},'Staff');
+    expect(parked.statusCode).toBe(200);
+    expect((await db.collection('booking_slots').doc(slotId('13:30')).get()).exists).toBe(false);
+    expect((await db.collection('booking_slots').doc(slotId('14:00')).get()).exists).toBe(false);
+  });
+
   test('manual half-hour validation rejects late-night and invalid alignment',async()=>{
     await open('05:00');
     const base={operation:'manual_create',customerName:'Half Manual',customerPhone:'0822222222',date:DATE,bookingType:'Manual Single Use',durationMinutes:30};
     expect((await call(accountingHandler,{...base,startTime:'05:30'},'Staff')).statusCode).toBe(409);
     expect((await call(accountingHandler,{...base,startTime:'10:15'},'Staff')).statusCode).toBe(400);
+    expect((await call(accountingHandler,{...base,startTime:'22:30',durationMinutes:60},'Staff')).statusCode).toBe(409);
   });
 
   test('calendar mutation has an explicit allowlist and cannot alter price or ownership',async()=>{

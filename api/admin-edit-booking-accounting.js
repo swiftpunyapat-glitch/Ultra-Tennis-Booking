@@ -121,7 +121,10 @@ function bookingDurationMin(booking) {
 function bookingSegmentsAt(booking, { startTime } = {}) {
   const st = startTime || booking?.startTime;
   if (!st) return [];
-  return segmentsOfRange(st, bookingDurationMin(booking)) || [];
+  const durationMinutes = bookingDurationMin(booking);
+  return booking?.source === 'admin_manual'
+    ? (manualSegmentsOfRange(st, durationMinutes) || [])
+    : (segmentsOfRange(st, durationMinutes) || []);
 }
 function bookingSlotIds(booking, { resourceId, date, startTime } = {}) {
   const rid = resourceId || booking?.resourceId || RESOURCE_ID;
@@ -535,6 +538,17 @@ const manualHalfPriceFrom = pricing => {
   const n = Number(pricing?.halfHourPrice);
   return Number.isInteger(n) && n >= 100 && n <= 1000 ? n : MANUAL_HALF_PRICE;
 };
+function manualSegmentsOfRange(startTime, durationMinutes) {
+  const start = toMin(startTime);
+  if (!Number.isFinite(start) || (start % 60 !== 0 && start % 60 !== 30)) return null;
+  if (!MANUAL_DURATIONS.has(durationMinutes) || start + durationMinutes > 1440) return null;
+  if (durationMinutes === 30) return [{ start: toHHMM(start), span: 30 }];
+  if (start % 60 === 0) return [{ start: toHHMM(start), span: 60 }];
+  return [
+    { start: toHHMM(start), span: 30 },
+    { start: toHHMM(start + 30), span: 30 },
+  ];
+}
 
 async function handleManualCreate({ res, adminName, session, body }) {
   const name = typeof body.customerName === 'string' ? body.customerName.trim().slice(0,120) : '';
@@ -544,15 +558,15 @@ async function handleManualCreate({ res, adminName, session, body }) {
   const startTime = typeof body.startTime === 'string' ? body.startTime.trim() : '';
   const bookingType = typeof body.bookingType === 'string' ? body.bookingType : '';
   const durationMinutes = Number(body.durationMinutes ?? 60);
-  const segs = MANUAL_DURATIONS.has(durationMinutes) ? segmentsOfRange(startTime, durationMinutes) : null;
+  const segs = manualSegmentsOfRange(startTime, durationMinutes);
   const hasHalf = segs?.some(x => x.span === 30) === true;
   const startMin = toMin(startTime);
   if (!name || !phone || !RESCHED_DATE_RE.test(date) || !RESCHED_TIME_RE.test(startTime) || !segs || !MANUAL_BOOKING_TYPES.has(bookingType)) {
     return res.status(400).json({ ok:false, error:'Invalid manual booking fields' });
   }
-  // Match the customer-booking product rules: half-hour rounds are daytime
-  // only and the last valid half starts at 22:30.
-  if (hasHalf && (startMin < 6 * 60 || startMin >= 23 * 60)) {
+  // Half cells are daytime-only and no individual half may begin at/after
+  // 23:00. This also caps a crossed one-hour booking at 21:30-22:30.
+  if (hasHalf && (startMin < 6 * 60 || segs.some(x=>x.span===30&&toMin(x.start)>=23*60))) {
     return res.status(409).json({ ok:false, error:'Half-hour manual bookings are available from 06:00 to 23:00 only' });
   }
   if (session.role === 'branch_staff' && !new Set(['Manual Single Use','Pay at Counter']).has(bookingType)) {
@@ -593,7 +607,7 @@ async function handleManualCreate({ res, adminName, session, body }) {
         db.collection('holidays').doc(date).get(),
       ]);
       if(hasHalf){
-        price=manualHalfPriceFrom(pricingSnap.exists?pricingSnap.data():null);
+        price=manualHalfPriceFrom(pricingSnap.exists?pricingSnap.data():null)*segs.filter(x=>x.span===30).length;
       }else{
         const q=computeQuote({date,startTime,nowMs:Date.now(),isHoliday:holidaySnap.exists&&holidaySnap.data().isHoliday===true,promoConfig:pricingSnap.exists?pricingSnap.data():null,payType:'single',lineUserId:'manual'});
         price=Number(q.finalPrice)||0;
@@ -1739,7 +1753,9 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
   }
 
   const durMin   = bookingDurationMin(booking);
-  const newSegs  = segmentsOfRange(newStartTime, durMin);
+  const newSegs  = booking.source === 'admin_manual'
+    ? manualSegmentsOfRange(newStartTime, durMin)
+    : segmentsOfRange(newStartTime, durMin);
   if (!newSegs) {
     return res.status(400).json({ ok: false, error: `New time cannot fit ${durMin} minutes before midnight (whole hours start at :00)` });
   }
@@ -1896,7 +1912,9 @@ async function handleRescheduleCancel({ res, adminName, session, db, booking, bo
   const origEnd   = booking.pendingRescheduleFromEndTime   || booking.previousEndTime   || booking.endTime;
   const resourceId = booking.resourceId || RESOURCE_ID;
   const durMin   = bookingDurationMin(booking);
-  const origSegs = segmentsOfRange(origStart, durMin) || [];
+  const origSegs = (booking.source === 'admin_manual'
+    ? manualSegmentsOfRange(origStart, durMin)
+    : segmentsOfRange(origStart, durMin)) || [];
   const slotRefs = origSegs.map(x => db.collection('booking_slots').doc(reschedSlotId(resourceId, origDate, x.start)));
   // Cell-level restorability: both 30-min cell docs of every touched hour +
   // the hourly available_slots doc (admin opens whole hours).

@@ -3655,8 +3655,8 @@ function syncManualPaymentStatus(){
   $("manHint").textContent=`Payment status defaults to ${status}. You can change it before saving.`;
 }
 
-// Populate valid starts for the selected duration. Half-hour manual bookings
-// follow the same placement rules as customer bookings: 06:00-23:00 only.
+// Populate valid starts for the selected duration. Manual one-hour bookings
+// may cross an hour boundary (for example 13:30-14:30) using two 30-min cells.
 function fillManTimes(preferredTime){
   const sel=$("manTime");
   const duration=Number($("manDuration").value)||60;
@@ -3665,7 +3665,8 @@ function fillManTimes(preferredTime){
   [...LN_HOURS,...Array.from({length:CLOSE_HOUR-OPEN_HOUR},(_,i)=>OPEN_HOUR+i)].forEach(h=>{
     if(duration===30 && (h<OPEN_HOUR || h>=23)) return;
     const starts=[fH(h)];
-    if(duration===30 && h>=OPEN_HOUR && h<23) starts.push(`${String(h).padStart(2,"0")}:30`);
+    const canStartAtHalf=h>=OPEN_HOUR&&((duration===30&&h<23)||(duration===60&&h<22));
+    if(canStartAtHalf) starts.push(`${String(h).padStart(2,"0")}:30`);
     starts.forEach(start=>{
       const startMin=Number(start.slice(0,2))*60+Number(start.slice(3));
       const endMin=startMin+duration;
@@ -3737,11 +3738,24 @@ async function refreshManualPrice(){
   const seq=++manQuoteSeq;
   $("manPriceHint").textContent="(quoting…)";
   try{
-    const res=await fetch("/api/booking",{
-      method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ action:"price_quote", date, startTime:time, durationMinutes, payType:"single" }),
-    });
-    const d=await res.json().catch(()=>({}));
+    const requestQuote=async(startTime,duration)=>{
+      const res=await fetch("/api/booking",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"price_quote",date,startTime,durationMinutes:duration,payType:"single"}),
+      });
+      return res.json().catch(()=>({}));
+    };
+    const crossesHour=durationMinutes===60&&time.endsWith(":30");
+    let d;
+    if(crossesHour){
+      const nextHour=`${String(Number(time.slice(0,2))+1).padStart(2,"0")}:00`;
+      const halves=await Promise.all([requestQuote(time,30),requestQuote(nextHour,30)]);
+      d=halves.every(x=>x.ok&&x.quote)
+        ?{ok:true,quote:{finalPrice:halves.reduce((sum,x)=>sum+Number(x.quote.finalPrice||0),0),pricingType:"half_hour_cross"}}
+        :halves.find(x=>!x.ok)||{};
+    }else{
+      d=await requestQuote(time,durationMinutes);
+    }
     if(seq!==manQuoteSeq||manPriceDirty) return; // stale response / admin typed meanwhile
     if(d.ok&&d.quote){
       $("manPrice").value=Number(d.quote.finalPrice)||MANUAL_PRICE[type]||350;
