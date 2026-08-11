@@ -75,4 +75,12 @@ describe('admin pending-reschedule view consistency',()=>{
     expect(admin).toContain('$("alertMessage").value=presetMessage');
     expect(admin).toContain('type:"admin_alert_customer"');
   });
+
+  test('Pending multi-hour bookings expose partial assignment and preserve the remainder',()=>{
+    expect(admin).toContain('id="rAssignDuration"');
+    expect(admin).toContain('assignDurationMinutes');
+    expect(admin).toContain('remainderDurationMinutes');
+    expect(admin).toContain('เวลาที่เหลือจะอยู่ใน Pending Reschedule เป็นรายการแยก');
+    expect(admin).toContain('const assignDuration=selectedReschDuration()');
+  });
 });

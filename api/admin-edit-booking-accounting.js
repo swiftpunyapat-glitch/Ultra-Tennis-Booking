@@ -116,6 +116,22 @@ function bookingDurationMin(booking) {
   return ((Number.isInteger(n) && n >= 1 && n <= 6) ? n : 1) * 60;
 }
 
+const SPLIT_AMOUNT_FIELDS = [
+  'price','amount','finalPrice','originalPrice','basePrice','effectivePrice','qrAmount','packageMinutesUsed',
+];
+function proportionalBookingSplit(booking, assignedMinutes, totalMinutes) {
+  const assigned = {};
+  const remainder = {};
+  for (const field of SPLIT_AMOUNT_FIELDS) {
+    const total = Number(booking?.[field]);
+    if (!Number.isFinite(total)) continue;
+    const first = Math.round(total * assignedMinutes / totalMinutes);
+    assigned[field] = first;
+    remainder[field] = total - first;
+  }
+  return { assigned, remainder };
+}
+
 // Segments a booking occupies at (date, startTime). Defaults to the booking's
 // own date/startTime; reschedule handlers pass the original/new position.
 function bookingSegmentsAt(booking, { startTime } = {}) {
@@ -1752,7 +1768,22 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
     return res.status(400).json({ ok: false, error: 'newStartTime must be HH:mm' });
   }
 
-  const durMin   = bookingDurationMin(booking);
+  const totalDurMin = bookingDurationMin(booking);
+  const requestedAssign = body.assignDurationMinutes === undefined || body.assignDurationMinutes === null || body.assignDurationMinutes === ''
+    ? totalDurMin
+    : Number(body.assignDurationMinutes);
+  if (!Number.isInteger(requestedAssign) || requestedAssign < 30 || requestedAssign > totalDurMin || requestedAssign % 30 !== 0) {
+    return res.status(400).json({ ok: false, error: `assignDurationMinutes must be 30-${totalDurMin} in steps of 30` });
+  }
+  const partialRequested = requestedAssign < totalDurMin;
+  if (partialRequested && !isPendingRescheduleBooking(booking)) {
+    return res.status(409).json({ ok: false, error: 'Partial assignment is allowed only for a pending-reschedule booking' });
+  }
+  if (partialRequested && (booking.refundStatus || Number(booking.refundAmount) > 0 || Number(booking.refundedAmount) > 0)) {
+    return res.status(409).json({ ok: false, error: 'Cannot split a booking that already has a refund' });
+  }
+
+  const durMin   = requestedAssign;
   const newSegs  = booking.source === 'admin_manual'
     ? manualSegmentsOfRange(newStartTime, durMin)
     : segmentsOfRange(newStartTime, durMin);
@@ -1777,6 +1808,10 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
   const avRefs      = touchedHours.map(H => db.collection('available_slots').doc(reschedSlotId(resourceId, newDate, `${String(H).padStart(2, '0')}:00`)));
   const newSlotRefs = newSlotIds.map(id => db.collection('booking_slots').doc(id));
   const oldSlotRefs = oldSlotIds.map(id => db.collection('booking_slots').doc(id));
+  const remainderRef = partialRequested ? db.collection('bookings').doc() : null;
+  const remainderCode = partialRequested
+    ? `${booking.bookingCode || bookingId}-R${Math.random().toString(36).slice(2,5).toUpperCase()}`
+    : null;
 
   let meta;
   try {
@@ -1792,6 +1827,11 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       const bNow = bSnap.data();
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
+      const currentTotalDur = bookingDurationMin(bNow);
+      if (currentTotalDur !== totalDurMin) throw new Error('STALE_DURATION');
+      const partial = requestedAssign < currentTotalDur;
+      if (partial && !isPendingRescheduleBooking(bNow)) throw new Error('PARTIAL_REQUIRES_PENDING');
+      if (partial && (bNow.refundStatus || Number(bNow.refundAmount) > 0 || Number(bNow.refundedAmount) > 0)) throw new Error('ALREADY_REFUNDED');
       for (const avSnap of avSnaps) {
         if (!avSnap.exists || avSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
       }
@@ -1813,9 +1853,11 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       // QC: the slot lock must ALWAYS be "confirmed" regardless of the booking's
       // own flow status, or the customer UI would treat the slot as free.
       const slotNextStatus = occupiedStatus;
+      const splitValues = partial ? proportionalBookingSplit(bNow, requestedAssign, currentTotalDur) : null;
 
       const update = {
         date: newDate, startTime: newStartTime, endTime: newEndTime,
+        durationMinutes: requestedAssign, durationHours: requestedAssign / 60,
         bookingSlotIds: newSlotIds,
         bookingStatus: nextStatus,
         previousDate:      booking.pendingRescheduleFromDate      || booking.previousDate      || booking.date,
@@ -1823,13 +1865,67 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
         previousEndTime:   booking.pendingRescheduleFromEndTime   || booking.previousEndTime   || booking.endTime,
         rescheduledAt: FieldValue.serverTimestamp(),
         updatedAt:     FieldValue.serverTimestamp(),
+        ...(splitValues ? splitValues.assigned : {}),
       };
+      if (partial) {
+        update.splitFromDurationMinutes = currentTotalDur;
+        update.splitAssignedDurationMinutes = requestedAssign;
+        update.splitRemainderBookingId = remainderRef.id;
+        update.splitRemainderBookingCode = remainderCode;
+        if (Object.prototype.hasOwnProperty.call(bNow, 'priceBreakdown')) update.priceBreakdown = FieldValue.delete();
+      }
       if (wasPending) {
         update.pendingReschedule = false;
         update.pendingRescheduleStatus = 'assigned';
         update.assignedFromPendingRescheduleAt = FieldValue.serverTimestamp();
       }
       t.update(bookingRef, update);
+
+      if (partial) {
+        const remainderMinutes = currentTotalDur - requestedAssign;
+        const originalDate = bNow.pendingRescheduleFromDate || bNow.previousDate || bNow.date;
+        const originalStart = bNow.pendingRescheduleFromStartTime || bNow.previousStartTime || bNow.startTime;
+        const originalEnd = bNow.pendingRescheduleFromEndTime || bNow.previousEndTime || bNow.endTime;
+        const remainderStart = endAfterMin(originalStart, requestedAssign);
+        const remainderRecord = {
+          ...bNow,
+          ...splitValues.remainder,
+          bookingCode: remainderCode,
+          date: originalDate,
+          startTime: remainderStart,
+          endTime: originalEnd,
+          durationMinutes: remainderMinutes,
+          durationHours: remainderMinutes / 60,
+          bookingStatus: 'rescheduled',
+          status: 'rescheduled',
+          pendingReschedule: true,
+          pendingRescheduleStatus: 'pending',
+          pendingRescheduleAt: FieldValue.serverTimestamp(),
+          pendingRescheduleBy: adminName,
+          pendingRescheduleFromDate: originalDate,
+          pendingRescheduleFromStartTime: remainderStart,
+          pendingRescheduleFromEndTime: originalEnd,
+          pendingRescheduleFromSlotIds: [],
+          bookingSlotIds: [],
+          previousDate: originalDate,
+          previousStartTime: remainderStart,
+          previousEndTime: originalEnd,
+          splitFromBookingId: bookingId,
+          splitRootBookingId: bNow.splitRootBookingId || bookingId,
+          splitAssignedBookingId: bookingId,
+          splitFromDurationMinutes: currentTotalDur,
+          splitRemainderDurationMinutes: remainderMinutes,
+          googleCalendarEventId: null,
+          googleCalendarHtmlLink: null,
+          googleCalendarSyncStatus: 'pending_reschedule_split',
+          originalCreatedAt: bNow.originalCreatedAt || bNow.createdAt || null,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        };
+        delete remainderRecord.priceBreakdown;
+        delete remainderRecord.refundExpenseId;
+        t.create(remainderRef, remainderRecord);
+      }
 
       // Release every old slot that is not reused by the new range.
       oldSnaps.forEach((oldSnap, i) => {
@@ -1861,12 +1957,21 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
         });
       });
 
-      return { wasPending, nextStatus };
+      return {
+        wasPending, nextStatus, partial,
+        assignedDurationMinutes: requestedAssign,
+        remainderBookingId: partial ? remainderRef.id : null,
+        remainderBookingCode: partial ? remainderCode : null,
+        remainderDurationMinutes: partial ? currentTotalDur - requestedAssign : 0,
+      };
     });
   } catch (e) {
     const map = {
       BOOKING_MISSING: [404, 'Booking not found'],
       CANCELLED:       [409, 'Cannot reschedule a cancelled booking'],
+      STALE_DURATION:  [409, 'Booking duration changed; reload and try again'],
+      PARTIAL_REQUIRES_PENDING: [409, 'Partial assignment is allowed only for a pending-reschedule booking'],
+      ALREADY_REFUNDED: [409, 'Cannot split a booking that already has a refund'],
       SLOT_NOT_OPEN:   [409, 'Selected slot is not open'],
       SLOT_TAKEN:      [409, 'Selected slot is already booked'],
     };
@@ -1879,12 +1984,23 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
     actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
     action: 'reschedule_assign', targetId: bookingId,
     before: { bookingStatus: booking.bookingStatus, date: booking.date, startTime: booking.startTime },
-    after:  { bookingStatus: meta.nextStatus, date: newDate, startTime: newStartTime, wasPending: meta.wasPending },
+    after:  {
+      bookingStatus: meta.nextStatus, date: newDate, startTime: newStartTime,
+      wasPending: meta.wasPending, partial: meta.partial,
+      assignedDurationMinutes: meta.assignedDurationMinutes,
+      remainderBookingId: meta.remainderBookingId,
+      remainderDurationMinutes: meta.remainderDurationMinutes,
+    },
   });
 
   return res.status(200).json({
     ok: true,
     wasPending: meta.wasPending, nextStatus: meta.nextStatus,
+    partial: meta.partial,
+    assignedDurationMinutes: meta.assignedDurationMinutes,
+    remainderBookingId: meta.remainderBookingId,
+    remainderBookingCode: meta.remainderBookingCode,
+    remainderDurationMinutes: meta.remainderDurationMinutes,
     newDate, newStartTime, newEndTime,
     booking: {
       id: bookingId, bookingCode: booking.bookingCode, lineUserId: booking.lineUserId ?? null,

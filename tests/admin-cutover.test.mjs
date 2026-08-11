@@ -354,6 +354,28 @@ describe('admin operational mutation matrix',()=>{
     expect((await db.collection('booking_slot_claims').doc(slotId('13:00')).get()).data().bookingId).toBe(bookingId);
   });
 
+  test('two-hour pending reschedule can assign one hour and keep one hour pending without duplicating revenue',async()=>{
+    const {bookingId}=await seedTwoHourPaidBooking('10:00',{bookingId:'paid2h_partial'});
+    expect((await call(accountingHandler,{operation:'reschedule_park',bookingId},'Staff')).statusCode).toBe(200);
+    await open('12:00');await open('13:00');
+
+    const partial=await call(accountingHandler,{operation:'reschedule_assign',bookingId,newDate:DATE,newStartTime:'12:00',assignDurationMinutes:60},'Staff');
+    expect(partial.statusCode).toBe(200);
+    expect(partial.body).toMatchObject({partial:true,assignedDurationMinutes:60,remainderDurationMinutes:60,newEndTime:'13:00'});
+
+    const assigned=(await db.collection('bookings').doc(bookingId).get()).data();
+    const remainder=(await db.collection('bookings').doc(partial.body.remainderBookingId).get()).data();
+    expect(assigned).toMatchObject({durationMinutes:60,durationHours:1,price:350,amount:350,bookingStatus:'confirmed',bookingSlotIds:[slotId('12:00')]});
+    expect(remainder).toMatchObject({durationMinutes:60,durationHours:1,price:350,amount:350,bookingStatus:'rescheduled',pendingReschedule:true,pendingRescheduleStatus:'pending',bookingSlotIds:[],splitFromBookingId:bookingId});
+    expect(assigned.price+remainder.price).toBe(700);
+    expect((await db.collection('booking_slot_claims').doc(slotId('12:00')).get()).data().bookingId).toBe(bookingId);
+
+    const finish=await call(accountingHandler,{operation:'reschedule_assign',bookingId:partial.body.remainderBookingId,newDate:DATE,newStartTime:'13:00'},'Staff');
+    expect(finish.statusCode).toBe(200);
+    expect(finish.body.partial).toBe(false);
+    expect((await db.collection('bookings').doc(partial.body.remainderBookingId).get()).data()).toMatchObject({durationMinutes:60,price:350,bookingStatus:'confirmed',pendingReschedule:false});
+  });
+
   test('cancelling a two-hour pending reschedule restores both original active slot IDs',async()=>{
     const {bookingId,ids}=await seedTwoHourPaidBooking('10:00',{bookingId:'paid2h_restore'});
     expect((await call(accountingHandler,{operation:'reschedule_park',bookingId},'Staff')).statusCode).toBe(200);

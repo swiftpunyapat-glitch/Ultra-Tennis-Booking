@@ -740,6 +740,11 @@
     <div class="mbody">
       <div class="minfo"><strong id="rCode">—</strong><span id="rOldTime">Current: —</span><span id="rCust" style="display:block;margin-top:3px;font-size:.75rem">—</span></div>
       <div class="mfield"><label>New Date</label><input type="date" id="rDate"/></div>
+      <div class="mfield" id="rAssignDurationWrap" style="display:none">
+        <label>Assign Duration Now</label>
+        <select id="rAssignDuration"></select>
+        <p style="font-size:.68rem;color:var(--m);margin-top:4px">เวลาที่เหลือจะอยู่ใน Pending Reschedule เป็นรายการแยก</p>
+      </div>
       <button class="mload-slots" id="mLoadSlots">Load Available Slots →</button>
       <div class="mtgrid" id="rTimeGrid"></div>
       <p id="rHint" style="font-size:.72rem;color:var(--m);margin-top:4px"></p>
@@ -1810,7 +1815,7 @@ function renderPendingRescheduleList(){
         <div>
           <div class="pending-resch-title">${esc(b.bookingCode||"—")} · ${esc(b.customerName||"—")}</div>
           <div class="pending-resch-meta">
-            ${esc(b.customerPhone||"—")} · Original: ${esc(b.pendingRescheduleFromDate||b.previousDate||b.date||"—")} ${esc(b.pendingRescheduleFromStartTime||b.previousStartTime||b.startTime||"—")}–${esc(b.pendingRescheduleFromEndTime||b.previousEndTime||b.endTime||"—")}
+            ${esc(b.customerPhone||"—")} · เหลือ ${esc(reschDurationLabel(reschDurationMinutes(b)))} · Original: ${esc(b.pendingRescheduleFromDate||b.previousDate||b.date||"—")} ${esc(b.pendingRescheduleFromStartTime||b.previousStartTime||b.startTime||"—")}–${esc(b.pendingRescheduleFromEndTime||b.previousEndTime||b.endTime||"—")}
             <br>${esc(b.bookingType||"—")} · ${esc(b.paymentStatus||"—")}${b.customerNote?` · Note: ${esc(b.customerNote)}`:""}
           </div>
         </div>
@@ -1867,6 +1872,7 @@ function renderPendingTab(){
           <div><div class="fl">Customer</div><div class="fv">${esc(b.customerName||"—")}</div></div>
           <div><div class="fl">Phone</div><div class="fv">${esc(b.customerPhone||"—")}</div></div>
           <div><div class="fl">Original Slot</div><div class="fv">${esc(origDate)} ${esc(origStart)}–${esc(origEnd)}</div></div>
+          <div><div class="fl">Remaining Duration</div><div class="fv">${esc(reschDurationLabel(reschDurationMinutes(b)))}</div></div>
           <div><div class="fl">Type</div><div class="fv dim">${esc(b.bookingType||"—")}</div></div>
           <div><div class="fl">Payment</div><div class="fv"><span class="sp s-${esc(b.paymentStatus)}">${esc(b.paymentStatus||"—")}</span></div></div>
           <div><div class="fl">Moved</div><div class="fv dim" style="font-size:.72rem">${esc(movedAt)}<br>by ${esc(movedBy)}</div></div>
@@ -3888,12 +3894,34 @@ $("manConfirm").addEventListener("click",async()=>{
 });
 
 // ── RESCHEDULE ───────────────────────────────────────────────────
+function reschDurationMinutes(b){
+  const explicit=Number(b?.durationMinutes);
+  return Number.isInteger(explicit)&&explicit>=30?explicit:Math.max(30,Math.round(calcBookingDuration(b)*60));
+}
+function reschDurationLabel(minutes){
+  return minutes%60===0?`${minutes/60} ชม.`:`${minutes/60} ชม. (${minutes} นาที)`;
+}
+function selectedReschDuration(){
+  return Number($("rAssignDuration").value)||reschDurationMinutes(reschBooking);
+}
 function openResch(b){
   reschBooking=b;reschTime=null;
   const isPending=isPendingRescheduleBooking(b);
+  const totalMinutes=reschDurationMinutes(b);
   $("rCode").textContent=b.bookingCode;
   $("rOldTime").textContent=`${isPending?"Original":"Current"}: ${b.pendingRescheduleFromDate||b.previousDate||b.date} · ${b.pendingRescheduleFromStartTime||b.previousStartTime||b.startTime}–${b.pendingRescheduleFromEndTime||b.previousEndTime||b.endTime}`;
-  $("rCust").textContent=`${b.customerName} · ${b.customerPhone}`;
+  $("rCust").textContent=`${b.customerName} · ${b.customerPhone} · คงเหลือ ${reschDurationLabel(totalMinutes)}`;
+  const durationWrap=$("rAssignDurationWrap"),durationSelect=$("rAssignDuration");
+  durationSelect.innerHTML="";
+  for(let m=30;m<=totalMinutes;m+=30){
+    const option=document.createElement("option");
+    option.value=String(m);
+    option.textContent=m===totalMinutes?`เต็มจำนวน · ${reschDurationLabel(m)}`:`ใช้ก่อน ${reschDurationLabel(m)} · เหลือ ${reschDurationLabel(totalMinutes-m)} Pending`;
+    durationSelect.append(option);
+  }
+  durationSelect.value=String(totalMinutes);
+  durationWrap.style.display=isPending&&totalMinutes>30?"block":"none";
+  durationSelect.disabled=!isPending;
   $("rDate").value="";$("rTimeGrid").innerHTML="";$("rHint").textContent="";
   $("mPendingResch").style.display=isPending?"none":"inline-block";
   $("mConfirm").textContent=isPending?"Assign New Slot":"Confirm Reschedule";
@@ -3902,6 +3930,9 @@ function openResch(b){
 function closeModal(){$("reschModal").style.display="none";reschBooking=null;reschTime=null;}
 $("mClose").addEventListener("click",closeModal);$("mCancel").addEventListener("click",closeModal);
 $("reschModal").addEventListener("click",e=>{if(e.target===$("reschModal"))closeModal();});
+$("rAssignDuration").addEventListener("change",()=>{
+  reschTime=null;$("rTimeGrid").innerHTML="";$("rHint").textContent="เลือกวันที่และโหลดเวลาว่างใหม่";$("mConfirm").disabled=true;
+});
 
 async function moveToPendingReschedule(){
   if(!reschBooking) return;
@@ -3978,23 +4009,40 @@ $("mLoadSlots").addEventListener("click",async()=>{
       getDocs(query(collection(db,"booking_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)))
     ]);
     const openSet=new Set();avSnap.forEach(x=>openSet.add(x.data().startTime));
-    const blocked=new Set();const now=new Date();
-    bkSnap.forEach(x=>{const bd=x.data();if(bd.bookingCode===reschBooking?.bookingCode)return;if(isLiveBookedSlot(bd,now))blocked.add(bd.hour);});
+    const blockedCells=new Set(),currentSlotIds=new Set(reschBooking?.bookingSlotIds||[]),now=new Date();
+    bkSnap.forEach(x=>{
+      if(currentSlotIds.has(x.id)) return;
+      const bd=x.data();if(!isLiveBookedSlot(bd,now)) return;
+      const start=Number(String(bd.hour||"00:00").slice(0,2))*60+Number(String(bd.hour||"00:00").slice(3,5));
+      const span=bd.slotSpanMinutes===30?30:60;
+      for(let m=start;m<start+span;m+=30) blockedCells.add(m);
+    });
+    const assignDuration=selectedReschDuration();
 
     if(!openSet.size){$("rTimeGrid").innerHTML=`<p style="color:var(--m);font-size:.78rem;grid-column:1/-1">No open slots. Open them in Slot Manager first.</p>`;return;}
 
     $("rTimeGrid").innerHTML=allH().map(h=>{
       const time=fH(h);
-      const dis=!openSet.has(time)||blocked.has(time)||(!isPendingRescheduleBooking(reschBooking)&&time===reschBooking?.startTime&&d===reschBooking?.date);
-      return `<button class="mtbtn${dis?" disabled":""}" data-time="${time}" ${dis?"disabled":""} title="${!openSet.has(time)?"Not opened":blocked.has(time)?"Booked":"Available"}">${time}</button>`;
+      const start=h*60,needCells=[];for(let m=start;m<start+assignDuration;m+=30)needCells.push(m);
+      const touchedHours=[...new Set(needCells.map(m=>Math.floor(m/60)))];
+      const fits=start+assignDuration<=1440;
+      const allOpen=fits&&touchedHours.every(hour=>openSet.has(`${String(hour).padStart(2,"0")}:00`));
+      const overlaps=needCells.some(m=>blockedCells.has(m));
+      const unchanged=!isPendingRescheduleBooking(reschBooking)&&time===reschBooking?.startTime&&d===reschBooking?.date&&assignDuration===reschDurationMinutes(reschBooking);
+      const dis=!allOpen||overlaps||unchanged;
+      const title=!fits?"Does not fit before midnight":!allOpen?"Every covered hour must be open":overlaps?"Booked":unchanged?"Current slot":"Available";
+      return `<button class="mtbtn${dis?" disabled":""}" data-time="${time}" ${dis?"disabled":""} title="${title}">${time}</button>`;
     }).join("");
 
     $("rTimeGrid").querySelectorAll(".mtbtn:not(:disabled)").forEach(btn=>{
       btn.addEventListener("click",()=>{
         $("rTimeGrid").querySelectorAll(".mtbtn").forEach(b=>b.classList.remove("sel"));
         btn.classList.add("sel");reschTime=btn.dataset.time;
-        const endH=Number(reschTime.split(":")[0])+1;
-        $("rHint").textContent=`Selected: ${reschTime} – ${endH>=24?"00:00":`${String(endH).padStart(2,"0")}:00`}`;
+        const start=Number(reschTime.slice(0,2))*60+Number(reschTime.slice(3));
+        const end=start+assignDuration;
+        const endTime=end>=1440?"00:00":`${String(Math.floor(end/60)).padStart(2,"0")}:${String(end%60).padStart(2,"0")}`;
+        const remaining=reschDurationMinutes(reschBooking)-assignDuration;
+        $("rHint").textContent=`Selected: ${reschTime} – ${endTime} · ${reschDurationLabel(assignDuration)}${remaining>0?` · เหลือ Pending ${reschDurationLabel(remaining)}`:""}`;
         $("mConfirm").disabled=false;
       });
     });
@@ -4005,8 +4053,10 @@ $("mLoadSlots").addEventListener("click",async()=>{
 $("mConfirm").addEventListener("click",async()=>{
   if(!reschBooking||!reschTime)return;
   const newDate=$("rDate").value;
-  const endH=Number(reschTime.split(":")[0])+1;
-  const newEnd=endH>=24?"00:00":`${String(endH).padStart(2,"0")}:00`;
+  const assignDurationMinutes=selectedReschDuration();
+  const startMinutes=Number(reschTime.slice(0,2))*60+Number(reschTime.slice(3));
+  const endMinutes=startMinutes+assignDurationMinutes;
+  const newEnd=endMinutes>=1440?"00:00":`${String(Math.floor(endMinutes/60)).padStart(2,"0")}:${String(endMinutes%60).padStart(2,"0")}`;
   const wasPendingReschedule=isPendingRescheduleBooking(reschBooking);
 
   const btn=$("mConfirm");btn.disabled=true;btn.textContent=wasPendingReschedule?"Assigning...":"Rescheduling...";
@@ -4015,7 +4065,7 @@ $("mConfirm").addEventListener("click",async()=>{
     // booking_slot lock is written as "confirmed" server-side, and audit is written there.
     const res=await fetch("/api/admin-edit-booking-accounting",{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({operation:"reschedule_assign",bookingId:reschBooking.id,newDate,newStartTime:reschTime}),
+      body:JSON.stringify({operation:"reschedule_assign",bookingId:reschBooking.id,newDate,newStartTime:reschTime,assignDurationMinutes}),
     });
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok){showToast(data.error||"Reschedule failed.",true);btn.disabled=false;btn.textContent=wasPendingReschedule?"Assign New Slot":"Confirm Reschedule";return;}
@@ -4031,7 +4081,8 @@ $("mConfirm").addEventListener("click",async()=>{
         previousEndTime: reschBooking.endTime,
         date: newDate,
         startTime: reschTime,
-        endTime: newEnd
+        endTime: data.newEndTime||newEnd,
+        remainingDurationMinutes:data.remainderDurationMinutes||0,
       });
     }
 
@@ -4049,7 +4100,10 @@ $("mConfirm").addEventListener("click",async()=>{
         previousEndTime:reschBooking.pendingRescheduleFromEndTime||reschBooking.previousEndTime||reschBooking.endTime||"—",
         date:newDate,
         startTime:reschTime,
-        endTime:newEnd,
+        endTime:data.newEndTime||newEnd,
+        assignedDurationMinutes:data.assignedDurationMinutes||assignDurationMinutes,
+        remainingDurationMinutes:data.remainderDurationMinutes||0,
+        remainderBookingCode:data.remainderBookingCode||"",
         bookingType:reschBooking.bookingType||"—",
         paymentStatus:reschBooking.paymentStatus||"—",
         actionBy:currentAdminName||"admin",
@@ -4060,7 +4114,7 @@ $("mConfirm").addEventListener("click",async()=>{
     // Reschedule Firestore is already committed — calendar error must not revert it.
     if(reschBooking.paymentStatus==="paid"){
       try{
-        const calBooking={...reschBooking,date:newDate,startTime:reschTime,endTime:newEnd};
+        const calBooking={...reschBooking,date:newDate,startTime:reschTime,endTime:data.newEndTime||newEnd,durationMinutes:data.assignedDurationMinutes||assignDurationMinutes,durationHours:(data.assignedDurationMinutes||assignDurationMinutes)/60};
         let gcalResult,gcalFields;
         if(reschBooking.googleCalendarEventId){
           // Existing event → update it to the new date/time
@@ -4089,7 +4143,9 @@ $("mConfirm").addEventListener("click",async()=>{
       }
     }
 
-    showToast(`📅 ${reschBooking.bookingCode} → ${newDate} ${reschTime}`);
+    showToast(data.partial
+      ?`📅 ${reschBooking.bookingCode} ใช้ก่อน ${reschDurationLabel(data.assignedDurationMinutes)} · เหลือ ${reschDurationLabel(data.remainderDurationMinutes)} Pending (${data.remainderBookingCode})`
+      :`📅 ${reschBooking.bookingCode} → ${newDate} ${reschTime}`);
     closeModal();await loadBookings();
   }catch(e){console.error(e);showToast(e.message||"Reschedule failed.",true);btn.disabled=false;btn.textContent=wasPendingReschedule?"Assign New Slot":"Confirm Reschedule";}
 });
