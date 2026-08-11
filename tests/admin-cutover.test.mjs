@@ -234,6 +234,30 @@ describe('manual booking and calendar sync cutover',()=>{
     expect(claim).toMatchObject({bookingId:made.body.booking.id,branchId:'ladprao1',resourceId:'room1',status:'confirmed'});
   });
 
+  test('manual create supports independent 30-minute cells without false hour conflicts',async()=>{
+    await open('11:00');
+    const base={operation:'manual_create',customerName:'Half Manual',customerPhone:'0822222222',date:DATE,bookingType:'Manual Single Use',durationMinutes:30};
+    const secondHalf=await call(accountingHandler,{...base,startTime:'11:30'},'Staff');
+    expect(secondHalf.statusCode).toBe(200);
+    expect(secondHalf.body.booking).toMatchObject({startTime:'11:30',endTime:'12:00',durationMinutes:30,durationHours:0.5,price:200});
+    expect((await db.collection('booking_slots').doc(slotId('11:30')).get()).data()).toMatchObject({hour:'11:30',slotSpanMinutes:30});
+
+    const firstHalf=await call(accountingHandler,{...base,customerPhone:'0833333333',startTime:'11:00'},'Staff');
+    expect(firstHalf.statusCode).toBe(200);
+    expect(firstHalf.body.booking.bookingSlotIds).toEqual([slotId('11:00')]);
+    expect((await db.collection('booking_slots').doc(slotId('11:00')).get()).data()).toMatchObject({hour:'11:00',slotSpanMinutes:30});
+
+    const overlappingHour=await call(accountingHandler,{...base,customerPhone:'0844444444',startTime:'11:00',durationMinutes:60},'Staff');
+    expect(overlappingHour.statusCode).toBe(409);
+  });
+
+  test('manual half-hour validation rejects late-night and invalid alignment',async()=>{
+    await open('05:00');
+    const base={operation:'manual_create',customerName:'Half Manual',customerPhone:'0822222222',date:DATE,bookingType:'Manual Single Use',durationMinutes:30};
+    expect((await call(accountingHandler,{...base,startTime:'05:30'},'Staff')).statusCode).toBe(409);
+    expect((await call(accountingHandler,{...base,startTime:'10:15'},'Staff')).statusCode).toBe(400);
+  });
+
   test('calendar mutation has an explicit allowlist and cannot alter price or ownership',async()=>{
     await db.collection('bookings').doc('cal1').set({branchId:'ladprao1',lineUserId:'OWNER_UID',price:350,bookingStatus:'confirmed',paymentStatus:'paid'});
     const body={operation:'calendar_sync_fields',bookingId:'cal1',googleCalendarSyncStatus:'created',googleCalendarEventId:'evt1',googleCalendarHtmlLink:'https://calendar.google.com/x',googleCalendarSyncError:null,price:1,lineUserId:'ATTACKER',paymentStatus:'unpaid'};

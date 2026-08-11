@@ -213,6 +213,9 @@
     .dv-half-time{font-size:.59rem;font-weight:800;opacity:.78;white-space:nowrap;}
     .dv-half-label{font-size:.7rem;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .dv-half-open{background:#0d3320;color:var(--g);}
+    button.dv-half-open{border:0;text-align:left;cursor:pointer;font:inherit;}
+    button.dv-half-open:hover{filter:brightness(1.22);}
+    button.dv-half-open:focus-visible{outline:2px solid var(--g);outline-offset:-2px;}
     .dv-half-booked{background:#4a1820;color:#ff9aa7;}
     .dv-half-pending{background:#3d2e00;color:var(--warn);}
     .dv-half-closed{background:var(--s);color:var(--m);}
@@ -796,9 +799,10 @@
     <div class="mhdr"><h2>+ Add Manual Booking</h2><button class="mclose" id="manClose">✕</button></div>
     <div class="mbody">
       <div id="manHistory" class="dv-history" style="display:none">—</div>
-      <div class="mfield" style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+      <div class="mfield" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px">
         <div><label>Date</label><input type="date" id="manDate"/></div>
         <div><label>Start Time</label><select id="manTime"></select></div>
+        <div><label>Duration</label><select id="manDuration"><option value="30">30 minutes</option><option value="60">1 hour</option></select></div>
       </div>
       <div class="mfield"><label>Customer Name</label><input type="text" id="manName" maxlength="120" placeholder="Full name"/></div>
       <div class="mfield"><label>Customer Phone</label><input type="text" id="manPhone" maxlength="40" placeholder="08x-xxx-xxxx"/></div>
@@ -3398,6 +3402,9 @@ async function loadDailyView(){
     </div><div>${rows.map(r=>renderDailyRow(r,lookupHistory)).join("")}</div>`;
 
     // Wire row actions
+    $("dvList").querySelectorAll("[data-dv-manual-half]").forEach(b=>{
+      b.addEventListener("click",()=>openManualModal(date,b.dataset.dvManualHalf,30));
+    });
     $("dvList").querySelectorAll("[data-dv-manual]").forEach(b=>{
       b.addEventListener("click",()=>openManualModal(date,b.dataset.dvManual));
     });
@@ -3495,13 +3502,15 @@ function renderDailyRow(r,lookupHistory){
     const cls=half.status==="booked" ? (pending?"pending":"booked") : half.status;
     let label;
     if(half.status==="booked") label=b?.customerName||b?.bookingCode||"Reserved";
-    else if(half.status==="open") label="ว่าง";
+    else if(half.status==="open") label="ว่าง · + จอง 30 นาที";
     else if(half.status==="closed") label="ปิด";
     else label="ยังไม่เปิด";
-    return `<div class="dv-half dv-half-${cls}" title="${esc(start)}–${esc(end)} · ${esc(label)}">
+    const tag=half.status==="open"?"button":"div";
+    const attrs=half.status==="open"?` type="button" data-dv-manual-half="${esc(start)}" aria-label="Manual book ${esc(start)} to ${esc(end)}"`:"";
+    return `<${tag} class="dv-half dv-half-${cls}"${attrs} title="${esc(start)}–${esc(end)} · ${esc(label)}">
       <span class="dv-half-time">${esc(start)}–${esc(end)}</span>
       <span class="dv-half-label">${half.status==="booked"?(pending?"⏳ ":"● "):""}${esc(label)}</span>
-    </div>`;
+    </${tag}>`;
   };
   const mid=`${String(r.h).padStart(2,"0")}:30`;
   return `<div class="dvrow">
@@ -3646,20 +3655,38 @@ function syncManualPaymentStatus(){
   $("manHint").textContent=`Payment status defaults to ${status}. You can change it before saving.`;
 }
 
-// Populate the start-time dropdown — LN hours first (00–05), then normal (06–23).
-(function fillManTimes(){
+// Populate valid starts for the selected duration. Half-hour manual bookings
+// follow the same placement rules as customer bookings: 06:00-23:00 only.
+function fillManTimes(preferredTime){
   const sel=$("manTime");
+  const duration=Number($("manDuration").value)||60;
+  const previous=preferredTime||sel.value;
+  sel.innerHTML="";
   [...LN_HOURS,...Array.from({length:CLOSE_HOUR-OPEN_HOUR},(_,i)=>OPEN_HOUR+i)].forEach(h=>{
-    const o=document.createElement("option");
-    o.value=fH(h);
-    o.textContent=LN_HOURS.includes(h)?`🌙 ${fH(h)} – ${fEnd(h)} (Late Night)`:`${fH(h)} – ${fEnd(h)}`;
-    sel.append(o);
+    if(duration===30 && (h<OPEN_HOUR || h>=23)) return;
+    const starts=[fH(h)];
+    if(duration===30 && h>=OPEN_HOUR && h<23) starts.push(`${String(h).padStart(2,"0")}:30`);
+    starts.forEach(start=>{
+      const startMin=Number(start.slice(0,2))*60+Number(start.slice(3));
+      const endMin=startMin+duration;
+      const end=endMin>=1440?"00:00":`${String(Math.floor(endMin/60)).padStart(2,"0")}:${String(endMin%60).padStart(2,"0")}`;
+      const o=document.createElement("option");
+      o.value=start;
+      o.textContent=LN_HOURS.includes(h)?`🌙 ${start} – ${end} (Late Night)`:`${start} – ${end}`;
+      sel.append(o);
+    });
   });
-})();
+  if([...sel.options].some(o=>o.value===previous)) sel.value=previous;
+  else if(previous?.endsWith(":30")){
+    const hourStart=`${previous.slice(0,2)}:00`;
+    if([...sel.options].some(o=>o.value===hourStart)) sel.value=hourStart;
+  }
+}
 
-function openManualModal(prefillDate,prefillTime){
+function openManualModal(prefillDate,prefillTime,prefillDuration){
   $("manDate").value = prefillDate || $("dvDate").value || todayISOString();
-  $("manTime").value = prefillTime || fH(OPEN_HOUR);
+  $("manDuration").value=String(prefillDuration||60);
+  fillManTimes(prefillTime||fH(OPEN_HOUR));
   $("manName").value="";
   $("manPhone").value="";
   $("manType").value="Manual Single Use";
@@ -3683,6 +3710,11 @@ $("manClose").addEventListener("click",closeManualModal);
 $("manCancel").addEventListener("click",closeManualModal);
 $("manModal").addEventListener("click",e=>{ if(e.target===$("manModal")) closeManualModal(); });
 $("manType").addEventListener("change",syncManualPaymentStatus);
+$("manDuration").addEventListener("change",()=>{
+  fillManTimes();
+  manPriceDirty=false;
+  refreshManualPrice();
+});
 
 // ── Manual booking price: server-quoted (Pricing v2) ──────────────────
 // Prefill from /api/booking price_quote so morning (330/320), late-night (450)
@@ -3700,13 +3732,14 @@ async function refreshManualPrice(){
   $("manPrice").disabled=false;
   if(manPriceDirty) return;
   const date=$("manDate").value, time=$("manTime").value;
+  const durationMinutes=Number($("manDuration").value)||60;
   if(!date||!time) return;
   const seq=++manQuoteSeq;
   $("manPriceHint").textContent="(quoting…)";
   try{
     const res=await fetch("/api/booking",{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ action:"price_quote", date, startTime:time, payType:"single" }),
+      body:JSON.stringify({ action:"price_quote", date, startTime:time, durationMinutes, payType:"single" }),
     });
     const d=await res.json().catch(()=>({}));
     if(seq!==manQuoteSeq||manPriceDirty) return; // stale response / admin typed meanwhile
@@ -3778,6 +3811,7 @@ $("manConfirm").addEventListener("click",async()=>{
   const phone=$("manPhone").value.trim();
   const date=$("manDate").value;
   const time=$("manTime").value;
+  const durationMinutes=Number($("manDuration").value)||60;
   const bookingType=$("manType").value;
   const note=$("manNote").value.trim();
 
@@ -3786,8 +3820,9 @@ $("manConfirm").addEventListener("click",async()=>{
   if(!date)  { $("manDate").focus();  showToast("Date required.",true); return; }
   if(!time)  { $("manTime").focus();  showToast("Start time required.",true); return; }
 
-  const startH=parseInt(time,10);
-  const endTime=fEnd(startH);
+  const startMin=Number(time.slice(0,2))*60+Number(time.slice(3));
+  const endMin=startMin+durationMinutes;
+  const endTime=endMin>=1440?"00:00":`${String(Math.floor(endMin/60)).padStart(2,"0")}:${String(endMin%60).padStart(2,"0")}`;
   let code="";
   const adminName=currentAdminName||"admin";
 
@@ -3795,7 +3830,7 @@ $("manConfirm").addEventListener("click",async()=>{
   try{
     const res=await fetch("/api/admin-edit-booking-accounting",{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({operation:"manual_create",customerName:name,customerPhone:phone,customerNote:note,date,startTime:time,bookingType}),
+      body:JSON.stringify({operation:"manual_create",customerName:name,customerPhone:phone,customerNote:note,date,startTime:time,durationMinutes,bookingType}),
     });
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok) throw new Error(data.error||"Failed to save manual booking.");
@@ -3815,6 +3850,7 @@ $("manConfirm").addEventListener("click",async()=>{
         date:date,
         startTime:time,
         endTime:endTime,
+        durationMinutes,
         bookingType:bookingType,
         paymentStatus:authoritativePaymentStatus,
         note:note||"",
@@ -4935,4 +4971,3 @@ $("promoDeactivateBtn").addEventListener("click", async () => {
 </script>
 </body>
 </html>
-

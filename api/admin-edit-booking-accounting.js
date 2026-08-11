@@ -81,12 +81,6 @@ function reschedSlotId(resourceId, date, startTime) {
   return `${resourceId || RESOURCE_ID}_${date}_${String(startTime).replace(':', '')}`;
 }
 
-// End time one hour after an "HH:00" start; midnight-crossing → "00:00".
-function nextHourEnd(startTime) {
-  const h = Number(String(startTime).split(':')[0]) + 1;
-  return h >= 24 ? '00:00' : `${String(h).padStart(2, '0')}:00`;
-}
-
 // ── Multi-hour / half-hour (Phase A + B) helpers ──────────────────
 // A booking may hold several slot docs: span-60 docs for fully covered clock
 // hours and span-30 docs for the 30-min segment (Phase B). Legacy docs have
@@ -534,7 +528,13 @@ export default async function handler(req, res) {
 
 const MANUAL_BOOKING_TYPES = new Set(['Manual Single Use','Paid Outside','Pay at Counter','Ultra Pass Manual','Off-Peak Manual']);
 const MANUAL_PACKAGE_TYPES = new Set(['Ultra Pass Manual','Off-Peak Manual']);
+const MANUAL_DURATIONS = new Set([30, 60]);
+const MANUAL_HALF_PRICE = 200;
 const manualCode = () => `UTM${Date.now().toString(36).toUpperCase().slice(-6)}${Math.random().toString(36).toUpperCase().slice(2,4)}`;
+const manualHalfPriceFrom = pricing => {
+  const n = Number(pricing?.halfHourPrice);
+  return Number.isInteger(n) && n >= 100 && n <= 1000 ? n : MANUAL_HALF_PRICE;
+};
 
 async function handleManualCreate({ res, adminName, session, body }) {
   const name = typeof body.customerName === 'string' ? body.customerName.trim().slice(0,120) : '';
@@ -543,8 +543,17 @@ async function handleManualCreate({ res, adminName, session, body }) {
   const date = typeof body.date === 'string' ? body.date.trim() : '';
   const startTime = typeof body.startTime === 'string' ? body.startTime.trim() : '';
   const bookingType = typeof body.bookingType === 'string' ? body.bookingType : '';
-  if (!name || !phone || !RESCHED_DATE_RE.test(date) || !/^\d{2}:00$/.test(startTime) || !MANUAL_BOOKING_TYPES.has(bookingType)) {
+  const durationMinutes = Number(body.durationMinutes ?? 60);
+  const segs = MANUAL_DURATIONS.has(durationMinutes) ? segmentsOfRange(startTime, durationMinutes) : null;
+  const hasHalf = segs?.some(x => x.span === 30) === true;
+  const startMin = toMin(startTime);
+  if (!name || !phone || !RESCHED_DATE_RE.test(date) || !RESCHED_TIME_RE.test(startTime) || !segs || !MANUAL_BOOKING_TYPES.has(bookingType)) {
     return res.status(400).json({ ok:false, error:'Invalid manual booking fields' });
+  }
+  // Match the customer-booking product rules: half-hour rounds are daytime
+  // only and the last valid half starts at 22:30.
+  if (hasHalf && (startMin < 6 * 60 || startMin >= 23 * 60)) {
+    return res.status(409).json({ ok:false, error:'Half-hour manual bookings are available from 06:00 to 23:00 only' });
   }
   if (session.role === 'branch_staff' && !new Set(['Manual Single Use','Pay at Counter']).has(bookingType)) {
     return res.status(403).json({ ok:false, error:'Branch staff cannot create paid or package bookings' });
@@ -553,51 +562,82 @@ async function handleManualCreate({ res, adminName, session, body }) {
   if (!hasBranchAccess(session, branchId)) return res.status(403).json({ok:false,error:'No access to this branch'});
   let db;
   try { db=getAdminDb(); } catch(e){ return res.status(500).json({ok:false,error:'Database not available'}); }
-  const slotId=reschedSlotId(RESOURCE_ID,date,startTime);
-  const halfId=reschedSlotId(RESOURCE_ID,date,`${startTime.slice(0,2)}:30`);
-  const slotRef=db.collection('booking_slots').doc(slotId);
-  const halfRef=db.collection('booking_slots').doc(halfId);
-  const availRef=db.collection('available_slots').doc(slotId);
   const bookingRef=db.collection('bookings').doc();
-  const claimRef=slotClaimRef(db,slotId);
+  const slotIds=segs.map(x=>reschedSlotId(RESOURCE_ID,date,x.start));
+  const slotRefs=slotIds.map(id=>db.collection('booking_slots').doc(id));
+  const needCells=[]; for(let m=startMin;m<startMin+durationMinutes;m+=30) needCells.push(m);
+  const touchedHours=[...new Set(needCells.map(m=>Math.floor(m/60)))];
+  const cellIds=touchedHours.flatMap(h=>[
+    reschedSlotId(RESOURCE_ID,date,`${String(h).padStart(2,'0')}:00`),
+    reschedSlotId(RESOURCE_ID,date,`${String(h).padStart(2,'0')}:30`),
+  ]);
+  const cellRefs=cellIds.map(id=>db.collection('booking_slots').doc(id));
+  const availRefs=touchedHours.map(h=>db.collection('available_slots').doc(reschedSlotId(RESOURCE_ID,date,`${String(h).padStart(2,'0')}:00`)));
   const code=manualCode();
   const packageMode=MANUAL_PACKAGE_TYPES.has(bookingType);
   const paymentStatus=packageMode?'package':bookingType==='Paid Outside'?'paid':'unpaid';
   let price=0;
   try {
+    if(hasHalf){
+      try {
+        const featuresSnap=await db.collection('system_settings').doc('features').get();
+        if(featuresSnap.exists && featuresSnap.data().enableHalfHourBooking===false) throw new Error('HALF_DISABLED');
+      } catch(e) {
+        if(e.message==='HALF_DISABLED') throw e;
+        console.warn('[manual_create] half-hour feature read failed; using live default:',e.message);
+      }
+    }
     if(!packageMode){
       const [pricingSnap,holidaySnap]=await Promise.all([
         db.collection('system_settings').doc('pricing').get(),
         db.collection('holidays').doc(date).get(),
       ]);
-      const q=computeQuote({date,startTime,nowMs:Date.now(),isHoliday:holidaySnap.exists&&holidaySnap.data().isHoliday===true,promoConfig:pricingSnap.exists?pricingSnap.data():null,payType:'single',lineUserId:'manual'});
-      price=Number(q.finalPrice)||0;
+      if(hasHalf){
+        price=manualHalfPriceFrom(pricingSnap.exists?pricingSnap.data():null);
+      }else{
+        const q=computeQuote({date,startTime,nowMs:Date.now(),isHoliday:holidaySnap.exists&&holidaySnap.data().isHoliday===true,promoConfig:pricingSnap.exists?pricingSnap.data():null,payType:'single',lineUserId:'manual'});
+        price=Number(q.finalPrice)||0;
+      }
     }
     await db.runTransaction(async t=>{
-      const [slotSnap,halfSnap,availSnap]=await Promise.all([t.get(slotRef),t.get(halfRef),t.get(availRef)]);
-      if(!availSnap.exists||availSnap.data().status!=='open') throw new Error('SLOT_NOT_OPEN');
-      if((slotSnap.exists&&isLiveBookedSlot(slotSnap.data()))||(halfSnap.exists&&isLiveBookedSlot(halfSnap.data()))) throw new Error('SLOT_TAKEN');
+      const [cellSnaps,availSnaps]=await Promise.all([
+        Promise.all(cellRefs.map(r=>t.get(r))),
+        Promise.all(availRefs.map(r=>t.get(r))),
+      ]);
+      for(const availSnap of availSnaps){
+        if(!availSnap.exists||availSnap.data().status!=='open') throw new Error('SLOT_NOT_OPEN');
+      }
+      cellSnaps.forEach((snap,i)=>{
+        if(!snap.exists) return;
+        const sd=snap.data();
+        const docMin=touchedHours[Math.floor(i/2)]*60+(i%2)*30;
+        const docSpan=sd.slotSpanMinutes===30?30:60;
+        if(needCells.some(c=>c>=docMin&&c<docMin+docSpan)&&isLiveBookedSlot(sd)) throw new Error('SLOT_TAKEN');
+      });
       t.create(bookingRef,{
-        bookingCode:code,resourceId:RESOURCE_ID,branchId,bookingSlotIds:[slotId],bookingType,
+        bookingCode:code,resourceId:RESOURCE_ID,branchId,bookingSlotIds:slotIds,bookingType,
         lineUserId:'manual',lineDisplayName:'Manual Booking',customerName:name,customerPhone:phone,
         customerPhoneNormalized:String(phone).replace(/\D/g,''),customerNote:note,
-        date,startTime,endTime:nextHourEnd(startTime),durationMinutes:60,durationHours:1,
-        price,amount:price,finalPrice:price,originalPrice:price,pricingType:packageMode?'package':'manual',
+        date,startTime,endTime:endAfterMin(startTime,durationMinutes),durationMinutes,durationHours:durationMinutes/60,
+        price,amount:price,finalPrice:price,originalPrice:price,pricingType:packageMode?'package':hasHalf?'half_hour':'manual',
         bookingStatus:'confirmed',status:'confirmed',paymentStatus,source:'admin_manual',createdBy:adminName,
         ...(paymentStatus==='paid'?{paidAt:FieldValue.serverTimestamp(),paidBy:adminName}:{}),
         createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp(),
       });
-      t.set(slotRef,{resourceId:RESOURCE_ID,branchId,date,hour:startTime,slotSpanMinutes:60,bookingStatus:'confirmed',paymentStatus,expiresAt:null});
-      t.set(claimRef,{bookingId:bookingRef.id,bookingCode:code,branchId,resourceId:RESOURCE_ID,status:'confirmed',date,hour:startTime,slotSpanMinutes:60,createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});
+      slotRefs.forEach((slotRef,i)=>{
+        const seg=segs[i];
+        t.set(slotRef,{resourceId:RESOURCE_ID,branchId,date,hour:seg.start,slotSpanMinutes:seg.span,bookingStatus:'confirmed',paymentStatus,expiresAt:null});
+        t.set(slotClaimRef(db,slotRef.id),{bookingId:bookingRef.id,bookingCode:code,branchId,resourceId:RESOURCE_ID,status:'confirmed',date,hour:seg.start,slotSpanMinutes:seg.span,createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});
+      });
     });
   } catch(e){
-    const map={SLOT_NOT_OPEN:[409,'Slot is not open'],SLOT_TAKEN:[409,'Slot is already occupied']};
+    const map={SLOT_NOT_OPEN:[409,'Slot is not open'],SLOT_TAKEN:[409,'Slot is already occupied'],HALF_DISABLED:[409,'Half-hour booking is currently disabled']};
     const [status,msg]=map[e.message]||[500,'Failed to create manual booking'];
     if(status===500) console.error('[manual_create]',e.message);
     return res.status(status).json({ok:false,error:msg});
   }
-  await writeAuditLog(db,{actor:adminName,actorRole:session.role,branchId,action:'manual_booking_created',targetId:bookingRef.id,after:{bookingCode:code,date,startTime,bookingType,paymentStatus,price}});
-  return res.status(200).json({ok:true,booking:{id:bookingRef.id,bookingCode:code,date,startTime,endTime:nextHourEnd(startTime),bookingType,paymentStatus,price}});
+  await writeAuditLog(db,{actor:adminName,actorRole:session.role,branchId,action:'manual_booking_created',targetId:bookingRef.id,after:{bookingCode:code,date,startTime,durationMinutes,bookingType,paymentStatus,price}});
+  return res.status(200).json({ok:true,booking:{id:bookingRef.id,bookingCode:code,date,startTime,endTime:endAfterMin(startTime,durationMinutes),durationMinutes,durationHours:durationMinutes/60,bookingSlotIds:slotIds,bookingType,paymentStatus,price}});
 }
 
 const CALENDAR_SYNC_STATUSES = new Set([
