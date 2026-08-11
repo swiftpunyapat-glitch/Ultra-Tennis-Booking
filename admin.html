@@ -485,7 +485,7 @@
       <!-- LATE NIGHT SLOTS — 00:00–06:00, manual admin control only -->
       <div class="smcard" style="border-color:#fb923c">
         <h2 style="color:#fb923c">🌙 Late Night Slots (00:00–06:00)</h2>
-        <p style="font-size:.75rem;color:var(--m);margin-bottom:11px;line-height:1.5">Price: ฿450 · <strong>NOT opened</strong> by Open This Day or Open Full Week. Admin must open manually before broadcasting to customers.</p>
+        <p id="lnPriceInfo" style="font-size:.75rem;color:var(--m);margin-bottom:11px;line-height:1.5">Price: ฿450 · <strong>NOT opened</strong> by Open This Day or Open Full Week. Admin must open manually before broadcasting to customers.</p>
         <div class="smrow">
           <div class="smf"><label>Date</label><input type="date" id="lnDate"/></div>
           <button class="smbtn" style="background:transparent;border:1px solid #fb923c;color:#fb923c" id="openLNBtn">🌙 Open Late Night (00–06)</button>
@@ -641,8 +641,22 @@
   <div id="tabPromo" style="display:none">
     <div class="main">
       <div class="smcard">
-        <h2>Special Promotion Configuration</h2>
-        <p style="font-size:.78rem;color:var(--m);margin-bottom:15px">Art-only controls. Set a promotion price for Single Use bookings and configure the dynamic booking banner.</p>
+        <h2>Store Pricing &amp; Special Promotion</h2>
+        <p style="font-size:.78rem;color:var(--m);margin-bottom:15px">Art-only controls. Changes apply to new User quotes and bookings immediately; existing bookings keep their stamped price.</p>
+
+        <div style="font-size:.72rem;font-weight:900;color:var(--g);text-transform:uppercase;letter-spacing:.5px;margin:4px 0 10px">Store Base Rates</div>
+        <div class="smrow" style="margin-bottom:12px">
+          <div class="smf" style="flex:1"><label>Standard (THB / hour)</label><input type="number" id="pricingNormal" min="100" max="5000" step="1" value="350"/></div>
+          <div class="smf" style="flex:1"><label>Half-Hour (THB / 30 min)</label><input type="number" id="promoHalfPrice" min="100" max="1000" step="1" value="200"/></div>
+          <div class="smf" style="flex:1"><label>Late Night (THB / hour)</label><input type="number" id="pricingLateNight" min="100" max="5000" step="1" value="450"/></div>
+        </div>
+        <div class="smrow" style="margin-bottom:16px">
+          <div class="smf" style="flex:1"><label>Morning (THB / hour)</label><input type="number" id="pricingMorning" min="100" max="5000" step="1" value="330"/></div>
+          <div class="smf" style="flex:1"><label>Morning Advance (THB / hour)</label><input type="number" id="pricingMorningAdvance" min="100" max="5000" step="1" value="320"/></div>
+          <div class="smf" style="flex:1"><label>Advance Threshold (hours)</label><input type="number" id="pricingMorningHours" min="1" max="720" step="1" value="48"/></div>
+        </div>
+
+        <div style="font-size:.72rem;font-weight:900;color:var(--warn);text-transform:uppercase;letter-spacing:.5px;margin:4px 0 10px">Special Promotion</div>
         
         <div class="smrow" style="margin-bottom:12px">
           <div class="smf" style="flex:1"><label>Promotion Name (e.g. 6.6 Special)</label><input type="text" id="promoName" placeholder="6.6 Special"/></div>
@@ -652,14 +666,6 @@
         <div class="smrow" style="margin-bottom:12px">
           <div class="smf" style="flex:1"><label>Promo Label / Message (Banner text)</label><input type="text" id="promoLabel" placeholder="6.6 Special — 333 บาท/ชม."/></div>
           <input type="hidden" id="promoSpecialQrUrl" value="/payment-qr-special.png"/>
-        </div>
-
-        <div class="smrow" style="margin-bottom:12px">
-          <div class="smf" style="flex:1">
-            <label>Half-Hour Price (THB / 30 min · never joins promos)</label>
-            <input type="number" id="promoHalfPrice" placeholder="200" min="100" max="1000"/>
-            <p style="font-size:.7rem;color:var(--m);margin-top:4px">Default 200. Applies instantly to new bookings/quotes — existing bookings keep their price. Tip: below 175 two half-hours undercut the ฿350 hour.</p>
-          </div>
         </div>
 
         <div class="smrow" style="margin-bottom:12px">
@@ -674,11 +680,11 @@
 
         <div style="margin-bottom:18px; display:flex; align-items:center; gap:8px">
           <input type="checkbox" id="morningActive" checked style="width:18px; height:18px; cursor:pointer; margin:0;"/>
-          <label for="morningActive" style="font-size:.82rem; font-weight:700; cursor:pointer; margin:0;">Enable Morning Pricing — จ.–ศ. 06:00–11:59 ฿330 (จองล่วงหน้า ≥48 ชม. ฿320)</label>
+          <label for="morningActive" style="font-size:.82rem; font-weight:700; cursor:pointer; margin:0;">Enable Morning Pricing — Mon–Fri 06:00–11:59, excluding holidays</label>
         </div>
 
         <div class="qbtns" style="gap:10px">
-          <button class="smbtn smg" id="promoSaveBtn" style="padding:10px 18px; font-size:.82rem">✓ Save Promotion</button>
+          <button class="smbtn smg" id="promoSaveBtn" style="padding:10px 18px; font-size:.82rem">✓ Save Store Pricing</button>
           <button class="smbtn" id="promoDeactivateBtn" style="background:#3d1010; border-color:var(--dan); color:var(--dan); padding:10px 18px; font-size:.82rem">✕ Deactivate Immediately</button>
         </div>
       </div>
@@ -1009,7 +1015,7 @@ const RESOURCE_ID="room1";
 const DEFAULT_BRANCH_ID="ladprao1";
 const OPEN_HOUR=6,CLOSE_HOUR=24;
 const LN_HOURS=[0,1,2,3,4,5]; // Late Night 00:00–06:00 — opened manually only, never by Open This Day/Week
-const LATE_NIGHT_PRICE=450;   // ฿/hr for Late Night Session
+let LATE_NIGHT_PRICE=450;     // refreshed from system_settings/pricing
 const BUILD_VERSION="2026-07-22-daily-alert1";
 const BANGKOK_TZ="Asia/Bangkok";
 
@@ -1191,6 +1197,7 @@ document.querySelectorAll(".tab").forEach(btn=>{
     if(btn.dataset.tab==="daily")    loadDailyView();
     if(btn.dataset.tab==="slots")    {
       if(!$("viewDate").value) $("viewDate").value = todayLocalISO();
+      refreshLateNightPrice();
       loadSlotGrid($("viewDate").value);
     }
     if(btn.dataset.tab==="slips")    renderSlipReview();
@@ -2730,8 +2737,21 @@ $("closeDayBtn").addEventListener("click",async()=>{
 
 // ── LATE NIGHT SLOT CONTROLS ──────────────────────────────────────
 // Opens/closes only 00:00–05:00. Never called by normal Open This Day/Week.
+async function refreshLateNightPrice(){
+  try{
+    const snap=await getDoc(doc(db,"system_settings","pricing"));
+    const configured=Number(snap.exists()?snap.data().lateNightPrice:null);
+    LATE_NIGHT_PRICE=Number.isInteger(configured)&&configured>=100&&configured<=5000?configured:450;
+  }catch(e){
+    console.warn("Failed to refresh Late Night price; using fallback 450:",e);
+    LATE_NIGHT_PRICE=450;
+  }
+  if($("lnPriceInfo")) $("lnPriceInfo").innerHTML=`Price: ฿${LATE_NIGHT_PRICE} · <strong>NOT opened</strong> by Open This Day or Open Full Week. Admin must open manually before broadcasting to customers.`;
+  return LATE_NIGHT_PRICE;
+}
 $("openLNBtn").addEventListener("click",async()=>{
   const d=$("lnDate").value;if(!d){showToast("Pick a date.",true);return;}
+  await refreshLateNightPrice();
   if(!confirm(`Open Late Night slots (00:00–06:00) for ${d}?\nPrice: ฿${LATE_NIGHT_PRICE}. Broadcast to customers manually after opening.`))return;
   const btn=$("openLNBtn");btn.disabled=true;btn.textContent="Opening...";
   try{
@@ -4861,6 +4881,11 @@ async function loadPromoTab() {
   $("promoName").disabled = !isArt;
   $("promoPrice").disabled = !isArt;
   $("promoHalfPrice").disabled = !isArt;
+  $("pricingNormal").disabled = !isArt;
+  $("pricingMorning").disabled = !isArt;
+  $("pricingMorningAdvance").disabled = !isArt;
+  $("pricingMorningHours").disabled = !isArt;
+  $("pricingLateNight").disabled = !isArt;
   $("promoLabel").disabled = !isArt;
   $("promoStartsAt").disabled = !isArt;
   $("promoEndsAt").disabled = !isArt;
@@ -4884,7 +4909,12 @@ async function loadPromoTab() {
       $("morningActive").checked = data.morningPromoActive !== false;
       $("promoName").value = data.specialPromoName || "";
       $("promoPrice").value = data.specialPromoPrice || "";
-      $("promoHalfPrice").value = data.halfHourPrice || 200;
+      $("pricingNormal").value = data.normalSingleUsePrice ?? 350;
+      $("promoHalfPrice").value = data.halfHourPrice ?? 200;
+      $("pricingMorning").value = data.morningPrice ?? 330;
+      $("pricingMorningAdvance").value = data.morningAdvancePrice ?? 320;
+      $("pricingMorningHours").value = data.morningAdvanceHours ?? 48;
+      $("pricingLateNight").value = data.lateNightPrice ?? 450;
       $("promoLabel").value = data.specialPromoLabel || "";
       $("promoSpecialQrUrl").value = data.specialQrUrl || "";
       
@@ -4923,36 +4953,48 @@ $("promoSaveBtn").addEventListener("click", async () => {
   const morningPromoActive = $("morningActive").checked;
   const promoName = $("promoName").value.trim();
   const promoPrice = $("promoPrice").value.trim();
-  const halfPriceRaw = $("promoHalfPrice").value.trim();
   const promoLabel = $("promoLabel").value.trim();
   const startsAtRaw = $("promoStartsAt").value;
   const endsAtRaw = $("promoEndsAt").value;
   const specialQrUrl = $("promoSpecialQrUrl").value.trim();
 
-  if (!promoName) {
+  if (promoActive && !promoName) {
     showToast("Promo Name is required.", true);
     $("promoName").focus();
     return;
   }
-  if (!promoPrice || isNaN(promoPrice) || Number(promoPrice) <= 0) {
+  if (promoActive && (!promoPrice || isNaN(promoPrice) || Number(promoPrice) <= 0)) {
     showToast("Valid positive promo price is required.", true);
     $("promoPrice").focus();
     return;
   }
-  // Half-hour price (Phase B) — optional field; when filled it must be a sane
-  // integer. Below 175 two half-hours undercut the ฿350 hour → confirm intent.
-  let halfHourPrice;
-  if (halfPriceRaw !== "") {
-    halfHourPrice = Number(halfPriceRaw);
-    if (!Number.isInteger(halfHourPrice) || halfHourPrice < 100 || halfHourPrice > 1000) {
-      showToast("Half-hour price must be an integer 100-1000 THB.", true);
-      $("promoHalfPrice").focus();
-      return;
+  const readInteger = (id, label, min, max) => {
+    const value = Number($(id).value);
+    if (!Number.isInteger(value) || value < min || value > max) {
+      showToast(`${label} must be an integer ${min}-${max}.`, true);
+      $(id).focus();
+      return null;
     }
-    if (halfHourPrice < 175 && !confirm(`Half-hour ฿${halfHourPrice}: two half-hours (฿${halfHourPrice*2}) would be CHEAPER than the ฿350 hour.\n\nSave anyway?`)) {
-      return;
-    }
-  }
+    return value;
+  };
+  const normalSingleUsePrice = readInteger("pricingNormal", "Standard price", 100, 5000);
+  const halfHourPrice = readInteger("promoHalfPrice", "Half-hour price", 100, 1000);
+  const morningPrice = readInteger("pricingMorning", "Morning price", 100, 5000);
+  const morningAdvancePrice = readInteger("pricingMorningAdvance", "Morning advance price", 100, 5000);
+  const morningAdvanceHours = readInteger("pricingMorningHours", "Morning advance hours", 1, 720);
+  const lateNightPrice = readInteger("pricingLateNight", "Late-night price", 100, 5000);
+  if ([normalSingleUsePrice, halfHourPrice, morningPrice, morningAdvancePrice, morningAdvanceHours, lateNightPrice].some(v => v === null)) return;
+
+  if (halfHourPrice * 2 < normalSingleUsePrice && !confirm(`Two half-hours (฿${halfHourPrice * 2}) are cheaper than one standard hour (฿${normalSingleUsePrice}).\n\nContinue?`)) return;
+  if (morningAdvancePrice > morningPrice && !confirm(`Morning Advance (฿${morningAdvancePrice}) is higher than Morning (฿${morningPrice}).\n\nContinue?`)) return;
+  if (promoActive && Number(promoPrice) > normalSingleUsePrice && !confirm(`Special Promotion (฿${promoPrice}) is higher than Standard (฿${normalSingleUsePrice}).\n\nContinue?`)) return;
+
+  const preview = [
+    `Standard ฿${normalSingleUsePrice}/hr`, `Half-hour ฿${halfHourPrice}`,
+    `Morning ฿${morningPrice}`, `Advance ฿${morningAdvancePrice} (≥${morningAdvanceHours}h)`,
+    `Late Night ฿${lateNightPrice}`, promoActive ? `Special ฿${promoPrice} ACTIVE` : "Special inactive",
+  ].join("\n");
+  if (!confirm(`Apply these prices to NEW User quotes and bookings?\n\n${preview}\n\nExisting bookings will not change.`)) return;
 
   let startsAt = "";
   if (startsAtRaw) {
@@ -4972,12 +5014,17 @@ $("promoSaveBtn").addEventListener("click", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        action: "save_special_promotion",
+        action: "save_store_pricing",
         promoActive,
         morningPromoActive,
         promoName,
-        promoPrice: Number(promoPrice),
-        ...(halfHourPrice !== undefined ? { halfHourPrice } : {}),
+        ...(promoPrice ? { promoPrice: Number(promoPrice) } : {}),
+        normalSingleUsePrice,
+        halfHourPrice,
+        morningPrice,
+        morningAdvancePrice,
+        morningAdvanceHours,
+        lateNightPrice,
         promoLabel,
         startsAt,
         endsAt,
@@ -4988,14 +5035,14 @@ $("promoSaveBtn").addEventListener("click", async () => {
     if (!res.ok || !data.ok) {
       throw new Error(data.error || "Failed to save promotion settings.");
     }
-    showToast("✓ Promotion settings saved successfully!");
+    showToast("✓ Store pricing saved successfully!");
     loadPromoTab();
   } catch(e) {
     console.error(e);
-    showToast(e.message || "Failed to save promotion.", true);
+    showToast(e.message || "Failed to save store pricing.", true);
   } finally {
     btn.disabled = false;
-    btn.textContent = "✓ Save Promotion";
+    btn.textContent = "✓ Save Store Pricing";
   }
 });
 

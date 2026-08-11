@@ -5,6 +5,7 @@
 // Auth: requires valid admin session cookie.
 // Actions:
 //   add_pass_to_registered_user            (branch_manager or above)
+//   save_store_pricing                      (Art owner only)
 //   save_special_promotion                 (owner-only — merged in from
 //   deactivate_special_promotion            the former /api/admin-pricing-action
 //                                           route to keep the Vercel function
@@ -101,9 +102,11 @@ export default async function handler(req, res) {
   const { action, targetUserId, packageType, validFrom, note, eventEndDate, eventName } = req.body || {};
 
   // ── Pricing actions (owner-only) ─────────────────────────────────
-  if (action === 'save_special_promotion' || action === 'deactivate_special_promotion') {
-    if (!requireRole(session, 'owner', 'ultra_admin')) {
-      return res.status(403).json({ ok: false, error: 'Access denied: owner only.' });
+  if (action === 'save_store_pricing' || action === 'save_special_promotion' || action === 'deactivate_special_promotion') {
+    // Pricing is intentionally pinned to one authenticated operator. The UI
+    // also hides these controls, but this server check is the security boundary.
+    if (adminName !== 'Art' || !requireRole(session, 'owner')) {
+      return res.status(403).json({ ok: false, error: 'Access denied: Art owner only.' });
     }
     return handlePricingAction({ req, res, adminName, session, action });
   }
@@ -281,13 +284,18 @@ export default async function handler(req, res) {
 // (moved verbatim from the former /api/admin-pricing-action route)
 // ════════════════════════════════════════════════════════════════════
 async function handlePricingAction({ req, res, adminName, session, action }) {
-  const { promoActive, promoName, promoPrice, promoLabel, startsAt, endsAt, morningPromoActive, halfHourPrice } = req.body || {};
+  const {
+    promoActive, promoName, promoPrice, promoLabel, startsAt, endsAt,
+    morningPromoActive, halfHourPrice, normalSingleUsePrice,
+    morningPrice, morningAdvancePrice, morningAdvanceHours, lateNightPrice,
+  } = req.body || {};
 
   try {
     const db = getAdminDb();
     const docRef = db.collection('system_settings').doc('pricing');
 
     if (action === 'deactivate_special_promotion') {
+      const beforeSnap = await docRef.get();
       await docRef.set({
         specialPromoActive: false,
         updatedAt: FieldValue.serverTimestamp(),
@@ -298,27 +306,47 @@ async function handlePricingAction({ req, res, adminName, session, action }) {
       await writeAuditLog(db, {
         actor: adminName, actorRole: session.role,
         action: 'deactivate_special_promotion', targetId: 'system_settings/pricing',
+        before: beforeSnap.exists ? { specialPromoActive: beforeSnap.data().specialPromoActive === true } : null,
         after: { specialPromoActive: false },
       });
       return res.status(200).json({ ok: true });
     }
 
-    // action === 'save_special_promotion'
-    const price = Number(promoPrice);
-    if (!Number.isInteger(price) || price <= 0) {
-      return res.status(400).json({ ok: false, error: 'Price must be a valid positive integer' });
+    // Promotion details may stay blank while inactive, allowing Art to update
+    // only the store's base rates. Activating a promotion requires both fields.
+    const promoIsActive = Boolean(promoActive);
+    const promoNameClean = String(promoName || '').trim();
+    const hasPromoPrice = promoPrice !== undefined && promoPrice !== null && promoPrice !== '';
+    const price = hasPromoPrice ? Number(promoPrice) : undefined;
+    if (hasPromoPrice && (!Number.isInteger(price) || price < 100 || price > 5000)) {
+      return res.status(400).json({ ok: false, error: 'Promotion price must be an integer 100-5000 THB' });
+    }
+    if (promoIsActive && (!promoNameClean || price === undefined)) {
+      return res.status(400).json({ ok: false, error: 'Active promotion requires a name and price' });
     }
 
-    // Half-hour price (Phase B): optional — written only when the client sends
-    // it, so an older admin.html can't silently reset it. Bounds keep a typo
-    // from selling half hours at ฿1 or ฿9999; server fallback stays ฿200.
-    let halfPrice;
-    if (halfHourPrice !== undefined && halfHourPrice !== null && halfHourPrice !== '') {
-      halfPrice = Number(halfHourPrice);
-      if (!Number.isInteger(halfPrice) || halfPrice < 100 || halfPrice > 1000) {
-        return res.status(400).json({ ok: false, error: 'Half-hour price must be an integer 100-1000 THB' });
-      }
-    }
+    // All store-rate fields are optional for backward compatibility with a
+    // previously cached admin.html. Only values actually sent are merged.
+    const optionalInteger = (raw, label, min, max) => {
+      if (raw === undefined || raw === null || raw === '') return { value: undefined };
+      const value = Number(raw);
+      return Number.isInteger(value) && value >= min && value <= max
+        ? { value }
+        : { error: `${label} must be an integer ${min}-${max}` };
+    };
+    const rateInputs = {
+      normalSingleUsePrice: optionalInteger(normalSingleUsePrice, 'Standard price', 100, 5000),
+      halfHourPrice: optionalInteger(halfHourPrice, 'Half-hour price', 100, 1000),
+      morningPrice: optionalInteger(morningPrice, 'Morning price', 100, 5000),
+      morningAdvancePrice: optionalInteger(morningAdvancePrice, 'Morning advance price', 100, 5000),
+      morningAdvanceHours: optionalInteger(morningAdvanceHours, 'Morning advance hours', 1, 720),
+      lateNightPrice: optionalInteger(lateNightPrice, 'Late-night price', 100, 5000),
+    };
+    const invalidRate = Object.values(rateInputs).find(x => x.error);
+    if (invalidRate) return res.status(400).json({ ok: false, error: invalidRate.error });
+    const rateUpdate = Object.fromEntries(
+      Object.entries(rateInputs).filter(([, result]) => result.value !== undefined).map(([key, result]) => [key, result.value])
+    );
 
     let startTS = null;
     let startDate = null;
@@ -357,15 +385,17 @@ async function handlePricingAction({ req, res, adminName, session, action }) {
       return res.status(400).json({ ok: false, error: 'Ends At date must be after Starts At date' });
     }
 
-    await docRef.set({
-      normalSingleUsePrice: 350,
+    const beforeSnap = await docRef.get();
+    const beforeData = beforeSnap.exists ? beforeSnap.data() : {};
+    const settingsUpdate = {
+      ...rateUpdate,
+      pricingSchemaVersion: 3,
       // Morning 330/320 kill-switch. Written only when the client sends it, so
       // an older admin.html can't silently flip the promo off.
       ...(typeof morningPromoActive === 'boolean' ? { morningPromoActive } : {}),
-      ...(halfPrice !== undefined ? { halfHourPrice: halfPrice } : {}),
-      specialPromoActive: Boolean(promoActive),
-      specialPromoName: String(promoName || "").trim(),
-      specialPromoPrice: price,
+      specialPromoActive: promoIsActive,
+      specialPromoName: promoNameClean,
+      ...(price !== undefined ? { specialPromoPrice: price } : {}),
       specialPromoLabel: String(promoLabel || "").trim(),
       specialPromoStartsAt: startTS,
       specialPromoEndsAt: endTS,
@@ -374,13 +404,28 @@ async function handlePricingAction({ req, res, adminName, session, action }) {
       lateNightQrUrl: "/late-night-qr.png",
       updatedAt: FieldValue.serverTimestamp(),
       updatedBy: adminName
-    }, { merge: true });
+    };
+    await docRef.set(settingsUpdate, { merge: true });
 
-    console.log(`[admin-user-action] Saved special promotion: ${promoName} (Price: ${price}) by ${adminName}`);
+    console.log(`[admin-user-action] Saved store pricing and promotion settings by ${adminName}`);
     await writeAuditLog(db, {
       actor: adminName, actorRole: session.role,
-      action: 'save_special_promotion', targetId: 'system_settings/pricing',
-      after: { specialPromoActive: Boolean(promoActive), specialPromoName: String(promoName || '').trim(), specialPromoPrice: price, ...(halfPrice !== undefined ? { halfHourPrice: halfPrice } : {}) },
+      action: action === 'save_store_pricing' ? 'save_store_pricing' : 'save_special_promotion',
+      targetId: 'system_settings/pricing',
+      before: {
+        ...Object.fromEntries(Object.keys(rateUpdate).map(key => [key, beforeData[key] ?? null])),
+        morningPromoActive: beforeData.morningPromoActive !== false,
+        specialPromoActive: beforeData.specialPromoActive === true,
+        specialPromoName: beforeData.specialPromoName || '',
+        specialPromoPrice: beforeData.specialPromoPrice ?? null,
+      },
+      after: {
+        ...rateUpdate,
+        morningPromoActive: typeof morningPromoActive === 'boolean' ? morningPromoActive : beforeData.morningPromoActive !== false,
+        specialPromoActive: promoIsActive,
+        specialPromoName: promoNameClean,
+        specialPromoPrice: price ?? beforeData.specialPromoPrice ?? null,
+      },
     });
     return res.status(200).json({ ok: true });
   } catch (err) {

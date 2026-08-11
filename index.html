@@ -1012,9 +1012,8 @@ function dayOfWeekDateKey(dateKey){
 }
 // Pricing v2 cutover: every single-use create is server-authoritative.
 const OFFPEAK     = { startHour:9, endHour:15 }; // 09:00–15:00
-// Late Night Session: 00:00–06:00 · ฿450 · opened manually by Admin only.
+// Late Night Session: 00:00–06:00 · dynamic store rate · opened manually by Admin only.
 const LN_START    = 0, LN_END = 6;
-const LATE_NIGHT_PRICE = 450;
 const LATE_NIGHT_QR_URL = ""; // TODO: set to "/late-night-qr.png" (or full URL) when QR is ready
 function isLateNightHour(h){ return h >= LN_START && h < LN_END; }
 // Legacy-fallback mirror of api/_lib/pricing.js morning rules (Pricing v2).
@@ -1023,6 +1022,20 @@ function isLateNightHour(h){ return h >= LN_START && h < LN_END; }
 // Holiday flag comes from state.currentDateIsHoliday, loaded from the same
 // holidays/{date} doc the server reads when the day's grid was rendered.
 const MORNING_FALLBACK = { startHour:6, endHourIncl:11, price:330, advancePrice:320, advanceHours:48 };
+function clientStorePricing(){
+  const cfg=state.pricing||{};
+  const valid=(key,fallback,min=1,max=100000)=>{
+    const n=Number(cfg[key]);
+    return Number.isInteger(n)&&n>=min&&n<=max?n:fallback;
+  };
+  return {
+    normal:valid("normalSingleUsePrice",350),
+    morning:valid("morningPrice",330),
+    morningAdvance:valid("morningAdvancePrice",320),
+    morningAdvanceHours:valid("morningAdvanceHours",48,1,720),
+    lateNight:valid("lateNightPrice",450),
+  };
+}
 function morningFallbackQuote(dateISO, startTime){
   // Same admin kill-switch the server engine honours (system_settings/pricing).
   if(state.pricing && state.pricing.morningPromoActive === false) return null;
@@ -1033,9 +1046,10 @@ function morningFallbackQuote(dateISO, startTime){
   if(dow===0 || dow===6 || state.currentDateIsHoliday) return null;
   const startMs = Date.parse(`${dateISO}T${startTime}:00+07:00`);
   const advanceHours = Number.isFinite(startMs) ? (startMs - Date.now())/3_600_000 : 0;
-  return advanceHours >= MORNING_FALLBACK.advanceHours
-    ? { price: MORNING_FALLBACK.advancePrice, mode:"morning_weekday_advance" }
-    : { price: MORNING_FALLBACK.price,        mode:"morning_weekday" };
+  const prices=clientStorePricing();
+  return advanceHours >= prices.morningAdvanceHours
+    ? { price: prices.morningAdvance, mode:"morning_weekday_advance" }
+    : { price: prices.morning,        mode:"morning_weekday" };
 }
 
 const PACKAGES = {
@@ -2038,7 +2052,7 @@ function getPromoState() {
   return {
     active: true,
     name: cfg.specialPromoName,
-    price: Number(cfg.specialPromoPrice) || 350,
+    price: Number(cfg.specialPromoPrice) || clientStorePricing().normal,
     label: cfg.specialPromoLabel,
     startsAt: starts,
     endsAt: ends
@@ -2060,8 +2074,9 @@ function updatePromoBanner() {
       rangeText += ` · ${dateRangeStr}`;
     }
     
-    const thText = `Single Use เหลือ ${promo.price} บาท/ชม. จากปกติ 350 บาท/ชม.`;
-    const enText = `Single Use only ฿${promo.price}/hr (Regular ฿350/hr)`;
+    const regularPrice = clientStorePricing().normal;
+    const thText = `Single Use เหลือ ${promo.price} บาท/ชม. จากปกติ ${regularPrice} บาท/ชม.`;
+    const enText = `Single Use only ฿${promo.price}/hr (Regular ฿${regularPrice}/hr)`;
     const descText = currentLang === "th" ? thText : enText;
     
     banner.innerHTML = `
@@ -2085,6 +2100,7 @@ function updatePromoBanner() {
 function updateHomeSingleUsePricing() {
   const subEl = $("homeSingleSub");
   if (!subEl) return;
+  const prices = clientStorePricing();
   const promo = getPromoState();
   if (promo.active) {
     if (currentLang === "th") {
@@ -2093,12 +2109,14 @@ function updateHomeSingleUsePricing() {
       subEl.textContent = `฿${promo.price} / hour · Pay by QR slip`;
     }
   } else if (state.pricing && state.pricing.morningPromoActive === false) {
-    // Morning promo paused by admin — don't advertise 330/320 on the card.
+    // Morning pricing paused by admin — advertise only the current standard.
     subEl.textContent = currentLang === "th"
-      ? "350 บาท / ชั่วโมง · ชำระผ่าน QR และอัปโหลดสลิป"
-      : "฿350 / hour · Pay by QR slip";
+      ? `${prices.normal} บาท / ชั่วโมง · ชำระผ่าน QR และอัปโหลดสลิป`
+      : `฿${prices.normal} / hour · Pay by QR slip`;
   } else {
-    subEl.textContent = t("singleSub");
+    subEl.textContent = currentLang === "th"
+      ? `${prices.normal} บาท / ชั่วโมง · เช้า จ.–ศ. เหลือ ${prices.morning}/${prices.morningAdvance} · ชำระผ่าน QR และอัปโหลดสลิป`
+      : `฿${prices.normal} / hour · Weekday mornings ฿${prices.morning}/${prices.morningAdvance} · Pay by QR slip`;
   }
 }
 
@@ -2120,18 +2138,14 @@ async function openBookingView() {
   showView("viewBooking");
   buildDates();
 
-  if (!state.pricing) {
-    console.log("[perf] Fetching pricing config...");
-    try {
-      const pDoc = await getDoc(doc(db, "system_settings", "pricing"));
-      if (pDoc.exists()) {
-        state.pricing = pDoc.data();
-      }
-    } catch(e) {
-      console.warn("Failed to load pricing config on booking view open:", e);
-    }
-  } else {
-    console.log("[perf] Using cached pricing config");
+  // Re-read whenever the booking view opens so a price just published by Art
+  // is reflected in the banner/card. The server quote/create remains the
+  // authoritative live price even if this display-only read fails.
+  try {
+    const pDoc = await getDoc(doc(db, "system_settings", "pricing"));
+    if (pDoc.exists()) state.pricing = pDoc.data();
+  } catch(e) {
+    console.warn("Failed to refresh pricing config on booking view open; keeping cached display:", e);
   }
 
   updatePromoBanner();

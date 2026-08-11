@@ -174,6 +174,7 @@ describe('locked owner role and capability matrix',()=>{
       {action:'approve_pass_purchase'},
       {action:'reject_pass_purchase'},
       {action:'save_special_promotion'},
+      {action:'save_store_pricing'},
     ];
     for(const body of passActions){
       expect((await call(userActionHandler,body,'Staff')).statusCode,`staff ${body.action}`).toBe(403);
@@ -188,14 +189,22 @@ describe('locked owner role and capability matrix',()=>{
     expect((await call(accountingHandler,{operation:'delete_booking',bookingId:'missing'},'Manager')).statusCode).toBe(403);
   });
 
-  test('owner and ultra_admin pass full-authority gates',async()=>{
+  test('owner and ultra_admin pass general full-authority gates',async()=>{
     for(const who of ['Art','Boss']){
       for(const [name,body] of Object.entries(financialBodies)){
         expect((await call(accountingHandler,body,who)).statusCode,`${who} ${name}`).not.toBe(403);
       }
       expect((await call(accountingHandler,{operation:'delete_booking',bookingId:'missing'},who)).statusCode).not.toBe(403);
-      expect((await call(userActionHandler,{action:'save_special_promotion'},who)).statusCode).not.toBe(403);
     }
+  });
+
+  test('store pricing mutations are pinned to Art owner only',async()=>{
+    expect((await call(userActionHandler,{action:'save_store_pricing'},'Art')).statusCode).not.toBe(403);
+    expect((await call(userActionHandler,{action:'save_special_promotion'},'Art')).statusCode).not.toBe(403);
+    expect((await call(userActionHandler,{action:'deactivate_special_promotion'},'Art')).statusCode).not.toBe(403);
+    expect((await call(userActionHandler,{action:'save_store_pricing'},'Boss')).statusCode).toBe(403);
+    expect((await call(userActionHandler,{action:'save_special_promotion'},'Boss')).statusCode).toBe(403);
+    expect((await call(userActionHandler,{action:'deactivate_special_promotion'},'Boss')).statusCode).toBe(403);
   });
 
   test('branch staff manual booking is unpaid-only',async()=>{

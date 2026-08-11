@@ -6,30 +6,50 @@
 // stays deterministic and unit-testable. Kept in _lib (not a routed function).
 //
 // Superset of the existing live pricing (do NOT break these):
-//   • standard 350                     (qrType "normal")
-//   • late_night 450  startHour 0-5    (qrType "late_night")   — index.html LN_START=0..LN_END=6
+//   • standard (default 350)            (qrType "normal")
+//   • late_night (default 450) 00:00-05:59 (qrType "late_night")
 //   • special_promotion  from system_settings/pricing          (qrType "special")
 // New in v2:
-//   • morning_weekday 330 / morning_weekday_advance 320
+//   • morning_weekday defaults 330 / advance 320
 //       Mon-Fri, startHour 06:00-11:00 (incl 11), non-holiday; >=48h→320 else 330
-//   • voucher overlay: ONLY on base standard 350 → -discount(50) → 300; no stacking.
+//   • voucher overlay: ONLY on the standard rate → discount; no stacking.
 //
 // Precedence for a single-use booking (highest first):
 //   late_night → special_promotion → morning → standard,  then voucher overlay
-//   (voucher applies only when the resulting base is "standard"/350).
+//   (voucher applies only when the resulting base type is "standard").
 // NOTE(assumption): special_promotion outranks morning (admin campaign wins);
 //   this preserves the existing promo-over-standard behaviour. Confirm if not.
 // ════════════════════════════════════════════════════════════════════
 
-export const PRICE_RULE_VERSION = '2026-07-v2';
+export const PRICE_RULE_VERSION = '2026-08-v3-dynamic-store-rates';
 
-const STANDARD_PRICE          = 350;
-const LATE_NIGHT_PRICE        = 450;
-const MORNING_PRICE           = 330;  // advanceHours < 48
-const MORNING_ADVANCE_PRICE   = 320;  // advanceHours >= 48
-const MORNING_ADVANCE_HOURS   = 48;
+// Safe fallbacks preserve the exact live behaviour when the Firestore pricing
+// document is absent, partially migrated, or contains an invalid value.
+export const DEFAULT_STORE_PRICING = Object.freeze({
+  normalSingleUsePrice: 350,
+  lateNightPrice: 450,
+  morningPrice: 330,
+  morningAdvancePrice: 320,
+  morningAdvanceHours: 48,
+});
+
 const VOUCHER_DEFAULT_DISCOUNT = 50;
 const LN_START = 0, LN_END = 6;       // late-night hours [0,6) — mirrors index.html
+
+function configuredInteger(cfg, key, fallback, min = 1, max = 100000) {
+  const n = Number(cfg?.[key]);
+  return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
+}
+
+export function resolveStorePricing(cfg) {
+  return {
+    normalSingleUsePrice: configuredInteger(cfg, 'normalSingleUsePrice', DEFAULT_STORE_PRICING.normalSingleUsePrice),
+    lateNightPrice: configuredInteger(cfg, 'lateNightPrice', DEFAULT_STORE_PRICING.lateNightPrice),
+    morningPrice: configuredInteger(cfg, 'morningPrice', DEFAULT_STORE_PRICING.morningPrice),
+    morningAdvancePrice: configuredInteger(cfg, 'morningAdvancePrice', DEFAULT_STORE_PRICING.morningAdvancePrice),
+    morningAdvanceHours: configuredInteger(cfg, 'morningAdvanceHours', DEFAULT_STORE_PRICING.morningAdvanceHours, 1, 720),
+  };
+}
 
 // Day-of-week for a calendar date (tz-safe): 0=Sun..6=Sat.
 function dowOf(dateISO) {
@@ -38,14 +58,14 @@ function dowOf(dateISO) {
 }
 
 // Is the promo config active right now? Mirrors getPromoState() in index.html.
-function promoActiveNow(cfg, nowMs) {
+function promoActiveNow(cfg, nowMs, standardPrice) {
   if (!cfg || cfg.specialPromoActive !== true) return null;
   const starts = cfg.specialPromoStartsAt?.toMillis?.() ?? null;
   const ends   = cfg.specialPromoEndsAt?.toMillis?.()   ?? null;
   if (starts !== null && nowMs < starts) return null;
   if (ends   !== null && nowMs > ends)   return null;
   return {
-    price: Number(cfg.specialPromoPrice) || STANDARD_PRICE,
+    price: Number(cfg.specialPromoPrice) || standardPrice,
     name:  typeof cfg.specialPromoName === 'string' ? cfg.specialPromoName : 'special_promotion',
   };
 }
@@ -57,9 +77,13 @@ function validateVoucher(v, ctx) {
   const exp = v.expiresAt?.toMillis?.() ?? (typeof v.expiresAt === 'number' ? v.expiresAt : null);
   if (exp !== null && exp < ctx.nowMs) return { ok: false, reason: 'expired' };
   if ((Number(v.usedCount) || 0) >= (Number(v.maxUses) || 0)) return { ok: false, reason: 'used_up' };
-  // Voucher only stacks on a plain standard 350 base.
-  const allowedBase = Number(v.allowedBasePrice) || STANDARD_PRICE;
-  if (ctx.pricingType !== 'standard' || ctx.originalPrice !== allowedBase) {
+  // Legacy vouchers commonly carry allowedBasePrice=350 to mean "standard
+  // rate". They keep working when Art changes the current standard price. A
+  // non-default allowedBasePrice (or allowedBaseMode="exact") stays pinned.
+  const configuredBase = Number(v.allowedBasePrice);
+  const exactBaseRequired = Number.isFinite(configuredBase) && configuredBase > 0
+    && (v.allowedBaseMode === 'exact' || configuredBase !== DEFAULT_STORE_PRICING.normalSingleUsePrice);
+  if (ctx.pricingType !== 'standard' || (exactBaseRequired && ctx.originalPrice !== configuredBase)) {
     return { ok: false, reason: 'not_applicable' };
   }
   if (v.issuedTo && v.issuedTo !== ctx.lineUserId) return { ok: false, reason: 'wrong_owner' };
@@ -78,6 +102,7 @@ export function computeQuote(input) {
   } = input || {};
 
   const startHour = parseInt(String(startTime).slice(0, 2), 10);
+  const storePricing = resolveStorePricing(promoConfig);
   const dow = dowOf(date);
   const isWeekend = dow === 0 || dow === 6;
   const isWeekday = dow >= 1 && dow <= 5;
@@ -105,18 +130,18 @@ export function computeQuote(input) {
 
   // ── Base pricing type (precedence) ────────────────────────────────
   let pricingType, originalPrice, qrType, promoCode = null;
-  const promo = promoActiveNow(promoConfig, nowMs);
+  const promo = promoActiveNow(promoConfig, nowMs, storePricing.normalSingleUsePrice);
 
   if (startHour >= LN_START && startHour < LN_END) {
-    pricingType = 'late_night'; originalPrice = LATE_NIGHT_PRICE; qrType = 'late_night';
+    pricingType = 'late_night'; originalPrice = storePricing.lateNightPrice; qrType = 'late_night';
   } else if (promo) {
     pricingType = 'special_promotion'; originalPrice = promo.price; qrType = 'special'; promoCode = promo.name;
   } else if (morningEligible) {
-    if (advanceHoursRaw >= MORNING_ADVANCE_HOURS) { pricingType = 'morning_weekday_advance'; originalPrice = MORNING_ADVANCE_PRICE; }
-    else { pricingType = 'morning_weekday'; originalPrice = MORNING_PRICE; }
+    if (advanceHoursRaw >= storePricing.morningAdvanceHours) { pricingType = 'morning_weekday_advance'; originalPrice = storePricing.morningAdvancePrice; }
+    else { pricingType = 'morning_weekday'; originalPrice = storePricing.morningPrice; }
     qrType = 'normal';
   } else {
-    pricingType = 'standard'; originalPrice = STANDARD_PRICE; qrType = 'normal';
+    pricingType = 'standard'; originalPrice = storePricing.normalSingleUsePrice; qrType = 'normal';
   }
 
   // ── Voucher overlay (standard base only) ──────────────────────────
