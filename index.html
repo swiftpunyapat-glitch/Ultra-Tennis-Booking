@@ -1100,6 +1100,16 @@ const state = {
 };
 
 const DEBUG_MODE=new URLSearchParams(location.search).get("debug")==="1";
+const VOUCHER_DEEP_LINK_KEY="ut_voucher_deep_link";
+(function captureVoucherDeepLink(){
+  try{
+    const raw=new URLSearchParams(location.search).get("voucher");
+    const code=String(raw||"").trim().toUpperCase();
+    // Keyword/prefix may help route a campaign, but only an exact code that
+    // the server finds in vouchers/{CODE} can grant a discount/free booking.
+    if(/^[A-Z0-9_-]{3,64}$/.test(code)) sessionStorage.setItem(VOUCHER_DEEP_LINK_KEY,code);
+  }catch(_){ }
+})();
 const debugTelemetry={
   buildVersion:BUILD_VERSION,
   page:"customer",
@@ -2708,6 +2718,10 @@ function updateBookingConfirmBtn() {
 // Voucher code changes re-quote (debounced) so the confirm button reflects ฿300.
 let _voucherQuoteTimer=null;
 $("bkVoucher")?.addEventListener("input", ()=>{ clearTimeout(_voucherQuoteTimer); _voucherQuoteTimer=setTimeout(refreshQuote, 400); });
+try{
+  const deepLinkVoucher=sessionStorage.getItem(VOUCHER_DEEP_LINK_KEY)||"";
+  if(deepLinkVoucher && $("bkVoucher")) $("bkVoucher").value=deepLinkVoucher;
+}catch(_){ }
 
 // Pricing v2 Stage 2: try the server-authoritative create for a single-use
 // booking. Returns true (success, payment screen shown), "handled" (a legit
@@ -2759,7 +2773,8 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
         : "Multi-hour booking is not available yet. Please book one hour at a time.", true);
       return "handled";
     }
-    const expiresAt = new Date(d.paymentExpiresAt);
+    const requiresPayment=d.requiresPayment!==false;
+    const expiresAt = requiresPayment ? new Date(d.paymentExpiresAt) : null;
     const endTime = b.endTime;
     state.currentBookingCode  = b.bookingCode;
     state.currentBookingDocId = b.id;
@@ -2767,9 +2782,18 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
     // bookingStatus/paymentStatus are known at creation but the server create
     // response omits them — renderPaymentQr's canDownload gate needs both, so
     // set them explicitly or the Download QR button never shows (Stage 1 fix).
-    state.currentBookingData  = { ...b, expiresAt, paymentQrType: b.qrType, price: b.finalPrice, qrAmount: b.qrAmount, bookingStatus: "pending_payment", paymentStatus: "unpaid" };
+    state.currentBookingData  = { ...b, expiresAt, paymentQrType: b.qrType, price: b.finalPrice, qrAmount: b.qrAmount, bookingStatus: b.bookingStatus||"pending_payment", paymentStatus: b.paymentStatus||"unpaid" };
     if(window.notifyAdmins){
       window.notifyAdmins({ type:"new_booking_admin", bookingCode:b.bookingCode, customerName:name, customerPhone:phone, date:dateISO, startTime:state.time, endTime });
+    }
+    if(!requiresPayment){
+      try{
+        localStorage.removeItem("ut_pending_booking");
+        sessionStorage.removeItem(VOUCHER_DEEP_LINK_KEY);
+      }catch(_){ }
+      showSuccess("✅",t("bookingConfirmed"),b.bookingCode,`${name} · ${dateISO} · ${state.time}–${endTime} · Voucher`);
+      showView("viewSuccess");
+      return true;
     }
     state.paymentMode="booking";
     try{

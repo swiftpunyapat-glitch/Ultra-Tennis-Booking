@@ -20,6 +20,10 @@ import {
   isValidIdempotencyKey,
 } from './_lib/firebase-admin.js';
 import { computeQuote } from './_lib/pricing.js';
+import {
+  applyVoucherToQuote, evaluateVoucher, isVoucherV2,
+  redeemVoucherUpdate, releaseVoucherUpdate, reserveVoucherUpdate,
+} from './_lib/voucher-engine.js';
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 
@@ -234,7 +238,47 @@ function mapVoucherReason(r) {
     used_up:        'โค้ดถูกใช้ครบแล้ว',
     not_applicable: 'โค้ดใช้กับราคาหรือโปรโมชั่นนี้ไม่ได้',
     wrong_owner:    'โค้ดนี้ไม่ใช่ของบัญชีนี้',
+    reserved:       'โค้ดนี้ถูกล็อกไว้กับการจองอื่นชั่วคราว',
+    not_started:    'แคมเปญ Voucher นี้ยังไม่เริ่ม',
+    day_not_allowed:'Voucher นี้ใช้ไม่ได้ในวันที่เลือก',
+    holiday_not_allowed: 'Voucher นี้ใช้ไม่ได้ในวันหยุด',
+    time_not_allowed: 'Voucher นี้ใช้ไม่ได้ในช่วงเวลาที่เลือก',
+    duration_not_allowed: 'Voucher นี้ใช้ไม่ได้กับระยะเวลาที่เลือก',
+    branch_not_allowed: 'Voucher นี้ใช้ไม่ได้ที่สาขานี้',
+    resource_not_allowed: 'Voucher นี้ใช้ไม่ได้กับสนามนี้',
+    campaign_not_found: 'ไม่พบข้อมูลแคมเปญของ Voucher นี้',
+    invalid_type:   'ประเภท Voucher ไม่ถูกต้อง',
+    line_login_required: 'กรุณาเปิด Voucher ผ่าน LINE และเข้าสู่ระบบก่อน',
   })[r] || 'โค้ดส่วนลดไม่ถูกต้อง';
+}
+
+async function loadVoucherBundle(db, code) {
+  if (!code) return { voucher: null, campaign: null, campaignRef: null };
+  const voucherSnap = await db.collection('vouchers').doc(code).get();
+  if (!voucherSnap.exists) return { voucher: null, campaign: null, campaignRef: null };
+  const voucher = voucherSnap.data();
+  const campaignRef = voucher.campaignId
+    ? db.collection('voucher_campaigns').doc(String(voucher.campaignId))
+    : null;
+  const campaignSnap = campaignRef ? await campaignRef.get() : null;
+  return {
+    voucher,
+    campaign: campaignSnap?.exists ? { id: campaignSnap.id, ...campaignSnap.data() } : null,
+    campaignRef,
+  };
+}
+
+function quoteWithVoucher(baseQuote, bundle, context) {
+  if (!context.voucherCode) return baseQuote;
+  const result = evaluateVoucher({
+    voucher: bundle.voucher, campaign: bundle.campaign, code: context.voucherCode,
+    nowMs: context.nowMs, lineUserId: context.lineUserId,
+    date: context.date, startTime: context.startTime,
+    durationMinutes: context.durationMinutes, isHoliday: context.isHoliday,
+    branchId: DEFAULT_BRANCH_ID, resourceId: RESOURCE_ID, baseQuote,
+    bookingId: context.bookingId || null,
+  });
+  return applyVoucherToQuote(baseQuote, result);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -526,7 +570,7 @@ async function handlePriceQuote(res, body) {
   const date        = typeof body.date === 'string' ? body.date.trim() : '';
   const startTime   = typeof body.startTime === 'string' ? body.startTime.trim() : '';
   const payType     = typeof body.payType === 'string' && body.payType ? body.payType : 'single';
-  const voucherCode = typeof body.voucherCode === 'string' && body.voucherCode.trim() ? body.voucherCode.trim() : null;
+  const voucherCode = typeof body.voucherCode === 'string' && body.voucherCode.trim() ? body.voucherCode.trim().toUpperCase() : null;
   const lineUserId  = typeof body.lineUserId === 'string' ? body.lineUserId : null;
   const durationMinutes = parseDurationMinutes(body);
 
@@ -552,10 +596,11 @@ async function handlePriceQuote(res, body) {
   }
 
   try {
-    const [pricingSnap, holidaySnap, voucherSnap] = await Promise.all([
+    const nowMs = Date.now();
+    const [pricingSnap, holidaySnap, voucherBundle] = await Promise.all([
       db.collection('system_settings').doc('pricing').get(),
       db.collection('holidays').doc(date).get(),
-      voucherCode ? db.collection('vouchers').doc(voucherCode).get() : Promise.resolve(null),
+      loadVoucherBundle(db, voucherCode),
     ]);
     // Owner rule: a booking containing a half joins NO promotions — full hours
     // price with the special promo disabled (single MAIN-account QR).
@@ -563,14 +608,17 @@ async function handlePriceQuote(res, body) {
     const halfPrice   = halfPriceFrom(pricingSnap.exists ? pricingSnap.data() : null);
     const isHoliday = holidaySnap.exists && holidaySnap.data().isHoliday === true;
     const quoteInput = h => ({
-      date, startTime: h, nowMs: Date.now(),
+      date, startTime: h, nowMs,
       isHoliday,
-      promoConfig, payType, voucherCode,
-      voucher: voucherSnap && voucherSnap.exists ? voucherSnap.data() : null,
+      promoConfig, payType, voucherCode: null, voucher: null,
       lineUserId,
     });
     if (durationMinutes === 60) {
-      return res.status(200).json({ ok: true, quote: computeQuote(quoteInput(startTime)) });
+      const baseQuote = computeQuote(quoteInput(startTime));
+      const quote = quoteWithVoucher(baseQuote, voucherBundle, {
+        voucherCode, nowMs, lineUserId, date, startTime, durationMinutes, isHoliday,
+      });
+      return res.status(200).json({ ok: true, quote });
     }
     const segQuotes = segs.map(x => x.span === 30
       ? halfSegQuote(x.start, halfPrice, flatHalfMetadata(date, x.start, isHoliday))
@@ -605,7 +653,7 @@ async function handleCreate(req, res, body) {
   const idToken      = typeof body.idToken === 'string' ? body.idToken.trim() : '';
   const lineDisplayName = typeof body.lineDisplayName === 'string' ? body.lineDisplayName : '';
   const customerNote = typeof body.customerNote === 'string' ? body.customerNote.slice(0, 500) : '';
-  const voucherCode  = typeof body.voucherCode === 'string' && body.voucherCode.trim() ? body.voucherCode.trim() : null;
+  const voucherCode  = typeof body.voucherCode === 'string' && body.voucherCode.trim() ? body.voucherCode.trim().toUpperCase() : null;
   const durationMinutes = parseDurationMinutes(body);
 
   // Client NEVER sends price — it is recomputed below. Validate inputs only.
@@ -643,17 +691,20 @@ async function handleCreate(req, res, body) {
   }
 
   const nowMs = Date.now();
-  let quote, segQuotes;
+  let quote, segQuotes, isHolidayForVoucher = false;
+  let voucherBundle = { voucher: null, campaign: null, campaignRef: null };
   try {
-    const [pricingSnap, holidaySnap, voucherSnap] = await Promise.all([
+    const [pricingSnap, holidaySnap, loadedVoucherBundle] = await Promise.all([
       db.collection('system_settings').doc('pricing').get(),
       db.collection('holidays').doc(date).get(),
-      voucherCode ? db.collection('vouchers').doc(voucherCode).get() : Promise.resolve(null),
+      loadVoucherBundle(db, voucherCode),
     ]);
+    voucherBundle = loadedVoucherBundle;
     // Owner rule: bookings containing a half join NO promotions (promo off).
     const promoConfig = (!hasHalf && pricingSnap.exists) ? pricingSnap.data() : null;
     const halfPrice   = halfPriceFrom(pricingSnap.exists ? pricingSnap.data() : null);
     const isHoliday   = holidaySnap.exists && holidaySnap.data().isHoliday === true;
+    isHolidayForVoucher = isHoliday;
     segQuotes = segs.map(x => x.span === 30
       ? halfSegQuote(x.start, halfPrice, flatHalfMetadata(date, x.start, isHoliday))
       : {
@@ -661,14 +712,15 @@ async function handleCreate(req, res, body) {
             date, startTime: x.start, nowMs,
             isHoliday,
             promoConfig,
-            payType: 'single', voucherCode,
-            voucher: voucherSnap && voucherSnap.exists ? voucherSnap.data() : null,
+            payType: 'single', voucherCode: null, voucher: null,
             lineUserId,
           }),
           startTime: x.start, span: 60,
         });
     quote = durationMinutes === 60
-      ? segQuotes[0]
+      ? quoteWithVoucher(segQuotes[0], voucherBundle, {
+          voucherCode, nowMs, lineUserId, date, startTime, durationMinutes, isHoliday,
+        })
       : { ...(segQuotes.find(q => q.span === 60) || segQuotes[0]), ...combineQuotes(segQuotes),
           voucherApplied: false, voucherCode: null, discountAmount: 0 };
   } catch (e) {
@@ -687,7 +739,8 @@ async function handleCreate(req, res, body) {
   const finalPrice        = quote.finalPrice;
   const endTime           = endTimeAfterMin(startTime, durationMinutes);
   const bookingCode       = genBookingCode();
-  const paymentExpiresAt  = Timestamp.fromMillis(nowMs + PAY_MINS * 60 * 1000);
+  const freeVoucher       = quote.isFreeVoucher === true;
+  const paymentExpiresAt  = freeVoucher ? null : Timestamp.fromMillis(nowMs + PAY_MINS * 60 * 1000);
   const allLateNight      = segQuotes.every(q => q.qrType === 'late_night');
   const bookingType       = allLateNight ? 'Late Night Session' : 'Single Use';
   const pricingMode       = allLateNight             ? 'late_night'
@@ -712,6 +765,7 @@ async function handleCreate(req, res, body) {
   ]);
   const availRefs   = touchedHours.map(H => db.collection('available_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:00`)));
   const voucherRef  = quote.voucherApplied ? db.collection('vouchers').doc(voucherCode) : null;
+  const campaignRef = quote.voucherApplied && voucherBundle.campaignRef ? voucherBundle.campaignRef : null;
   const bookingEndMs = Date.parse(`${date}T${endTime}:00+07:00`);
   const guestAccess = lineUserId === 'guest'
     ? prepareGuestAccess({ bookingEndMs: Number.isFinite(bookingEndMs) ? bookingEndMs : null, nowMs })
@@ -724,10 +778,13 @@ async function handleCreate(req, res, body) {
     await db.runTransaction(async (t) => {
       const reads = [...cellRefs.map(r => t.get(r)), ...availRefs.map(r => t.get(r))];
       if (voucherRef) reads.push(t.get(voucherRef));
+      if (campaignRef) reads.push(t.get(campaignRef));
       const snaps = await Promise.all(reads);
       const cellSnaps  = snaps.slice(0, cellRefs.length);
       const availSnaps = snaps.slice(cellRefs.length, cellRefs.length + availRefs.length);
-      const voucherSnap = voucherRef ? snaps[cellRefs.length + availRefs.length] : null;
+      const voucherIndex = cellRefs.length + availRefs.length;
+      const voucherSnap = voucherRef ? snaps[voucherIndex] : null;
+      const campaignSnap = campaignRef ? snaps[voucherIndex + 1] : null;
 
       // ── Room-open guard: every touched hour must be admin-open ────────
       for (const availSnap of availSnaps) {
@@ -747,21 +804,36 @@ async function handleCreate(req, res, body) {
         }
       });
 
-      // ── Voucher re-validate + mark used (same transaction) ──────────
+      // Exact code + campaign rules are re-validated atomically with the slot.
       if (voucherRef) {
         if (!voucherSnap.exists) throw new Error('VOUCHER_not_found');
         const v = voucherSnap.data();
-        const exp = v.expiresAt?.toMillis?.() ?? null;
-        if (v.active !== true) throw new Error('VOUCHER_inactive');
-        if (exp !== null && exp < nowMs) throw new Error('VOUCHER_expired');
-        if ((Number(v.usedCount) || 0) >= (Number(v.maxUses) || 0)) throw new Error('VOUCHER_used_up');
-        if (v.issuedTo && v.issuedTo !== lineUserId) throw new Error('VOUCHER_wrong_owner');
-        t.update(voucherRef, {
-          usedCount:       (Number(v.usedCount) || 0) + 1,
-          lastUsedAt:      FieldValue.serverTimestamp(),
-          lastUsedBy:      lineUserId || null,
-          lastUsedBooking: bookingCode,
+        const campaign = campaignSnap?.exists ? { id: campaignSnap.id, ...campaignSnap.data() } : null;
+        const txResult = evaluateVoucher({
+          voucher: v, campaign, code: voucherCode, nowMs, lineUserId,
+          date, startTime, durationMinutes, isHoliday: isHolidayForVoucher,
+          branchId: DEFAULT_BRANCH_ID, resourceId: RESOURCE_ID,
+          baseQuote: segQuotes[0], bookingId: bookingRef.id,
         });
+        if (!txResult.ok) throw new Error(`VOUCHER_${txResult.reason}`);
+        if (txResult.voucherType !== quote.voucherType || txResult.finalPrice !== finalPrice) {
+          throw new Error('VOUCHER_changed');
+        }
+        const timestamp = FieldValue.serverTimestamp();
+        if (isVoucherV2(v, campaign)) {
+          const lifecycleUpdate = freeVoucher
+            ? redeemVoucherUpdate(v, { bookingId: bookingRef.id, bookingCode, lineUserId, timestamp })
+            : reserveVoucherUpdate(v, { bookingId: bookingRef.id, bookingCode, lineUserId, reservedUntil: paymentExpiresAt, timestamp });
+          t.update(voucherRef, {
+            ...lifecycleUpdate,
+            maxCancellationRestores: txResult.definition.maxCancellationRestores,
+          });
+        } else {
+          t.update(voucherRef, {
+            usedCount: (Number(v.usedCount) || 0) + 1,
+            lastUsedAt: timestamp, lastUsedBy: lineUserId || null, lastUsedBooking: bookingCode,
+          });
+        }
       }
 
       // ── Write booking (server price) + one slot lock per segment ─────
@@ -781,15 +853,21 @@ async function handleCreate(req, res, body) {
         basePrice: quote.originalPrice, effectivePrice: finalPrice,
         pricingType: quote.pricingType, pricingMode,
         promoCode: quote.promoCode, voucherCode: quote.voucherCode, discountAmount: quote.discountAmount,
+        voucherType: quote.voucherType || null,
+        voucherLifecycle: quote.voucherLifecycle || null,
+        voucherCampaignId: quote.voucherCampaignId || null,
+        voucherCampaignName: quote.voucherCampaignName || null,
         priceRuleVersion: quote.priceRuleVersion,
         qrAmount: quote.qrAmount, qrType: quote.qrType, paymentQrType: quote.qrType,
         promoApplied: quote.pricingType === 'special_promotion' || quote.voucherApplied,
         isHoliday: quote.isHoliday, isWeekend: quote.isWeekend,
         isMorningWeekday: quote.isMorningWeekday, advanceHours: quote.advanceHours,
-        bookingStatus: 'pending_payment', paymentStatus: 'unpaid',
+        bookingStatus: freeVoucher ? 'confirmed' : 'pending_payment',
+        paymentStatus: freeVoucher ? 'package' : 'unpaid',
         paymentExpiresAt,
         slipUrl: null, slipUploadedAt: null, cancelReason: null,
-        createdVia: 'server',
+        createdVia: freeVoucher ? 'server_voucher' : 'server',
+        ...(freeVoucher ? { confirmedAt: FieldValue.serverTimestamp(), paymentMethod: 'voucher' } : {}),
         createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
       });
       // Routed through writeSlotDoc so the public slot contract (SL-02) is
@@ -799,7 +877,8 @@ async function handleCreate(req, res, body) {
         writeSlotDoc(t, db, segRefs[i].id, {
           resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
           date, hour: x.start, slotSpanMinutes: x.span,
-          bookingStatus: 'pending_payment', paymentStatus: 'unpaid',
+          bookingStatus: freeVoucher ? 'confirmed' : 'pending_payment',
+          paymentStatus: freeVoucher ? 'package' : 'unpaid',
           expiresAt: paymentExpiresAt,
         }, { bookingId: bookingRef.id, bookingCode });
       });
@@ -826,7 +905,8 @@ async function handleCreate(req, res, body) {
   // contains the raw value; it is never logged or persisted.
   return res.status(200).json({
     ok: true,
-    paymentExpiresAt: paymentExpiresAt.toDate().toISOString(),
+    requiresPayment: !freeVoucher,
+    paymentExpiresAt: paymentExpiresAt ? paymentExpiresAt.toDate().toISOString() : null,
     ...(guestAccess ? { guestAccessToken: guestAccess.token, guestAccessExpiresAt: guestAccess.expiresAt } : {}),
     booking: {
       id: bookingRef.id, bookingCode, date, startTime, endTime,
@@ -836,6 +916,10 @@ async function handleCreate(req, res, body) {
       finalPrice, price: finalPrice, originalPrice: quote.originalPrice,
       qrType: quote.qrType, qrAmount: quote.qrAmount, paymentQrType: quote.qrType,
       pricingType: quote.pricingType, discountAmount: quote.discountAmount, voucherCode: quote.voucherCode,
+      voucherType: quote.voucherType || null,
+      voucherCampaignId: quote.voucherCampaignId || null,
+      bookingStatus: freeVoucher ? 'confirmed' : 'pending_payment',
+      paymentStatus: freeVoucher ? 'package' : 'unpaid',
       ...(durationMinutes !== 60 ? { priceBreakdown: quote.breakdown } : {}),
       lineUserId, customerName, customerPhone, customerNote,
     },
@@ -968,6 +1052,9 @@ async function handleCancelPending(req, res, body) {
   const coachAvailRef = (booking.serviceType === 'coach_lesson' && booking.coachId && booking.date && booking.startTime)
     ? db.collection('coach_availability').doc(coachAvailDocId(booking.coachId, booking.date, booking.startTime))
     : null;
+  const voucherRef = booking.voucherLifecycle === 'v2_state' && booking.voucherCode
+    ? db.collection('vouchers').doc(booking.voucherCode)
+    : null;
 
   try {
     await db.runTransaction(async (t) => {
@@ -975,10 +1062,21 @@ async function handleCancelPending(req, res, body) {
       const slotSnaps  = await Promise.all(slotRefs.map(r => t.get(r)));
       const claimSnaps = await Promise.all(slotRefs.map(r => t.get(slotClaimRef(db, r.id))));
       const caSnap = coachAvailRef ? await t.get(coachAvailRef) : null;
+      const voucherSnap = voucherRef ? await t.get(voucherRef) : null;
       if (!bSnap.exists) throw new Error('GONE');
       const bNow = bSnap.data();
       if (bNow.bookingStatus !== 'pending_payment') throw new Error('BAD_STATE');
       if (bNow.paymentStatus !== 'unpaid') throw new Error('BAD_STATE');
+      if (voucherRef && voucherSnap?.exists) {
+        const voucher = voucherSnap.data();
+        if (voucher.state === 'reserved' && voucher.reservedBookingId === bookingId) {
+          const released = releaseVoucherUpdate(voucher, {
+            bookingId, reason: 'customer_cancel_pending_payment',
+            timestamp: FieldValue.serverTimestamp(), countRestore: false,
+          });
+          t.update(voucherRef, released.update);
+        }
+      }
       // Reopen the coach hour only when this booking still owns the lock.
       if (caSnap && caSnap.exists) {
         const ca = caSnap.data();

@@ -61,9 +61,29 @@ import { DEFAULT_BRANCH_ID, verifySession, requireRole, resolveBranchId, hasBran
 import { getAdminDb, getAdminAuth, writeAuditLog, revokeGuestAccess } from './_lib/firebase-admin.js';
 import { FieldValue }          from 'firebase-admin/firestore';
 import { computeQuote }        from './_lib/pricing.js';
+import { redeemVoucherUpdate, releaseVoucherUpdate } from './_lib/voucher-engine.js';
 
 // ── Shared constants ──────────────────────────────────────────────
 const RESOURCE_ID = 'room1';
+
+function voucherRefForBooking(db, booking) {
+  return booking?.voucherLifecycle === 'v2_state' && booking?.voucherCode
+    ? db.collection('vouchers').doc(String(booking.voucherCode))
+    : null;
+}
+
+function redeemReservedVoucher(t, voucherRef, voucherSnap, booking, bookingId) {
+  if (!voucherRef) return;
+  if (!voucherSnap?.exists) throw new Error('VOUCHER_MISSING');
+  const voucher = voucherSnap.data();
+  if (voucher.state !== 'reserved' || voucher.reservedBookingId !== bookingId) {
+    throw new Error('VOUCHER_CONFLICT');
+  }
+  t.update(voucherRef, redeemVoucherUpdate(voucher, {
+    bookingId, bookingCode: booking.bookingCode,
+    lineUserId: booking.lineUserId, timestamp: FieldValue.serverTimestamp(),
+  }));
+}
 
 // ── Reschedule helpers (ported 1:1 from admin.html) ───────────────
 const RESCHED_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -1158,6 +1178,7 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
 
   const slotRefs = bookingSlotIds(booking).map(id => db.collection('booking_slots').doc(id));
   if (!slotRefs.length) return res.status(409).json({ ok: false, error: 'Slot does not exist' });
+  const voucherRef = voucherRefForBooking(db, booking);
 
   // Atomic read-check-write: a transaction (not batch) closes the TOCTOU gap
   // between reading slot ownership and committing. All reads precede all writes.
@@ -1175,11 +1196,13 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
       }
 
       const bSnap = await t.get(bookingRef);
+      const voucherSnap = voucherRef ? await t.get(voucherRef) : null;
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       const bNow = bSnap.data();
       if (bNow.paymentStatus === 'paid') throw new Error('ALREADY_PAID');
       if (bNow.paymentStatus !== 'unpaid') throw new Error('BAD_STATE');
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
+      redeemReservedVoucher(t, voucherRef, voucherSnap, bNow, bookingId);
 
       t.update(bookingRef, {
         paymentStatus:   'paid',
@@ -1207,6 +1230,8 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
       ALREADY_PAID:    [409, 'Booking is already paid'],
       BAD_STATE:       [409, 'Booking is no longer unpaid'],
       CANCELLED:       [409, 'Booking was cancelled'],
+      VOUCHER_MISSING: [409, 'Reserved voucher was not found'],
+      VOUCHER_CONFLICT:[409, 'Voucher is no longer reserved for this booking'],
     };
     const [code, msg] = map[e.message] || [500, 'Failed to update booking'];
     if (code === 500) console.error('[mark-paid] write:', e.message);
@@ -1250,6 +1275,7 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
 
   const slotRefs = bookingSlotIds(booking).map(id => db.collection('booking_slots').doc(id));
   if (!slotRefs.length) return res.status(409).json({ ok: false, error: 'Slot does not exist' });
+  const voucherRef = voucherRefForBooking(db, booking);
 
   try {
     await db.runTransaction(async (t) => {
@@ -1264,11 +1290,13 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
       }
 
       const bSnap = await t.get(bookingRef);
+      const voucherSnap = voucherRef ? await t.get(voucherRef) : null;
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       const bNow = bSnap.data();
       if (bNow.paymentStatus === 'paid') throw new Error('ALREADY_PAID');
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
       if (!['pending_review', 'unpaid'].includes(bNow.paymentStatus)) throw new Error('BAD_STATE');
+      redeemReservedVoucher(t, voucherRef, voucherSnap, bNow, bookingId);
 
       const update = {
         paymentStatus:   'paid',
@@ -1299,6 +1327,8 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
       ALREADY_PAID:    [409, 'Booking is already paid'],
       CANCELLED:       [409, 'Booking was cancelled'],
       BAD_STATE:       [409, 'Booking is no longer awaiting payment'],
+      VOUCHER_MISSING: [409, 'Reserved voucher was not found'],
+      VOUCHER_CONFLICT:[409, 'Voucher is no longer reserved for this booking'],
     };
     const [code, msg] = map[e.message] || [500, 'Failed to approve booking'];
     if (code === 500) console.error('[approve_slip] write:', e.message);
@@ -1335,6 +1365,7 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
 async function handleCancelPackageBooking({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
   const packageId = String(booking.packageId || booking.usedPackageId || '').trim();
   const serverPass = booking.createdVia === 'server_pass';
+  const serverVoucher = booking.createdVia === 'server_voucher';
   if (serverPass && !packageId) {
     return res.status(409).json({ ok: false, error: 'Cannot cancel pass booking: package reference is missing' });
   }
@@ -1342,12 +1373,17 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
   const slotRefs = bookingSlotIds(booking).map(id => db.collection('booking_slots').doc(id));
   const claimRefs = slotRefs.map(r => slotClaimRef(db, r.id));
   const pkgRef = packageId ? db.collection('customer_packages').doc(packageId) : null;
+  const voucherRef = serverVoucher ? voucherRefForBooking(db, booking) : null;
+  if (serverVoucher && !voucherRef) {
+    return res.status(409).json({ ok: false, error: 'Cannot cancel voucher booking: voucher reference is missing' });
+  }
   const logRef = pkgRef ? db.collection('customer_package_logs').doc() : null;
   const reason = (typeof body.reason === 'string' && body.reason.trim())
     ? body.reason.trim().slice(0, 400)
     : 'Package booking cancelled by admin';
 
   let restored = null;
+  let voucherRestored = false;
   try {
     await db.runTransaction(async (t) => {
       const reads = await Promise.all([
@@ -1355,6 +1391,7 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
         ...slotRefs.map(r => t.get(r)),
         ...claimRefs.map(r => t.get(r)),
         ...(pkgRef ? [t.get(pkgRef)] : []),
+        ...(voucherRef ? [t.get(voucherRef)] : []),
       ]);
       const bSnap = reads[0];
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
@@ -1364,7 +1401,9 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
 
       const slotSnaps = reads.slice(1, 1 + slotRefs.length);
       const claimSnaps = reads.slice(1 + slotRefs.length, 1 + slotRefs.length + claimRefs.length);
-      const pkgSnap = pkgRef ? reads[reads.length - 1] : null;
+      const optionalStart = 1 + slotRefs.length + claimRefs.length;
+      const pkgSnap = pkgRef ? reads[optionalStart] : null;
+      const voucherSnap = voucherRef ? reads[optionalStart + (pkgRef ? 1 : 0)] : null;
 
       if (pkgRef) {
         if (!pkgSnap.exists) throw new Error('PASS_MISSING');
@@ -1372,6 +1411,17 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
         if (!hasBranchAccess(session, resolveBranchId(pkg))) throw new Error('NO_BRANCH');
         if (pkg.lineUserId && bNow.lineUserId && pkg.lineUserId !== bNow.lineUserId) throw new Error('PASS_RESTORE_MISMATCH');
         restored = passRestoreMutation(pkg, bNow);
+      }
+      if (voucherRef) {
+        if (!voucherSnap?.exists) throw new Error('VOUCHER_MISSING');
+        const voucher = voucherSnap.data();
+        if (voucher.state !== 'redeemed' || voucher.redeemedBookingId !== bookingId) throw new Error('VOUCHER_CONFLICT');
+        const released = releaseVoucherUpdate(voucher, {
+          bookingId, reason: 'admin_cancel_free_voucher',
+          timestamp: FieldValue.serverTimestamp(), countRestore: true,
+        });
+        voucherRestored = released.restored;
+        t.update(voucherRef, released.update);
       }
 
       slotSnaps.forEach((slotSnap, i) => {
@@ -1410,6 +1460,9 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
           packageRestoredAt: FieldValue.serverTimestamp(),
           packageRestoredBy: adminName,
         } : {}),
+        ...(voucherRef ? {
+          voucherRestored, voucherRestoredAt: voucherRestored ? FieldValue.serverTimestamp() : null,
+        } : {}),
       });
     });
   } catch (e) {
@@ -1423,6 +1476,8 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
       PASS_RESTORE_UNSUPPORTED: [409, 'Cannot safely restore this package type'],
       SLOT_OWNERSHIP_MISMATCH: [409, 'Cannot safely release slot: ownership changed'],
       NO_BRANCH: [403, 'No access to this package branch'],
+      VOUCHER_MISSING: [409, 'Cannot cancel voucher booking: voucher was not found'],
+      VOUCHER_CONFLICT: [409, 'Cannot safely restore voucher: voucher belongs to another booking'],
     };
     const [code, msg] = map[e.message] || [500, 'Failed to cancel package booking'];
     if (code === 500) console.error('[cancel_package_booking] tx:', e.message);
@@ -1433,7 +1488,7 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
     actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
     action: 'cancel_package_booking', targetId: bookingId,
     before: { paymentStatus: booking.paymentStatus, bookingStatus: booking.bookingStatus },
-    after: { paymentStatus: 'package', bookingStatus: 'cancelled', restoredMinutes: restored?.used || 0 },
+    after: { paymentStatus: 'package', bookingStatus: 'cancelled', restoredMinutes: restored?.used || 0, voucherRestored },
     note: reason,
   });
   return res.status(200).json({
@@ -1441,7 +1496,7 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
     booking: {
       id: bookingId, bookingCode: booking.bookingCode, lineUserId: booking.lineUserId ?? null,
       date: booking.date, startTime: booking.startTime, endTime: booking.endTime,
-      cancelReason: reason, restoredMinutes: restored?.used || 0,
+      cancelReason: reason, restoredMinutes: restored?.used || 0, voucherRestored,
     },
   });
 }
@@ -1469,6 +1524,7 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
   const coachAvailRef = (booking.serviceType === 'coach_lesson' && booking.coachId && booking.date && booking.startTime)
     ? db.collection('coach_availability').doc(`${booking.coachId}_${booking.date}_${String(booking.startTime).replace(':', '')}`)
     : null;
+  const voucherRef = voucherRefForBooking(db, booking);
 
   try {
     await db.runTransaction(async (t) => {
@@ -1481,6 +1537,18 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
       const slotSnaps = await Promise.all(slotRefs.map(r => t.get(r)));
       const claimSnaps = await Promise.all(slotRefs.map(r => t.get(slotClaimRef(db, r.id))));
       const caSnap = coachAvailRef ? await t.get(coachAvailRef) : null;
+      const voucherSnap = voucherRef ? await t.get(voucherRef) : null;
+
+      if (voucherRef) {
+        if (!voucherSnap?.exists) throw new Error('VOUCHER_MISSING');
+        const voucher = voucherSnap.data();
+        if (voucher.state !== 'reserved' || voucher.reservedBookingId !== bookingId) throw new Error('VOUCHER_CONFLICT');
+        const released = releaseVoucherUpdate(voucher, {
+          bookingId, reason: 'admin_reject_payment',
+          timestamp: FieldValue.serverTimestamp(), countRestore: false,
+        });
+        t.update(voucherRef, released.update);
+      }
 
       t.update(bookingRef, {
         bookingStatus: 'cancelled',
@@ -1517,6 +1585,8 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
       BOOKING_MISSING:   [404, 'Booking not found'],
       ALREADY_CANCELLED: [409, 'Booking is already cancelled'],
       ALREADY_PAID:      [409, 'Booking is already paid (use refund)'],
+      VOUCHER_MISSING:   [409, 'Reserved voucher was not found'],
+      VOUCHER_CONFLICT:  [409, 'Voucher is no longer reserved for this booking'],
     };
     const [code, msg] = map[e.message] || [500, 'Failed to reject booking'];
     if (code === 500) console.error('[reject_payment] write:', e.message);
