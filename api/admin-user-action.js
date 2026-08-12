@@ -16,6 +16,10 @@ import { verifySession, requireRole, hasBranchAccess, resolveBranchId, DEFAULT_B
 import { getAdminDb, writeAuditLog } from './_lib/firebase-admin.js';
 import { sendAndLog, loadActiveAdmins } from './_lib/notify.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import {
+  generateVoucherCodes, normalizeCampaignInput,
+  normalizeCustomVoucherCode, normalizeRandomCodeRequest,
+} from './_lib/voucher-admin.js';
 
 const ACTIVE_PACKAGES = {
   ultra_starter_3: {
@@ -100,6 +104,20 @@ export default async function handler(req, res) {
   const adminName = session.name;
 
   const { action, targetUserId, packageType, validFrom, note, eventEndDate, eventName } = req.body || {};
+
+  // Voucher Manager is deliberately pinned to the same single operator as
+  // store pricing. The UI is hidden for everyone else, but this server gate is
+  // the authority and protects reads as well as writes.
+  const voucherActions = new Set([
+    'voucher_list', 'voucher_save_campaign', 'voucher_set_campaign_active',
+    'voucher_create_codes', 'voucher_set_code_active',
+  ]);
+  if (voucherActions.has(action)) {
+    if (adminName !== 'Art' || !requireRole(session, 'owner')) {
+      return res.status(403).json({ ok: false, error: 'Access denied: Art owner only.' });
+    }
+    return handleVoucherAction({ req, res, adminName, session, action });
+  }
 
   // ── Pricing actions (owner-only) ─────────────────────────────────
   if (action === 'save_store_pricing' || action === 'save_special_promotion' || action === 'deactivate_special_promotion') {
@@ -797,4 +815,250 @@ async function handleDeactivatePass({ req, res, adminName, session }) {
   });
 
   return res.status(200).json({ ok: true });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Voucher Manager v1 — owner-only campaign and code administration.
+// Kept in this multiplexed function to stay below the Vercel Hobby limit.
+// ════════════════════════════════════════════════════════════════════
+const voucherTimestampIso = value => value?.toDate?.()?.toISOString?.() ?? null;
+
+function projectVoucherCampaign(doc) {
+  const data = doc.data();
+  return {
+    id: doc.id,
+    schemaVersion: data.schemaVersion ?? 2,
+    campaignId: data.campaignId || doc.id,
+    name: data.name || doc.id,
+    keyword: data.keyword || '',
+    codePrefix: data.codePrefix || '',
+    active: data.active === true,
+    voucherType: data.voucherType || 'discount_amount',
+    validFrom: voucherTimestampIso(data.validFrom),
+    expiresAt: voucherTimestampIso(data.expiresAt),
+    allowedDays: Array.isArray(data.allowedDays) ? data.allowedDays : [],
+    startTime: data.startTime || '06:00',
+    endTime: data.endTime || '24:00',
+    excludeHolidays: data.excludeHolidays === true,
+    exactDurationMinutes: Number(data.exactDurationMinutes) || 60,
+    requiresLineLogin: data.requiresLineLogin !== false,
+    transferable: data.transferable === true,
+    maxUsesPerCode: Number(data.maxUsesPerCode) || 1,
+    maxCancellationRestores: Number(data.maxCancellationRestores) || 0,
+    branchId: data.branchId || DEFAULT_BRANCH_ID,
+    resourceId: data.resourceId || 'room1',
+    allowedPricingTypes: Array.isArray(data.allowedPricingTypes) ? data.allowedPricingTypes : [],
+    discountAmount: data.discountAmount ?? null,
+    discountPercent: data.discountPercent ?? null,
+    maxDiscountAmount: data.maxDiscountAmount ?? null,
+    minFinalPrice: data.minFinalPrice ?? 0,
+    createdAt: voucherTimestampIso(data.createdAt),
+    updatedAt: voucherTimestampIso(data.updatedAt),
+  };
+}
+
+function projectVoucherCode(doc) {
+  const data = doc.data();
+  return {
+    code: doc.id,
+    campaignId: data.campaignId || '',
+    active: data.active === true,
+    state: data.state || 'available',
+    usedCount: Number(data.usedCount) || 0,
+    maxUses: Number(data.maxUses) || 1,
+    cancellationRestoreCount: Number(data.cancellationRestoreCount) || 0,
+    maxCancellationRestores: Number(data.maxCancellationRestores) || 0,
+    reservedBookingCode: data.reservedBookingCode || null,
+    reservedUntil: voucherTimestampIso(data.reservedUntil),
+    redeemedBookingCode: data.redeemedBookingCode || null,
+    redeemedAt: voucherTimestampIso(data.redeemedAt),
+    createdAt: voucherTimestampIso(data.createdAt),
+    updatedAt: voucherTimestampIso(data.updatedAt),
+  };
+}
+
+async function handleVoucherAction({ req, res, adminName, session, action }) {
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[voucher_manager] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
+
+  if (action === 'voucher_list') {
+    const campaignId = typeof req.body?.campaignId === 'string' ? req.body.campaignId.trim() : '';
+    try {
+      const campaignSnap = await db.collection('voucher_campaigns').limit(100).get();
+      const campaigns = campaignSnap.docs.map(projectVoucherCampaign)
+        .sort((a, b) => a.name.localeCompare(b.name, 'en'));
+      let codes = [];
+      if (campaignId) {
+        const codeSnap = await db.collection('vouchers').where('campaignId', '==', campaignId).limit(500).get();
+        codes = codeSnap.docs.map(projectVoucherCode)
+          .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') || a.code.localeCompare(b.code));
+      }
+      return res.status(200).json({ ok: true, campaigns, codes, codeLimit: 500 });
+    } catch (e) {
+      console.error('[voucher_list]', e.message);
+      return res.status(500).json({ ok: false, error: 'Failed to load Voucher Manager' });
+    }
+  }
+
+  if (action === 'voucher_save_campaign') {
+    const normalized = normalizeCampaignInput(req.body?.campaign || {});
+    if (!normalized.ok) return res.status(400).json({ ok: false, error: normalized.error });
+    const ref = db.collection('voucher_campaigns').doc(normalized.campaignId);
+    try {
+      const before = await ref.get();
+      const value = normalized.data;
+      await ref.set({
+        ...value,
+        validFrom: value.validFromMs === null ? null : Timestamp.fromMillis(value.validFromMs),
+        expiresAt: value.expiresAtMs === null ? null : Timestamp.fromMillis(value.expiresAtMs),
+        validFromMs: FieldValue.delete(),
+        expiresAtMs: FieldValue.delete(),
+        ...(before.exists ? {} : { createdAt: FieldValue.serverTimestamp(), createdBy: adminName }),
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: adminName,
+      }, { merge: true });
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+        action: before.exists ? 'voucher_campaign_update' : 'voucher_campaign_create',
+        targetId: normalized.campaignId,
+        before: before.exists ? { name: before.data().name || '', active: before.data().active === true, voucherType: before.data().voucherType || null } : null,
+        after: { name: value.name, active: value.active, voucherType: value.voucherType },
+      });
+      return res.status(200).json({ ok: true, campaignId: normalized.campaignId });
+    } catch (e) {
+      console.error('[voucher_save_campaign]', e.message);
+      return res.status(500).json({ ok: false, error: 'Failed to save campaign' });
+    }
+  }
+
+  if (action === 'voucher_set_campaign_active') {
+    const campaignId = String(req.body?.campaignId || '').trim();
+    const active = req.body?.active === true;
+    if (!campaignId) return res.status(400).json({ ok: false, error: 'campaignId is required' });
+    const ref = db.collection('voucher_campaigns').doc(campaignId);
+    try {
+      const snap = await ref.get();
+      if (!snap.exists) return res.status(404).json({ ok: false, error: 'Campaign not found' });
+      await ref.update({ active, updatedAt: FieldValue.serverTimestamp(), updatedBy: adminName });
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+        action: 'voucher_campaign_status', targetId: campaignId,
+        before: { active: snap.data().active === true }, after: { active },
+      });
+      return res.status(200).json({ ok: true, active });
+    } catch (e) {
+      console.error('[voucher_set_campaign_active]', e.message);
+      return res.status(500).json({ ok: false, error: 'Failed to update campaign status' });
+    }
+  }
+
+  if (action === 'voucher_create_codes') {
+    const campaignId = String(req.body?.campaignId || '').trim();
+    if (!campaignId) return res.status(400).json({ ok: false, error: 'Select a campaign' });
+    const campaignRef = db.collection('voucher_campaigns').doc(campaignId);
+    try {
+      const campaignSnap = await campaignRef.get();
+      if (!campaignSnap.exists) return res.status(404).json({ ok: false, error: 'Campaign not found' });
+      const campaign = campaignSnap.data();
+      const mode = req.body?.mode === 'custom' ? 'custom' : 'random';
+      let codes;
+      if (mode === 'custom') {
+        const custom = normalizeCustomVoucherCode(req.body?.customCode);
+        if (!custom.ok) return res.status(400).json({ ok: false, error: custom.error });
+        codes = [custom.code];
+      } else {
+        const request = normalizeRandomCodeRequest(req.body, campaign.codePrefix || '');
+        if (!request.ok) return res.status(400).json({ ok: false, error: request.error });
+        codes = [];
+        for (let attempt = 0; attempt < 5 && codes.length < request.count; attempt++) {
+          const candidates = generateVoucherCodes({
+            count: request.count - codes.length,
+            randomLength: request.randomLength,
+            prefix: request.prefix,
+          }).filter(code => !codes.includes(code));
+          const refs = candidates.map(code => db.collection('vouchers').doc(code));
+          const snaps = refs.length ? await db.getAll(...refs) : [];
+          snaps.forEach((snap, index) => { if (!snap.exists) codes.push(candidates[index]); });
+        }
+        if (codes.length !== request.count) return res.status(409).json({ ok: false, error: 'Could not generate enough unique codes; try again' });
+      }
+
+      const refs = codes.map(code => db.collection('vouchers').doc(code));
+      const existing = refs.length ? await db.getAll(...refs) : [];
+      if (existing.some(snap => snap.exists)) return res.status(409).json({ ok: false, error: 'One or more Voucher codes already exist' });
+
+      const batch = db.batch();
+      refs.forEach((ref, index) => batch.create(ref, {
+        schemaVersion: 2,
+        code: codes[index],
+        campaignId,
+        active: true,
+        state: 'available',
+        usedCount: 0,
+        maxUses: 1,
+        cancellationRestoreCount: 0,
+        maxCancellationRestores: Number(campaign.maxCancellationRestores) || 0,
+        source: mode === 'custom' ? 'admin_custom' : 'admin_generated',
+        createdBy: adminName,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }));
+      await batch.commit();
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+        action: 'voucher_codes_create', targetId: campaignId,
+        before: null, after: { count: codes.length, mode },
+        note: `Created ${codes.length} Voucher code(s)`,
+      });
+      return res.status(200).json({ ok: true, campaignId, codes });
+    } catch (e) {
+      const conflict = e.code === 6 || e.code === 'already-exists';
+      if (!conflict) console.error('[voucher_create_codes]', e.message);
+      return res.status(conflict ? 409 : 500).json({ ok: false, error: conflict ? 'Voucher code already exists' : 'Failed to create Voucher codes' });
+    }
+  }
+
+  if (action === 'voucher_set_code_active') {
+    const normalized = normalizeCustomVoucherCode(req.body?.code);
+    if (!normalized.ok) return res.status(400).json({ ok: false, error: normalized.error });
+    const active = req.body?.active === true;
+    const ref = db.collection('vouchers').doc(normalized.code);
+    try {
+      let afterState;
+      await db.runTransaction(async transaction => {
+        const snap = await transaction.get(ref);
+        if (!snap.exists) throw new Error('NOT_FOUND');
+        const voucher = snap.data();
+        if (voucher.state === 'reserved') throw new Error('RESERVED');
+        if (active && (voucher.state === 'redeemed' || (Number(voucher.usedCount) || 0) >= (Number(voucher.maxUses) || 1))) {
+          throw new Error('REDEEMED');
+        }
+        afterState = active ? 'available' : (voucher.state === 'redeemed' ? 'redeemed' : 'disabled');
+        transaction.update(ref, {
+          active,
+          state: afterState,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedBy: adminName,
+        });
+      });
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+        action: 'voucher_code_status', targetId: normalized.code,
+        before: null, after: { active, state: afterState },
+      });
+      return res.status(200).json({ ok: true, code: normalized.code, active, state: afterState });
+    } catch (e) {
+      const map = {
+        NOT_FOUND: [404, 'Voucher code not found'],
+        RESERVED: [409, 'Reserved Voucher cannot be disabled or enabled'],
+        REDEEMED: [409, 'Redeemed Voucher cannot be enabled again'],
+      };
+      const [status, error] = map[e.message] || [500, 'Failed to update Voucher code'];
+      if (status === 500) console.error('[voucher_set_code_active]', e.message);
+      return res.status(status).json({ ok: false, error });
+    }
+  }
+
+  return res.status(400).json({ ok: false, error: `Unsupported Voucher action: ${action}` });
 }

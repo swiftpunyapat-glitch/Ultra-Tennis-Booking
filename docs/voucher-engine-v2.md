@@ -62,3 +62,18 @@ Expired discount reservations are considered reclaimable by the engine, so an ab
 ## Deep links
 
 Use `https://liff.line.me/2010034901-ClPr9N5v?voucher=MSTR-ABCDE`. The customer page preserves the code across LIFF login and prefills the voucher field. The API still validates the exact code and all campaign rules during both quote and booking creation.
+
+## Admin Voucher Manager
+
+The Admin `Voucher` tab is visible only to the authenticated `Art` owner session. Every read and mutation repeats the same authorization check in `admin-user-action`; the browser never writes voucher collections directly.
+
+The first release supports:
+
+- creating and editing campaign rules;
+- free booking, fixed amount, and percentage voucher types;
+- dates, days, time windows, holiday exclusion, pricing-rate scope, and cancellation restore limits;
+- custom codes and bulk random generation of up to 100 codes;
+- code search, status inspection, link copying, and safe enable/disable controls;
+- campaign and code audit-log entries.
+
+Voucher duration remains fixed at 60 minutes because the current customer booking route intentionally rejects vouchers on other durations. Reserved codes cannot be disabled, and redeemed codes cannot be enabled again.

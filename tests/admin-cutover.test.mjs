@@ -84,7 +84,7 @@ async function seedTwoHourPaidBooking(start='10:00',{bookingId=`paid2h_${start.r
 }
 
 async function wipe(){
-  for(const c of ['bookings','booking_slots','booking_slot_claims','available_slots','holidays','customer_packages','customer_package_logs','registered_users','audit_logs']){
+  for(const c of ['bookings','booking_slots','booking_slot_claims','available_slots','holidays','customer_packages','customer_package_logs','registered_users','audit_logs','voucher_campaigns','vouchers']){
     const s=await db.collection(c).get();await Promise.all(s.docs.map(d=>d.ref.delete()));
   }
   await db.collection('system_settings').doc('pricing').set({});
@@ -175,6 +175,11 @@ describe('locked owner role and capability matrix',()=>{
       {action:'reject_pass_purchase'},
       {action:'save_special_promotion'},
       {action:'save_store_pricing'},
+      {action:'voucher_list'},
+      {action:'voucher_save_campaign'},
+      {action:'voucher_set_campaign_active'},
+      {action:'voucher_create_codes'},
+      {action:'voucher_set_code_active'},
     ];
     for(const body of passActions){
       expect((await call(userActionHandler,body,'Staff')).statusCode,`staff ${body.action}`).toBe(403);
@@ -205,6 +210,14 @@ describe('locked owner role and capability matrix',()=>{
     expect((await call(userActionHandler,{action:'save_store_pricing'},'Boss')).statusCode).toBe(403);
     expect((await call(userActionHandler,{action:'save_special_promotion'},'Boss')).statusCode).toBe(403);
     expect((await call(userActionHandler,{action:'deactivate_special_promotion'},'Boss')).statusCode).toBe(403);
+  });
+
+  test('Voucher Manager reads and writes are pinned to Art owner only',async()=>{
+    const actions=['voucher_list','voucher_save_campaign','voucher_set_campaign_active','voucher_create_codes','voucher_set_code_active'];
+    for(const action of actions){
+      expect((await call(userActionHandler,{action},'Art')).statusCode,`Art ${action}`).not.toBe(403);
+      expect((await call(userActionHandler,{action},'Boss')).statusCode,`Boss ${action}`).toBe(403);
+    }
   });
 
   test('branch staff manual booking is unpaid-only',async()=>{

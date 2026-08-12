@@ -365,6 +365,7 @@
     <button class="tab" data-tab="pending" style="flex:0 0 auto">⏳ Pending</button>
     <button class="tab" data-tab="customers" style="flex:0 0 auto">👥 Customers</button>
     <button class="tab" data-tab="promo" style="flex:0 0 auto">🔥 Promotion</button>
+    <button class="tab" id="voucherTabBtn" data-tab="vouchers" style="display:none;flex:0 0 auto">🎟 Voucher</button>
     <button class="tab" data-tab="coach" style="flex:0 0 auto">🎾 Coach</button>
     <button class="tab" id="activityTabBtn" data-tab="activity" style="display:none;flex:0 0 auto">📜 ประวัติการทำงาน</button>
   </div>
@@ -687,6 +688,100 @@
           <button class="smbtn smg" id="promoSaveBtn" style="padding:10px 18px; font-size:.82rem">✓ Save Store Pricing</button>
           <button class="smbtn" id="promoDeactivateBtn" style="background:#3d1010; border-color:var(--dan); color:var(--dan); padding:10px 18px; font-size:.82rem">✕ Deactivate Immediately</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VOUCHER MANAGER TAB — Art owner only -->
+  <div id="tabVouchers" style="display:none">
+    <div class="main">
+      <div class="smcard">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+          <div>
+            <h2 style="margin-bottom:4px">🎟 Voucher Manager</h2>
+            <p style="font-size:.75rem;color:var(--m);line-height:1.5">Campaign controls the rules; each exact code grants the entitlement. Keyword/prefix alone never gives a free booking.</p>
+          </div>
+          <button class="smbtn smgr" id="voucherRefreshBtn">↻ Refresh</button>
+        </div>
+      </div>
+
+      <div class="smcard">
+        <h2 id="voucherCampaignFormTitle">Create Campaign</h2>
+        <div class="smrow" style="margin-bottom:10px">
+          <div class="smf"><label>Campaign ID</label><input id="vcCampaignId" maxlength="64" placeholder="e.g. monstr-2026"/></div>
+          <div class="smf" style="flex:2"><label>Campaign Name</label><input id="vcName" maxlength="100" placeholder="e.g. MONSTR Sponsor 2026"/></div>
+          <div class="smf"><label>Voucher Type</label><select id="vcType"><option value="free_booking">Free Booking</option><option value="discount_amount">Discount (THB)</option><option value="discount_percent">Discount (%)</option></select></div>
+        </div>
+        <div class="smrow" style="margin-bottom:10px">
+          <div class="smf"><label>Keyword (reporting)</label><input id="vcKeyword" maxlength="32" placeholder="MONSTR" style="text-transform:uppercase"/></div>
+          <div class="smf"><label>Generated Code Prefix</label><input id="vcPrefix" maxlength="16" placeholder="MSTR-" style="text-transform:uppercase"/></div>
+          <div class="smf"><label>Valid From</label><input id="vcValidFrom" type="date"/></div>
+          <div class="smf"><label>Expires At</label><input id="vcExpiresAt" type="date"/></div>
+        </div>
+        <div class="smrow" style="margin-bottom:10px">
+          <div class="smf"><label>Allowed From</label><input id="vcStartTime" type="time" value="06:00"/></div>
+          <div class="smf"><label>Allowed Until</label><select id="vcEndTime"><option value="24:00">24:00</option><option value="23:00">23:00</option><option value="22:00">22:00</option><option value="18:00">18:00</option><option value="15:00">15:00</option><option value="12:00">12:00</option></select></div>
+          <div class="smf"><label>Duration</label><input value="60 minutes (current system)" disabled/></div>
+          <div class="smf"><label>Cancellation Restores</label><input id="vcRestores" type="number" min="0" max="10" step="1" value="0"/></div>
+        </div>
+
+        <div style="font-size:.7rem;font-weight:900;color:var(--g);text-transform:uppercase;margin:12px 0 7px">Allowed Days</div>
+        <div id="vcDays" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;font-size:.78rem">
+          <label><input type="checkbox" data-vday="1" checked/> Mon</label><label><input type="checkbox" data-vday="2" checked/> Tue</label><label><input type="checkbox" data-vday="3" checked/> Wed</label><label><input type="checkbox" data-vday="4" checked/> Thu</label><label><input type="checkbox" data-vday="5" checked/> Fri</label><label><input type="checkbox" data-vday="6"/> Sat</label><label><input type="checkbox" data-vday="0"/> Sun</label>
+        </div>
+
+        <div style="font-size:.7rem;font-weight:900;color:var(--g);text-transform:uppercase;margin:12px 0 7px">Allowed Base Pricing <span style="color:var(--m);text-transform:none;font-weight:600">(none selected = every 1-hour rate)</span></div>
+        <div id="vcPricingTypes" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;font-size:.75rem">
+          <label><input type="checkbox" data-vpricing="standard"/> Standard</label><label><input type="checkbox" data-vpricing="morning_weekday"/> Morning</label><label><input type="checkbox" data-vpricing="morning_weekday_advance"/> Morning Advance</label><label><input type="checkbox" data-vpricing="late_night"/> Late Night</label><label><input type="checkbox" data-vpricing="special_promotion"/> Special Promo</label>
+        </div>
+
+        <div id="vcDiscountFields" class="smrow" style="display:none;margin-bottom:10px">
+          <div class="smf" id="vcAmountWrap"><label>Discount Amount (THB)</label><input id="vcDiscountAmount" type="number" min="1" step="1" value="50"/></div>
+          <div class="smf" id="vcPercentWrap" style="display:none"><label>Discount Percent</label><input id="vcDiscountPercent" type="number" min="0.01" max="100" step="0.01" value="10"/></div>
+          <div class="smf" id="vcMaxDiscountWrap" style="display:none"><label>Maximum Discount (0 = no cap)</label><input id="vcMaxDiscount" type="number" min="0" step="1" value="0"/></div>
+          <div class="smf"><label>Minimum Final Price</label><input id="vcMinFinal" type="number" min="0" step="1" value="0"/></div>
+        </div>
+
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin:13px 0;font-size:.78rem">
+          <label><input id="vcActive" type="checkbox" checked/> Campaign active</label>
+          <label><input id="vcExcludeHolidays" type="checkbox" checked/> Exclude holidays</label>
+          <label><input id="vcRequiresLine" type="checkbox" checked/> Require LINE login</label>
+          <label><input id="vcTransferable" type="checkbox" checked/> Transferable bearer code</label>
+        </div>
+        <div class="qbtns" style="gap:8px">
+          <button class="smbtn smg" id="voucherSaveCampaignBtn">✓ Save Campaign</button>
+          <button class="smbtn smgr" id="voucherResetCampaignBtn">New / Reset</button>
+        </div>
+      </div>
+
+      <div class="smcard">
+        <h2>Create Voucher Codes</h2>
+        <div class="smrow" style="margin-bottom:10px">
+          <div class="smf" style="flex:2"><label>Campaign</label><select id="voucherCodeCampaign"><option value="">Select campaign...</option></select></div>
+          <div class="smf" style="flex:2"><label>Custom Code</label><input id="voucherCustomCode" maxlength="64" placeholder="e.g. VIP-ART-01" style="text-transform:uppercase"/></div>
+          <button class="smbtn smg" id="voucherCreateCustomBtn">Create Custom Code</button>
+        </div>
+        <div class="smdiv"></div>
+        <div class="smrow">
+          <div class="smf"><label>Random Code Count</label><input id="voucherRandomCount" type="number" min="1" max="100" value="10"/></div>
+          <div class="smf"><label>Random Characters</label><input id="voucherRandomLength" type="number" min="5" max="16" value="8"/></div>
+          <button class="smbtn smg" id="voucherGenerateBtn">⚡ Generate Random Codes</button>
+        </div>
+        <div id="voucherCreatedResult" style="display:none;margin-top:12px;background:var(--s2);border:1px solid var(--success);border-radius:8px;padding:10px;font-size:.75rem;word-break:break-word"></div>
+      </div>
+
+      <div class="smcard">
+        <h2>Campaigns</h2>
+        <div id="voucherCampaignList"><div class="smempty">Open this tab to load campaigns.</div></div>
+      </div>
+
+      <div class="smcard">
+        <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:10px">
+          <div class="smf" style="flex:2"><label>View Codes For</label><select id="voucherViewCampaign"><option value="">Select campaign...</option></select></div>
+          <div class="smf" style="flex:2"><label>Search Code</label><input id="voucherCodeSearch" placeholder="Search..." style="text-transform:uppercase"/></div>
+          <div class="smf"><label>Status</label><select id="voucherCodeStatus"><option value="all">All</option><option value="available">Available</option><option value="reserved">Reserved</option><option value="redeemed">Redeemed</option><option value="disabled">Disabled</option></select></div>
+        </div>
+        <div id="voucherCodeList"><div class="smempty">Select a campaign to view codes.</div></div>
       </div>
     </div>
   </div>
@@ -1156,6 +1251,7 @@ function showApp(n){
   $("mainApp").style.display="block";
   $("adminBadge").textContent=n;
   updateActivityTabAccess();
+  updateVoucherTabAccess();
 }
 $("pinEye").addEventListener("click",()=>{const p=$("pinIn");p.type=p.type==="password"?"text":"password";});
 $("pinIn").addEventListener("keydown",e=>{if(e.key==="Enter")$("loginBtn").click();});
@@ -1191,6 +1287,7 @@ document.querySelectorAll(".tab").forEach(btn=>{
     $("tabPending").style.display   =btn.dataset.tab==="pending"   ?"block":"none";
     $("tabCustomers").style.display =btn.dataset.tab==="customers" ?"block":"none";
     $("tabPromo").style.display     =btn.dataset.tab==="promo"     ?"block":"none";
+    $("tabVouchers").style.display  =btn.dataset.tab==="vouchers"  ?"block":"none";
     $("tabCoach").style.display     =btn.dataset.tab==="coach"     ?"block":"none";
     $("tabActivity").style.display  =btn.dataset.tab==="activity"  ?"block":"none";
     if(btn.dataset.tab==="passes")   loadActivePasses();
@@ -1204,6 +1301,7 @@ document.querySelectorAll(".tab").forEach(btn=>{
     if(btn.dataset.tab==="pending")  renderPendingTab();
     if(btn.dataset.tab==="customers") renderCustomerListTab();
     if(btn.dataset.tab==="promo")    loadPromoTab();
+    if(btn.dataset.tab==="vouchers") loadVoucherManager();
     if(btn.dataset.tab==="coach")    renderCoachTab();
     if(btn.dataset.tab==="activity") loadActivityFeed();
   });
@@ -1233,6 +1331,11 @@ const ACTIVITY_ACTION_LABELS = {
   branch_set_status: "เปลี่ยนสถานะสาขา",
   incident_create: "สร้างรายงานเหตุการณ์",
   incident_update_status: "อัปเดตเหตุการณ์",
+  voucher_campaign_create: "สร้างแคมเปญ Voucher",
+  voucher_campaign_update: "แก้ไขแคมเปญ Voucher",
+  voucher_campaign_status: "เปลี่ยนสถานะแคมเปญ Voucher",
+  voucher_codes_create: "สร้าง Voucher Code",
+  voucher_code_status: "เปลี่ยนสถานะ Voucher Code",
 };
 
 const ACTIVITY_STATUS_LABELS = {
@@ -1261,6 +1364,19 @@ function updateActivityTabAccess(){
   const allowed=canViewActivityFeed();
   btn.style.display=allowed?"block":"none";
   if(!allowed&&isActivityTabSelected()){
+    document.querySelector('[data-tab="bookings"]').click();
+  }
+}
+
+function canManageVouchers(){
+  return currentAdminName==="Art"&&currentAdminRole==="owner";
+}
+
+function updateVoucherTabAccess(){
+  const btn=$("voucherTabBtn");
+  const allowed=canManageVouchers();
+  btn.style.display=allowed?"block":"none";
+  if(!allowed&&document.querySelector(".tab.on")?.dataset.tab==="vouchers"){
     document.querySelector('[data-tab="bookings"]').click();
   }
 }
@@ -4871,6 +4987,235 @@ $("custRefreshBtn").addEventListener("click",async()=>{
   await loadBookings();
   renderCustomerListTab();
 });
+
+// ── VOUCHER MANAGER (Art owner only) ─────────────────────────────
+let voucherCampaigns=[];
+let voucherCodes=[];
+let voucherEditingId=null;
+let voucherLoading=false;
+
+async function voucherApi(action,payload={}){
+  const res=await fetch("/api/admin-user-action",{
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({action,...payload}),
+  });
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok||!data.ok) throw new Error(data.error||`Voucher request failed (${res.status})`);
+  return data;
+}
+
+const voucherTypeLabel=type=>({free_booking:"Free Booking",discount_amount:"Discount THB",discount_percent:"Discount %"}[type]||type);
+const voucherStateLabel=state=>({available:"Available",reserved:"Reserved",redeemed:"Redeemed",disabled:"Disabled",expired:"Expired"}[state]||state||"—");
+const voucherDateOnly=value=>{
+  if(!value)return "";
+  const date=new Date(value);
+  if(Number.isNaN(date.getTime()))return String(value).slice(0,10);
+  const parts=Object.fromEntries(new Intl.DateTimeFormat("en",{timeZone:"Asia/Bangkok",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(date).map(part=>[part.type,part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
+const voucherDeepLink=code=>`https://liff.line.me/2010034901-ClPr9N5v?voucher=${encodeURIComponent(code)}`;
+
+function voucherStatusChip(state,active=true){
+  const color=state==="available"&&active?"var(--success)":state==="reserved"?"var(--warn)":state==="redeemed"?"#8b5cf6":"var(--m)";
+  return `<span style="display:inline-block;border:1px solid ${color};color:${color};border-radius:999px;padding:2px 7px;font-size:.65rem;font-weight:800">${esc(voucherStateLabel(state))}</span>`;
+}
+
+function updateVoucherTypeFields(){
+  const type=$("vcType").value;
+  const discount=type!=="free_booking";
+  $("vcDiscountFields").style.display=discount?"flex":"none";
+  $("vcAmountWrap").style.display=type==="discount_amount"?"block":"none";
+  $("vcPercentWrap").style.display=type==="discount_percent"?"block":"none";
+  $("vcMaxDiscountWrap").style.display=type==="discount_percent"?"block":"none";
+}
+
+function setVoucherEndTime(value){
+  const select=$("vcEndTime");
+  const target=value||"24:00";
+  if(![...select.options].some(option=>option.value===target)){
+    const option=document.createElement("option");option.value=option.textContent=target;select.append(option);
+  }
+  select.value=target;
+}
+
+function resetVoucherCampaignForm(){
+  voucherEditingId=null;
+  $("voucherCampaignFormTitle").textContent="Create Campaign";
+  $("vcCampaignId").disabled=false;
+  $("vcCampaignId").value="";$("vcName").value="";$("vcKeyword").value="";$("vcPrefix").value="";
+  $("vcType").value="free_booking";$("vcValidFrom").value="";$("vcExpiresAt").value="";
+  $("vcStartTime").value="06:00";setVoucherEndTime("24:00");$("vcRestores").value="0";
+  $("vcActive").checked=true;$("vcExcludeHolidays").checked=true;$("vcRequiresLine").checked=true;$("vcTransferable").checked=true;
+  document.querySelectorAll("[data-vday]").forEach(el=>el.checked=[1,2,3,4,5].includes(Number(el.dataset.vday)));
+  document.querySelectorAll("[data-vpricing]").forEach(el=>el.checked=false);
+  $("vcDiscountAmount").value="50";$("vcDiscountPercent").value="10";$("vcMaxDiscount").value="0";$("vcMinFinal").value="0";
+  updateVoucherTypeFields();
+}
+
+function editVoucherCampaign(campaignId){
+  const c=voucherCampaigns.find(item=>item.id===campaignId);
+  if(!c)return;
+  voucherEditingId=c.id;
+  $("voucherCampaignFormTitle").textContent=`Edit Campaign · ${c.name}`;
+  $("vcCampaignId").value=c.id;$("vcCampaignId").disabled=true;
+  $("vcName").value=c.name||"";$("vcKeyword").value=c.keyword||"";$("vcPrefix").value=c.codePrefix||"";
+  $("vcType").value=c.voucherType||"discount_amount";$("vcValidFrom").value=voucherDateOnly(c.validFrom);$("vcExpiresAt").value=voucherDateOnly(c.expiresAt);
+  $("vcStartTime").value=c.startTime||"06:00";setVoucherEndTime(c.endTime||"24:00");$("vcRestores").value=Number(c.maxCancellationRestores)||0;
+  $("vcActive").checked=c.active===true;$("vcExcludeHolidays").checked=c.excludeHolidays===true;$("vcRequiresLine").checked=c.requiresLineLogin!==false;$("vcTransferable").checked=c.transferable===true;
+  document.querySelectorAll("[data-vday]").forEach(el=>el.checked=(c.allowedDays||[]).includes(Number(el.dataset.vday)));
+  document.querySelectorAll("[data-vpricing]").forEach(el=>el.checked=(c.allowedPricingTypes||[]).includes(el.dataset.vpricing));
+  $("vcDiscountAmount").value=c.discountAmount??50;$("vcDiscountPercent").value=c.discountPercent??10;$("vcMaxDiscount").value=c.maxDiscountAmount??0;$("vcMinFinal").value=c.minFinalPrice??0;
+  updateVoucherTypeFields();
+  $("tabVouchers").scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+function renderVoucherCampaigns(){
+  const list=$("voucherCampaignList");
+  if(!voucherCampaigns.length){list.innerHTML=`<div class="smempty">No campaigns yet. Create the first campaign above.</div>`;return;}
+  list.innerHTML=voucherCampaigns.map(c=>{
+    const dateRange=`${c.validFrom?voucherDateOnly(c.validFrom):"No start"} → ${c.expiresAt?voucherDateOnly(c.expiresAt):"No expiry"}`;
+    const days=(c.allowedDays||[]).map(d=>["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d]).join(", ")||"None";
+    return `<div style="background:var(--s2);border:1px solid var(--bd);border-radius:9px;padding:11px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div><strong>${esc(c.name)}</strong> <span style="font-size:.66rem;color:var(--m)">${esc(c.id)}</span><br><span style="font-size:.7rem;color:var(--m)">${esc(voucherTypeLabel(c.voucherType))} · ${esc(c.codePrefix||"No prefix")} · ${esc(dateRange)}</span></div>
+        <div><span style="display:inline-block;border:1px solid ${c.active?"var(--success)":"var(--m)"};color:${c.active?"var(--success)":"var(--m)"};border-radius:999px;padding:2px 7px;font-size:.65rem;font-weight:800">${c.active?"Active":"Inactive"}</span></div>
+      </div>
+      <div style="font-size:.68rem;color:var(--m);margin-top:7px">${esc(days)} · ${esc(c.startTime)}–${esc(c.endTime)} · Holiday ${c.excludeHolidays?"excluded":"allowed"} · Restore ${Number(c.maxCancellationRestores)||0}</div>
+      <div class="qbtns" style="margin-top:9px;gap:6px"><button class="smbtn smgr" data-vcampaign-edit="${esc(c.id)}">Edit</button><button class="smbtn ${c.active?"":"smg"}" data-vcampaign-toggle="${esc(c.id)}" data-next-active="${c.active?"false":"true"}">${c.active?"Deactivate":"Activate"}</button><button class="smbtn smgr" data-vcampaign-codes="${esc(c.id)}">View Codes</button></div>
+    </div>`;
+  }).join("");
+}
+
+function updateVoucherCampaignSelects(preferredId=""){
+  const options=`<option value="">Select campaign...</option>`+voucherCampaigns.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}${c.active?"":" (inactive)"}</option>`).join("");
+  const codeCurrent=preferredId||$("voucherCodeCampaign").value;
+  const viewCurrent=preferredId||$("voucherViewCampaign").value;
+  $("voucherCodeCampaign").innerHTML=options;$("voucherViewCampaign").innerHTML=options;
+  if(voucherCampaigns.some(c=>c.id===codeCurrent))$("voucherCodeCampaign").value=codeCurrent;
+  if(voucherCampaigns.some(c=>c.id===viewCurrent))$("voucherViewCampaign").value=viewCurrent;
+}
+
+function renderVoucherCodes(){
+  const campaignId=$("voucherViewCampaign").value;
+  if(!campaignId){$("voucherCodeList").innerHTML=`<div class="smempty">Select a campaign to view codes.</div>`;return;}
+  const search=$("voucherCodeSearch").value.trim().toUpperCase();
+  const status=$("voucherCodeStatus").value;
+  const filtered=voucherCodes.filter(v=>(!search||v.code.includes(search))&&(status==="all"||v.state===status));
+  if(!filtered.length){$("voucherCodeList").innerHTML=`<div class="smempty">No matching codes.</div>`;return;}
+  $("voucherCodeList").innerHTML=`<div style="font-size:.68rem;color:var(--m);margin-bottom:8px">Showing ${filtered.length} of ${voucherCodes.length} codes · server view capped at 500</div>`+filtered.map(v=>{
+    const canToggle=v.state==="available"||v.state==="disabled";
+    const usage=v.state==="reserved"?`Booking ${v.reservedBookingCode||"—"}`:v.state==="redeemed"?`Booking ${v.redeemedBookingCode||"—"}`:`Used ${v.usedCount}/${v.maxUses}`;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:9px;margin-bottom:6px">
+      <div><strong style="letter-spacing:.4px">${esc(v.code)}</strong> ${voucherStatusChip(v.state,v.active)}<br><span style="font-size:.68rem;color:var(--m)">${esc(usage)} · Restored ${Number(v.cancellationRestoreCount)||0}/${Number(v.maxCancellationRestores)||0}</span></div>
+      <div class="qbtns" style="gap:5px"><button class="smbtn smgr" data-vcode-copy="${esc(v.code)}">Copy Link</button>${canToggle?`<button class="smbtn ${v.state==="disabled"?"smg":""}" data-vcode-toggle="${esc(v.code)}" data-next-active="${v.state==="disabled"?"true":"false"}">${v.state==="disabled"?"Enable":"Disable"}</button>`:""}</div>
+    </div>`;
+  }).join("");
+}
+
+async function loadVoucherManager(campaignId=""){
+  if(!canManageVouchers()){showToast("Unauthorized: Art owner only.",true);return;}
+  if(voucherLoading)return;
+  voucherLoading=true;
+  $("voucherCampaignList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading Voucher Manager...</p></div>`;
+  try{
+    const requested=campaignId||$("voucherViewCampaign").value;
+    const data=await voucherApi("voucher_list",requested?{campaignId:requested}:{});
+    voucherCampaigns=data.campaigns||[];voucherCodes=data.codes||[];
+    renderVoucherCampaigns();updateVoucherCampaignSelects(requested);renderVoucherCodes();
+    if(!requested&&voucherCampaigns.length){
+      const first=voucherCampaigns[0].id;
+      $("voucherCodeCampaign").value=first;$("voucherViewCampaign").value=first;
+      voucherLoading=false;
+      return loadVoucherManager(first);
+    }
+  }catch(e){
+    console.error(e);$("voucherCampaignList").innerHTML=`<div class="smempty" style="color:var(--dan)">${esc(e.message)}</div>`;showToast(e.message,true);
+  }finally{voucherLoading=false;}
+}
+
+function voucherCampaignPayload(){
+  const validFrom=$("vcValidFrom").value;
+  const expiresAt=$("vcExpiresAt").value;
+  return {
+    campaignId:$("vcCampaignId").value.trim().toLowerCase(),name:$("vcName").value.trim(),voucherType:$("vcType").value,
+    keyword:$("vcKeyword").value.trim().toUpperCase(),codePrefix:$("vcPrefix").value.trim().toUpperCase(),
+    validFrom:validFrom?`${validFrom}T00:00:00+07:00`:null,expiresAt:expiresAt?`${expiresAt}T23:59:59+07:00`:null,
+    startTime:$("vcStartTime").value,endTime:$("vcEndTime").value,exactDurationMinutes:60,
+    maxCancellationRestores:Number($("vcRestores").value),active:$("vcActive").checked,
+    excludeHolidays:$("vcExcludeHolidays").checked,requiresLineLogin:$("vcRequiresLine").checked,transferable:$("vcTransferable").checked,
+    allowedDays:[...document.querySelectorAll("[data-vday]:checked")].map(el=>Number(el.dataset.vday)),
+    allowedPricingTypes:[...document.querySelectorAll("[data-vpricing]:checked")].map(el=>el.dataset.vpricing),
+    discountAmount:Number($("vcDiscountAmount").value),discountPercent:Number($("vcDiscountPercent").value),
+    maxDiscountAmount:Number($("vcMaxDiscount").value),minFinalPrice:Number($("vcMinFinal").value),
+  };
+}
+
+$("vcType").addEventListener("change",updateVoucherTypeFields);
+$("vcName").addEventListener("blur",()=>{
+  if(!$("vcCampaignId").value&&!voucherEditingId){
+    $("vcCampaignId").value=$("vcName").value.trim().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,64);
+  }
+});
+$("voucherResetCampaignBtn").addEventListener("click",resetVoucherCampaignForm);
+$("voucherRefreshBtn").addEventListener("click",()=>loadVoucherManager($("voucherViewCampaign").value));
+$("voucherSaveCampaignBtn").addEventListener("click",async()=>{
+  if(!canManageVouchers())return showToast("Unauthorized: Art owner only.",true);
+  const campaign=voucherCampaignPayload();
+  if(!campaign.campaignId||!campaign.name)return showToast("Campaign ID and name are required.",true);
+  if(!confirm(`Save campaign “${campaign.name}”?\n\nType: ${voucherTypeLabel(campaign.voucherType)}\nActive: ${campaign.active?"Yes":"No"}\nNew User quotes will use these rules immediately when codes exist.`))return;
+  const btn=$("voucherSaveCampaignBtn");btn.disabled=true;btn.textContent="Saving...";
+  try{await voucherApi("voucher_save_campaign",{campaign});showToast("✓ Campaign saved");const id=campaign.campaignId;resetVoucherCampaignForm();await loadVoucherManager(id);editVoucherCampaign(id);}
+  catch(e){showToast(e.message,true);}finally{btn.disabled=false;btn.textContent="✓ Save Campaign";}
+});
+
+$("voucherCampaignList").addEventListener("click",async event=>{
+  const edit=event.target.closest("[data-vcampaign-edit]");if(edit)return editVoucherCampaign(edit.dataset.vcampaignEdit);
+  const view=event.target.closest("[data-vcampaign-codes]");if(view){$("voucherViewCampaign").value=view.dataset.vcampaignCodes;$("voucherCodeCampaign").value=view.dataset.vcampaignCodes;return loadVoucherManager(view.dataset.vcampaignCodes);}
+  const toggle=event.target.closest("[data-vcampaign-toggle]");if(!toggle)return;
+  const active=toggle.dataset.nextActive==="true";
+  if(!confirm(`${active?"Activate":"Deactivate"} this campaign?`))return;
+  toggle.disabled=true;
+  try{await voucherApi("voucher_set_campaign_active",{campaignId:toggle.dataset.vcampaignToggle,active});showToast("✓ Campaign status updated");await loadVoucherManager($("voucherViewCampaign").value);}
+  catch(e){showToast(e.message,true);}finally{toggle.disabled=false;}
+});
+
+async function createVoucherCodes(mode){
+  const campaignId=$("voucherCodeCampaign").value;
+  if(!campaignId)return showToast("Select a campaign first.",true);
+  const payload={campaignId,mode};
+  if(mode==="custom")payload.customCode=$("voucherCustomCode").value.trim().toUpperCase();
+  else{payload.count=Number($("voucherRandomCount").value);payload.randomLength=Number($("voucherRandomLength").value);}
+  const label=mode==="custom"?payload.customCode:`${payload.count} random code(s)`;
+  if(!confirm(`Create ${label} for this campaign?`))return;
+  const btn=mode==="custom"?$("voucherCreateCustomBtn"):$("voucherGenerateBtn");btn.disabled=true;const old=btn.textContent;btn.textContent="Creating...";
+  try{
+    const data=await voucherApi("voucher_create_codes",payload);
+    $("voucherCreatedResult").style.display="block";
+    $("voucherCreatedResult").innerHTML=`<strong>Created ${data.codes.length} code(s)</strong><br>${data.codes.map(esc).join(" · ")}<div style="margin-top:8px"><button class="smbtn smgr" data-vcreated-copy>Copy Codes</button></div>`;
+    $("voucherCreatedResult").dataset.codes=JSON.stringify(data.codes);$("voucherCustomCode").value="";
+    $("voucherViewCampaign").value=campaignId;showToast(`✓ Created ${data.codes.length} Voucher code(s)`);await loadVoucherManager(campaignId);
+  }catch(e){showToast(e.message,true);}finally{btn.disabled=false;btn.textContent=old;}
+}
+$("voucherCreateCustomBtn").addEventListener("click",()=>createVoucherCodes("custom"));
+$("voucherGenerateBtn").addEventListener("click",()=>createVoucherCodes("random"));
+$("voucherCreatedResult").addEventListener("click",async event=>{
+  if(!event.target.closest("[data-vcreated-copy]"))return;
+  try{const codes=JSON.parse($("voucherCreatedResult").dataset.codes||"[]");await navigator.clipboard.writeText(codes.join("\n"));showToast("✓ Codes copied");}catch{showToast("Copy failed",true);}
+});
+$("voucherViewCampaign").addEventListener("change",()=>loadVoucherManager($("voucherViewCampaign").value));
+$("voucherCodeSearch").addEventListener("input",renderVoucherCodes);
+$("voucherCodeStatus").addEventListener("change",renderVoucherCodes);
+$("voucherCodeList").addEventListener("click",async event=>{
+  const copy=event.target.closest("[data-vcode-copy]");
+  if(copy){try{await navigator.clipboard.writeText(voucherDeepLink(copy.dataset.vcodeCopy));showToast("✓ Voucher link copied");}catch{showToast("Copy failed",true);}return;}
+  const toggle=event.target.closest("[data-vcode-toggle]");if(!toggle)return;
+  const active=toggle.dataset.nextActive==="true";
+  if(!confirm(`${active?"Enable":"Disable"} ${toggle.dataset.vcodeToggle}?`))return;
+  toggle.disabled=true;
+  try{await voucherApi("voucher_set_code_active",{code:toggle.dataset.vcodeToggle,active});showToast("✓ Voucher status updated");await loadVoucherManager($("voucherViewCampaign").value);}
+  catch(e){showToast(e.message,true);}finally{toggle.disabled=false;}
+});
+resetVoucherCampaignForm();
 
 // ── SPECIAL PROMOTION MANAGEMENT (Art only) ──────────────────────
 async function loadPromoTab() {
