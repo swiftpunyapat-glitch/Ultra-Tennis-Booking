@@ -18,7 +18,7 @@ import { sendAndLog, loadActiveAdmins } from './_lib/notify.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import {
   generateVoucherCodes, normalizeCampaignInput,
-  normalizeCustomVoucherCode, normalizeRandomCodeRequest,
+  normalizeCustomVoucherCode, normalizeRandomCodeRequest, normalizeVoucherImportRecords,
 } from './_lib/voucher-admin.js';
 
 const ACTIVE_PACKAGES = {
@@ -110,7 +110,9 @@ export default async function handler(req, res) {
   // the authority and protects reads as well as writes.
   const voucherActions = new Set([
     'voucher_list', 'voucher_save_campaign', 'voucher_set_campaign_active',
-    'voucher_create_codes', 'voucher_set_code_active',
+    'voucher_create_codes', 'voucher_import_codes', 'voucher_set_code_active',
+    'event_pass_list_requests', 'event_pass_approve_request',
+    'event_pass_reject_request', 'event_pass_reset_code',
   ]);
   if (voucherActions.has(action)) {
     if (adminName !== 'Art' || !requireRole(session, 'owner')) {
@@ -872,8 +874,36 @@ function projectVoucherCode(doc) {
     reservedUntil: voucherTimestampIso(data.reservedUntil),
     redeemedBookingCode: data.redeemedBookingCode || null,
     redeemedAt: voucherTimestampIso(data.redeemedAt),
+    pendingRequestId: data.pendingRequestId || null,
+    issuedTo: data.issuedTo || null,
+    assignedName: data.assignedName || '',
+    assignedDraw: data.assignedDraw || '',
+    assignedNickname: data.assignedNickname || '',
+    redeemedPackageId: data.redeemedPackageId || null,
     createdAt: voucherTimestampIso(data.createdAt),
     updatedAt: voucherTimestampIso(data.updatedAt),
+  };
+}
+
+function projectEventPassRequest(doc) {
+  const data = doc.data();
+  return {
+    id: doc.id,
+    code: data.code || '',
+    campaignId: data.campaignId || '',
+    status: data.status || 'pending',
+    lineUserId: data.lineUserId || '',
+    lineDisplayName: data.lineDisplayName || '',
+    customerName: data.customerName || '',
+    customerPhone: data.customerPhone || '',
+    assignedName: data.assignedName || '',
+    assignedDraw: data.assignedDraw || '',
+    assignedNickname: data.assignedNickname || '',
+    issuedPackageId: data.issuedPackageId || null,
+    codeReturned: data.codeReturned === true,
+    createdAt: voucherTimestampIso(data.createdAt),
+    reviewedAt: voucherTimestampIso(data.reviewedAt),
+    reviewedBy: data.reviewedBy || null,
   };
 }
 
@@ -1019,6 +1049,277 @@ async function handleVoucherAction({ req, res, adminName, session, action }) {
     }
   }
 
+  if (action === 'voucher_import_codes') {
+    const campaignId = String(req.body?.campaignId || '').trim();
+    if (!campaignId) return res.status(400).json({ ok: false, error: 'Select a campaign' });
+    const normalized = normalizeVoucherImportRecords(req.body?.records);
+    if (!normalized.ok) return res.status(400).json({ ok: false, error: normalized.error });
+    try {
+      const campaignSnap = await db.collection('voucher_campaigns').doc(campaignId).get();
+      if (!campaignSnap.exists) return res.status(404).json({ ok: false, error: 'Campaign not found' });
+      const refs = normalized.records.map(record => db.collection('vouchers').doc(record.code));
+      const existing = await db.getAll(...refs);
+      const duplicates = existing.filter(snap => snap.exists).map(snap => snap.id);
+      if (duplicates.length) {
+        return res.status(409).json({ ok: false, error: `${duplicates.length} code(s) already exist`, duplicates });
+      }
+      const campaign = campaignSnap.data();
+      const batch = db.batch();
+      normalized.records.forEach((record, index) => batch.create(refs[index], {
+        schemaVersion: 2,
+        code: record.code,
+        campaignId,
+        active: true,
+        state: 'available',
+        usedCount: 0,
+        maxUses: 1,
+        cancellationRestoreCount: 0,
+        maxCancellationRestores: Number(campaign.maxCancellationRestores) || 0,
+        assignedName: record.assignedName,
+        assignedDraw: record.assignedDraw,
+        assignedNickname: record.assignedNickname,
+        source: 'admin_exact_import',
+        createdBy: adminName,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }));
+      await batch.commit();
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+        action: 'voucher_codes_import', targetId: campaignId,
+        before: null, after: { count: normalized.records.length, mode: 'exact_import' },
+        note: `Imported ${normalized.records.length} exact Voucher code(s)`,
+      });
+      return res.status(200).json({ ok: true, campaignId, imported: normalized.records.length });
+    } catch (e) {
+      const conflict = e.code === 6 || e.code === 'already-exists';
+      if (!conflict) console.error('[voucher_import_codes]', e.message);
+      return res.status(conflict ? 409 : 500).json({ ok: false, error: conflict ? 'Voucher code already exists' : 'Failed to import Voucher codes' });
+    }
+  }
+
+  if (action === 'event_pass_list_requests') {
+    try {
+      const snap = await db.collection('event_pass_requests').limit(500).get();
+      const requests = snap.docs.map(projectEventPassRequest)
+        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      return res.status(200).json({ ok: true, requests });
+    } catch (e) {
+      console.error('[event_pass_list_requests]', e.message);
+      return res.status(500).json({ ok: false, error: 'Failed to load Event Pass requests' });
+    }
+  }
+
+  if (action === 'event_pass_approve_request') {
+    const requestId = String(req.body?.requestId || '').trim();
+    if (!requestId) return res.status(400).json({ ok: false, error: 'requestId is required' });
+    const requestRef = db.collection('event_pass_requests').doc(requestId);
+    const packageRef = db.collection('customer_packages').doc();
+    try {
+      let result;
+      await db.runTransaction(async transaction => {
+        const requestSnap = await transaction.get(requestRef);
+        if (!requestSnap.exists) throw new Error('NOT_FOUND');
+        const request = requestSnap.data();
+        if (request.status !== 'pending') throw new Error('BAD_STATE');
+        const voucherRef = db.collection('vouchers').doc(String(request.code));
+        const campaignRef = db.collection('voucher_campaigns').doc(String(request.campaignId));
+        const userRef = db.collection('registered_users').doc(String(request.lineUserId));
+        const [voucherSnap, campaignSnap, userSnap] = await Promise.all([
+          transaction.get(voucherRef), transaction.get(campaignRef), transaction.get(userRef),
+        ]);
+        if (!voucherSnap.exists || !campaignSnap.exists) throw new Error('ENTITLEMENT_MISSING');
+        if (!userSnap.exists) throw new Error('USER_MISSING');
+        const voucher = voucherSnap.data();
+        const campaign = campaignSnap.data();
+        if (campaign.voucherType !== 'event_pass' || campaign.active !== true) throw new Error('CAMPAIGN_INACTIVE');
+        if (voucher.state !== 'pending_approval' || voucher.pendingRequestId !== requestId) throw new Error('CODE_CONFLICT');
+        const expiresAtMs = campaign.expiresAt?.toMillis?.() ?? 0;
+        if (!expiresAtMs || expiresAtMs <= Date.now()) throw new Error('EXPIRED');
+        const user = userSnap.data();
+        transaction.create(packageRef, {
+          lineUserId: request.lineUserId,
+          customerName: request.customerName || user.name || '',
+          customerPhone: request.customerPhone || user.phone || '',
+          customerPhoneNormalized: normalizePhone(request.customerPhone || user.phone),
+          lineDisplayName: request.lineDisplayName || user.lineDisplayName || '',
+          packageType: 'monstr_event_pass', packageName: campaign.name || 'Event Pass',
+          price: 0, ownerRole: 'customer', totalMinutes: 60, remainingMinutes: 60,
+          validityDays: null, validFrom: FieldValue.serverTimestamp(), validUntil: campaign.expiresAt,
+          status: 'active', isEventPass: true,
+          restrictDays: Array.isArray(campaign.allowedDays) ? campaign.allowedDays : [1, 2, 3, 4, 5],
+          branchId: campaign.branchId || DEFAULT_BRANCH_ID,
+          resourceId: campaign.resourceId || 'room1',
+          excludeHolidays: campaign.excludeHolidays === true,
+          exactDurationMinutes: 60, eventUsedAt: null,
+          eventName: campaign.name || 'Event Pass',
+          sourceVoucherCode: request.code, sourceEventPassRequestId: requestId,
+          addedByAdmin: adminName, source: 'event_code_approved',
+          createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+          weeklyUsage: {}, monthlyUsage: {}, note: '',
+        });
+        transaction.update(voucherRef, {
+          state: 'redeemed', usedCount: 1, issuedTo: request.lineUserId,
+          redeemedBy: request.lineUserId, redeemedAt: FieldValue.serverTimestamp(),
+          redeemedPackageId: packageRef.id, redeemedRequestId: requestId,
+          updatedAt: FieldValue.serverTimestamp(), updatedBy: adminName,
+        });
+        transaction.update(requestRef, {
+          status: 'approved', issuedPackageId: packageRef.id,
+          reviewedAt: FieldValue.serverTimestamp(), reviewedBy: adminName,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        result = { packageId: packageRef.id, code: request.code, lineUserId: request.lineUserId, packageName: campaign.name || 'Event Pass', expiresAtMs };
+      });
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+        action: 'event_pass_approve', targetId: requestId,
+        before: { status: 'pending' }, after: { status: 'approved', packageId: result.packageId, code: result.code },
+      });
+      try {
+        await sendAndLog({
+          eventId: `${result.code}_event_pass_activated_customer`,
+          type: 'pass_activated_customer', targetType: 'customer',
+          lineUserId: result.lineUserId, bookingCode: result.code,
+          payload: {
+            packageName: result.packageName, remainingMinutes: 60,
+            validUntil: new Date(result.expiresAtMs).toLocaleDateString('en-GB', { timeZone: 'Asia/Bangkok' }),
+          },
+        });
+      } catch (e) { console.error('[event_pass_approve_request] notify (non-fatal):', e.message); }
+      return res.status(200).json({ ok: true, ...result });
+    } catch (e) {
+      const map = {
+        NOT_FOUND: [404, 'Event Pass request not found'], BAD_STATE: [409, 'Request was already reviewed'],
+        ENTITLEMENT_MISSING: [409, 'Code or campaign is missing'], USER_MISSING: [409, 'Customer must register before approval'],
+        CAMPAIGN_INACTIVE: [409, 'Event Pass campaign is inactive'], CODE_CONFLICT: [409, 'Code is no longer reserved for this request'],
+        EXPIRED: [409, 'Event Pass campaign has expired'],
+      };
+      const [status, error] = map[e.message] || [500, 'Failed to approve Event Pass'];
+      if (status === 500) console.error('[event_pass_approve_request]', e.message);
+      return res.status(status).json({ ok: false, error });
+    }
+  }
+
+  if (action === 'event_pass_reject_request') {
+    const requestId = String(req.body?.requestId || '').trim();
+    const returnCode = req.body?.returnCode !== false;
+    if (!requestId) return res.status(400).json({ ok: false, error: 'requestId is required' });
+    const requestRef = db.collection('event_pass_requests').doc(requestId);
+    try {
+      let code;
+      await db.runTransaction(async transaction => {
+        const requestSnap = await transaction.get(requestRef);
+        if (!requestSnap.exists) throw new Error('NOT_FOUND');
+        const request = requestSnap.data();
+        if (request.status !== 'pending') throw new Error('BAD_STATE');
+        code = String(request.code || '');
+        const voucherRef = db.collection('vouchers').doc(code);
+        const voucherSnap = await transaction.get(voucherRef);
+        if (!voucherSnap.exists) throw new Error('CODE_MISSING');
+        const voucher = voucherSnap.data();
+        if (voucher.state !== 'pending_approval' || voucher.pendingRequestId !== requestId) throw new Error('CODE_CONFLICT');
+        transaction.update(voucherRef, returnCode ? {
+          state: 'available', active: true, issuedTo: FieldValue.delete(),
+          pendingRequestId: FieldValue.delete(), pendingAt: FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(), updatedBy: adminName,
+        } : {
+          state: 'disabled', active: false, updatedAt: FieldValue.serverTimestamp(), updatedBy: adminName,
+        });
+        transaction.update(requestRef, {
+          status: 'rejected', codeReturned: returnCode,
+          reviewedAt: FieldValue.serverTimestamp(), reviewedBy: adminName,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      });
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+        action: 'event_pass_reject', targetId: requestId,
+        before: { status: 'pending' }, after: { status: 'rejected', codeReturned: returnCode, code },
+      });
+      return res.status(200).json({ ok: true, code, codeReturned: returnCode });
+    } catch (e) {
+      const map = { NOT_FOUND: [404, 'Event Pass request not found'], BAD_STATE: [409, 'Request was already reviewed'], CODE_MISSING: [409, 'Code is missing'], CODE_CONFLICT: [409, 'Code is no longer reserved for this request'] };
+      const [status, error] = map[e.message] || [500, 'Failed to reject Event Pass'];
+      if (status === 500) console.error('[event_pass_reject_request]', e.message);
+      return res.status(status).json({ ok: false, error });
+    }
+  }
+
+  if (action === 'event_pass_reset_code') {
+    const normalized = normalizeCustomVoucherCode(req.body?.code);
+    if (!normalized.ok) return res.status(400).json({ ok: false, error: normalized.error });
+    const voucherRef = db.collection('vouchers').doc(normalized.code);
+    try {
+      const initial = await voucherRef.get();
+      if (!initial.exists) return res.status(404).json({ ok: false, error: 'Code not found' });
+      const initialData = initial.data();
+      const packageId = String(initialData.redeemedPackageId || '');
+      const requestId = String(initialData.pendingRequestId || initialData.redeemedRequestId || '');
+      const packageRef = packageId ? db.collection('customer_packages').doc(packageId) : null;
+      const requestRef = requestId ? db.collection('event_pass_requests').doc(requestId) : null;
+      let bookingRefs = [];
+      if (packageRef) {
+        const bookingSnap = await db.collection('bookings').where('packageId', '==', packageId).limit(10).get();
+        bookingRefs = bookingSnap.docs.map(doc => doc.ref);
+      }
+      await db.runTransaction(async transaction => {
+        const reads = await Promise.all([
+          transaction.get(voucherRef),
+          ...(packageRef ? [transaction.get(packageRef)] : []),
+          ...(requestRef ? [transaction.get(requestRef)] : []),
+          ...bookingRefs.map(ref => transaction.get(ref)),
+        ]);
+        if (!reads[0].exists) throw new Error('NOT_FOUND');
+        const voucher = reads[0].data();
+        const state = voucher.state || 'available';
+        if (state === 'redeemed' && !packageRef) throw new Error('PACKAGE_MISSING');
+        const bookingOffset = 1 + (packageRef ? 1 : 0) + (requestRef ? 1 : 0);
+        const bookings = reads.slice(bookingOffset).filter(snap => snap.exists).map(snap => snap.data());
+        if (state === 'redeemed' && packageRef) {
+          const pkgSnap = reads[1];
+          if (!pkgSnap.exists) throw new Error('PACKAGE_MISSING');
+          const pkg = pkgSnap.data();
+          if (pkg.lastUsedBooking && !bookings.length) throw new Error('BOOKING_UNKNOWN');
+          if (bookings.some(booking => !['cancelled', 'expired', 'completed', 'no_show'].includes(booking.bookingStatus))) {
+            throw new Error('ACTIVE_BOOKING');
+          }
+          transaction.update(packageRef, {
+            status: 'inactive', resetBy: adminName, resetAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+        transaction.update(voucherRef, {
+          state: 'available', active: true, usedCount: 0,
+          issuedTo: FieldValue.delete(), pendingRequestId: FieldValue.delete(), pendingAt: FieldValue.delete(),
+          redeemedBy: FieldValue.delete(), redeemedAt: FieldValue.delete(), redeemedPackageId: FieldValue.delete(), redeemedRequestId: FieldValue.delete(),
+          resetBy: adminName, resetAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(), updatedBy: adminName,
+        });
+        if (requestRef) {
+          const requestSnap = reads[1 + (packageRef ? 1 : 0)];
+          if (requestSnap.exists) transaction.update(requestRef, {
+            status: 'reset', codeReturned: true, reviewedAt: FieldValue.serverTimestamp(), reviewedBy: adminName, updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+      });
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+        action: 'event_pass_reset_code', targetId: normalized.code,
+        before: { state: initialData.state || 'available', packageId: packageId || null },
+        after: { state: 'available', usedCount: 0 }, note: 'Owner test reset / return code',
+      });
+      return res.status(200).json({ ok: true, code: normalized.code, state: 'available' });
+    } catch (e) {
+      const map = {
+        NOT_FOUND: [404, 'Code not found'], PACKAGE_MISSING: [409, 'Issued Event Pass is missing'],
+        BOOKING_UNKNOWN: [409, 'Cannot verify the Event Pass booking safely'],
+        ACTIVE_BOOKING: [409, 'Cancel the active Event Pass booking before resetting this code'],
+      };
+      const [status, error] = map[e.message] || [500, 'Failed to reset Event Pass code'];
+      if (status === 500) console.error('[event_pass_reset_code]', e.message);
+      return res.status(status).json({ ok: false, error });
+    }
+  }
+
   if (action === 'voucher_set_code_active') {
     const normalized = normalizeCustomVoucherCode(req.body?.code);
     if (!normalized.ok) return res.status(400).json({ ok: false, error: normalized.error });
@@ -1030,7 +1331,7 @@ async function handleVoucherAction({ req, res, adminName, session, action }) {
         const snap = await transaction.get(ref);
         if (!snap.exists) throw new Error('NOT_FOUND');
         const voucher = snap.data();
-        if (voucher.state === 'reserved') throw new Error('RESERVED');
+        if (voucher.state === 'reserved' || voucher.state === 'pending_approval') throw new Error('RESERVED');
         if (active && (voucher.state === 'redeemed' || (Number(voucher.usedCount) || 0) >= (Number(voucher.maxUses) || 1))) {
           throw new Error('REDEEMED');
         }

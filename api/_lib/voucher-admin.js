@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 export const VOUCHER_CAMPAIGN_TYPES = Object.freeze([
-  'free_booking', 'discount_amount', 'discount_percent',
+  'free_booking', 'discount_amount', 'discount_percent', 'event_pass',
 ]);
 
 export const VOUCHER_PRICING_TYPES = Object.freeze([
@@ -174,4 +174,24 @@ export function generateVoucherCodes({ count, randomLength, prefix = '' }) {
     codes.add(`${prefix}${suffix}`);
   }
   return [...codes];
+}
+
+export function normalizeVoucherImportRecords(input) {
+  if (!Array.isArray(input) || input.length < 1 || input.length > 500) {
+    return { ok: false, error: 'Import must contain 1-500 Voucher records' };
+  }
+  const records = [];
+  const seen = new Set();
+  for (let index = 0; index < input.length; index++) {
+    const row = input[index] || {};
+    const normalized = normalizeCustomVoucherCode(row.code);
+    if (!normalized.ok) return { ok: false, error: `Row ${index + 1}: ${normalized.error}` };
+    if (seen.has(normalized.code)) return { ok: false, error: `Duplicate code in import: ${normalized.code}` };
+    seen.add(normalized.code);
+    const assignedName = clean(row.assignedName, 160);
+    const assignedDraw = clean(row.assignedDraw, 120);
+    const assignedNickname = clean(row.assignedNickname, 80);
+    records.push({ code: normalized.code, assignedName, assignedDraw, assignedNickname });
+  }
+  return { ok: true, records };
 }

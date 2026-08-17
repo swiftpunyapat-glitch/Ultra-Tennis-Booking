@@ -179,7 +179,12 @@ describe('locked owner role and capability matrix',()=>{
       {action:'voucher_save_campaign'},
       {action:'voucher_set_campaign_active'},
       {action:'voucher_create_codes'},
+      {action:'voucher_import_codes'},
       {action:'voucher_set_code_active'},
+      {action:'event_pass_list_requests'},
+      {action:'event_pass_approve_request'},
+      {action:'event_pass_reject_request'},
+      {action:'event_pass_reset_code'},
     ];
     for(const body of passActions){
       expect((await call(userActionHandler,body,'Staff')).statusCode,`staff ${body.action}`).toBe(403);
@@ -213,7 +218,7 @@ describe('locked owner role and capability matrix',()=>{
   });
 
   test('Voucher Manager reads and writes are pinned to Art owner only',async()=>{
-    const actions=['voucher_list','voucher_save_campaign','voucher_set_campaign_active','voucher_create_codes','voucher_set_code_active'];
+    const actions=['voucher_list','voucher_save_campaign','voucher_set_campaign_active','voucher_create_codes','voucher_import_codes','voucher_set_code_active','event_pass_list_requests','event_pass_approve_request','event_pass_reject_request','event_pass_reset_code'];
     for(const action of actions){
       expect((await call(userActionHandler,{action},'Art')).statusCode,`Art ${action}`).not.toBe(403);
       expect((await call(userActionHandler,{action},'Boss')).statusCode,`Boss ${action}`).toBe(403);

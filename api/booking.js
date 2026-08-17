@@ -26,6 +26,8 @@ import {
 } from './_lib/voucher-engine.js';
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { normalizeCustomVoucherCode } from './_lib/voucher-admin.js';
+import { eventPassBookingError } from './_lib/event-pass-policy.js';
 
 const RESOURCE_ID       = 'room1';
 const DEFAULT_BRANCH_ID = 'ladprao1';
@@ -461,6 +463,8 @@ export default async function handler(req, res) {
 
   if (body.action === 'price_quote')   return handlePriceQuote(res, body);
   if (body.action === 'create')        return handleCreate(req, res, body);
+  if (body.action === 'event_pass_redeem') return handleEventPassRedeem(res, body);
+  if (body.action === 'event_pass_status') return handleEventPassStatus(res, body);
   // Server-side pass booking (Security Hotfix 2026-08-04 — closes SEC-02).
   // Gated by system_settings/features.useServerPassBooking. The cutover client
   // has no direct-write fallback, so a disabled action fails closed.
@@ -488,6 +492,103 @@ export default async function handler(req, res) {
   if (body.action === 'pass_catalog')         return handlePassCatalog(res);
   if (body.action === 'create_pass_purchase') return handleCreatePassPurchase(res, body);
   return res.status(400).json({ ok: false, error: `Unknown action "${body.action}"` });
+}
+
+async function eventPassUser(idToken) {
+  if (!idToken || typeof idToken !== 'string') return null;
+  try { return (await getAdminAuth().verifyIdToken(idToken.trim())).uid || null; }
+  catch { return null; }
+}
+
+async function handleEventPassRedeem(res, body) {
+  const normalized = normalizeCustomVoucherCode(body.code);
+  if (!normalized.ok) return res.status(400).json({ ok: false, code: 'INVALID_CODE', error: 'รูปแบบ Event Code ไม่ถูกต้อง' });
+  const uid = await eventPassUser(body.idToken);
+  if (!uid) return res.status(403).json({ ok: false, code: 'AUTH', error: 'กรุณาเปิดผ่าน LINE เพื่อรับ Event Pass' });
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[event_pass_redeem] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
+
+  const voucherRef = db.collection('vouchers').doc(normalized.code);
+  const userRef = db.collection('registered_users').doc(uid);
+  const requestRef = db.collection('event_pass_requests').doc();
+  let result;
+  try {
+    await db.runTransaction(async transaction => {
+      const [voucherSnap, userSnap] = await Promise.all([transaction.get(voucherRef), transaction.get(userRef)]);
+      if (!voucherSnap.exists) throw new Error('NOT_FOUND');
+      if (!userSnap.exists) throw new Error('REGISTER_FIRST');
+      const voucher = voucherSnap.data();
+      const campaignRef = voucher.campaignId ? db.collection('voucher_campaigns').doc(String(voucher.campaignId)) : null;
+      if (!campaignRef) throw new Error('CAMPAIGN_MISSING');
+      const campaignSnap = await transaction.get(campaignRef);
+      if (!campaignSnap.exists) throw new Error('CAMPAIGN_MISSING');
+      const campaign = campaignSnap.data();
+      if (campaign.voucherType !== 'event_pass') throw new Error('WRONG_TYPE');
+      if (campaign.active !== true || voucher.active !== true) throw new Error('INACTIVE');
+      const now = Date.now();
+      const validFrom = campaign.validFrom?.toMillis?.() ?? null;
+      const expiresAt = campaign.expiresAt?.toMillis?.() ?? null;
+      if (validFrom && now < validFrom) throw new Error('NOT_STARTED');
+      if (!expiresAt || now > expiresAt) throw new Error('EXPIRED');
+      if (voucher.state === 'pending_approval' && voucher.issuedTo === uid && voucher.pendingRequestId) {
+        result = { requestId: voucher.pendingRequestId, status: 'pending', replayed: true };
+        return;
+      }
+      if ((voucher.state || 'available') !== 'available' || Number(voucher.usedCount) > 0) throw new Error('UNAVAILABLE');
+      const user = userSnap.data();
+      transaction.create(requestRef, {
+        code: normalized.code, campaignId: voucher.campaignId,
+        status: 'pending', lineUserId: uid,
+        lineDisplayName: String(body.lineDisplayName || user.lineDisplayName || '').slice(0, 120),
+        customerName: String(user.name || '').slice(0, 160),
+        customerPhone: String(user.phone || '').slice(0, 40),
+        assignedName: voucher.assignedName || '', assignedDraw: voucher.assignedDraw || '',
+        assignedNickname: voucher.assignedNickname || '',
+        createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+      });
+      transaction.update(voucherRef, {
+        state: 'pending_approval', issuedTo: uid, pendingRequestId: requestRef.id,
+        pendingAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+      });
+      result = { requestId: requestRef.id, status: 'pending', replayed: false };
+    });
+    return res.status(200).json({ ok: true, code: normalized.code, ...result });
+  } catch (e) {
+    const map = {
+      NOT_FOUND: [404, 'ไม่พบ Event Code นี้'], REGISTER_FIRST: [409, 'กรุณาลงทะเบียนชื่อและเบอร์โทรก่อนรับ Event Pass'],
+      CAMPAIGN_MISSING: [409, 'ไม่พบแคมเปญของ Event Code'], WRONG_TYPE: [409, 'Code นี้ไม่ใช่ Event Pass'],
+      INACTIVE: [409, 'Event Code ถูกปิดใช้งาน'], NOT_STARTED: [409, 'Event Pass ยังไม่เริ่มใช้งาน'],
+      EXPIRED: [409, 'Event Code หมดอายุแล้ว'], UNAVAILABLE: [409, 'Event Code นี้ถูกส่งตรวจหรือใช้ไปแล้ว'],
+    };
+    const [status, error] = map[e.message] || [500, 'ไม่สามารถส่ง Event Code ได้'];
+    if (status === 500) console.error('[event_pass_redeem]', e.message);
+    return res.status(status).json({ ok: false, error });
+  }
+}
+
+async function handleEventPassStatus(res, body) {
+  const uid = await eventPassUser(body.idToken);
+  if (!uid) return res.status(403).json({ ok: false, code: 'AUTH', error: 'กรุณาเปิดผ่าน LINE' });
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[event_pass_status] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
+  try {
+    const snap = await db.collection('event_pass_requests').where('lineUserId', '==', uid).limit(20).get();
+    const requests = snap.docs.map(doc => {
+      const value = doc.data();
+      return {
+        id: doc.id, code: value.code || '', status: value.status || 'pending',
+        issuedPackageId: value.issuedPackageId || null, codeReturned: value.codeReturned === true,
+        createdAt: value.createdAt?.toDate?.()?.toISOString?.() ?? null,
+        reviewedAt: value.reviewedAt?.toDate?.()?.toISOString?.() ?? null,
+      };
+    }).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    return res.status(200).json({ ok: true, requests });
+  } catch (e) {
+    console.error('[event_pass_status]', e.message);
+    return res.status(500).json({ ok: false, error: 'ไม่สามารถโหลดสถานะ Event Pass ได้' });
+  }
 }
 
 // ── Pass self-purchase catalog — SERVER-AUTHORITATIVE prices. Only clearly
@@ -1242,7 +1343,7 @@ const dowOfDate  = (dateISO) => {
 // Validates a pass against the booking context and returns the package
 // mutation to apply. Pure apart from the values passed in, so the rules are
 // readable in one place. Throws Error(code) — mapped to Thai text by caller.
-function validatePassAndBuildUpdate({ entitlementType, pkg, uid, dateISO, startTime, durationMinutes, isHoliday, nowMs }) {
+export function validatePassAndBuildUpdate({ entitlementType, pkg, uid, dateISO, startTime, durationMinutes, isHoliday, nowMs }) {
   if (pkg.lineUserId !== uid)  throw new Error('PASS_NOT_OWNED');
   if (pkg.status !== 'active') throw new Error('PASS_INACTIVE');
 
@@ -1259,11 +1360,11 @@ function validatePassAndBuildUpdate({ entitlementType, pkg, uid, dateISO, startT
   }
 
   if (entitlementType === 'event') {
-    if (!Number.isFinite(remaining) || remaining < durationMinutes) throw new Error('PASS_INSUFFICIENT');
-    if (pkg.branchId   && pkg.branchId   !== DEFAULT_BRANCH_ID) throw new Error('PASS_WRONG_BRANCH');
-    if (pkg.resourceId && pkg.resourceId !== RESOURCE_ID)       throw new Error('PASS_WRONG_RESOURCE');
-    if (dow < 1 || dow > 5) throw new Error('PASS_WEEKDAY_ONLY');
-    if (isHoliday)          throw new Error('PASS_NO_HOLIDAY');
+    const policyError = eventPassBookingError({
+      pkg, dateISO, startTime, durationMinutes, isHoliday, nowMs,
+      branchId: DEFAULT_BRANCH_ID, resourceId: RESOURCE_ID,
+    });
+    if (policyError) throw new Error(policyError);
     return { remainingMinutes: remaining - durationMinutes, eventUsedAt: FieldValue.serverTimestamp() };
   }
 
@@ -1314,6 +1415,8 @@ const PASS_ERROR_TEXT = {
   PASS_WRONG_RESOURCE:     'แพ็คเกจนี้ใช้ได้กับคอร์ทอื่น',
   PASS_WEEKDAY_ONLY:       'แพ็คเกจนี้ใช้ได้เฉพาะวันจันทร์–ศุกร์',
   PASS_NO_HOLIDAY:         'แพ็คเกจนี้ใช้ในวันหยุดไม่ได้',
+  PASS_EVENT_ONE_HOUR:     'Event Pass ใช้จองได้ครั้งละ 1 ชั่วโมงเท่านั้น',
+  PASS_BOOKING_AFTER_EXPIRY:'วันที่ใช้บริการต้องไม่เกินวันหมดอายุของ Event Pass',
   PASS_OFFPEAK_WINDOW:     'Off-Peak ใช้ได้เฉพาะ 09:00–15:00',
   PASS_QUOTA_UNCONFIGURED: 'โควตาของแพ็คเกจยังไม่ถูกตั้งค่า กรุณาติดต่อร้าน',
   PASS_HOURS_UNCONFIGURED: 'ชั่วโมงของแพ็คเกจยังไม่ถูกตั้งค่า กรุณาติดต่อร้าน',

@@ -5,6 +5,7 @@ import {
   normalizeCampaignInput,
   normalizeCustomVoucherCode,
   normalizeRandomCodeRequest,
+  normalizeVoucherImportRecords,
 } from '../api/_lib/voucher-admin.js';
 
 const adminHtml = readFileSync(new URL('../admin.html', import.meta.url), 'utf8');
@@ -46,6 +47,11 @@ describe('Voucher Manager campaign validation', () => {
     }))).toMatchObject({ ok: true, data: { discountPercent: 25, maxDiscountAmount: 100 } });
   });
 
+  test('supports an approval-based Event Pass campaign without discount fields', () => {
+    expect(normalizeCampaignInput(validCampaign({ voucherType: 'event_pass', maxCancellationRestores: 0 })))
+      .toMatchObject({ ok: true, data: { voucherType: 'event_pass', exactDurationMinutes: 60, maxCancellationRestores: 0 } });
+  });
+
   test.each([
     [{ campaignId: '../bad' }, 'Campaign ID'],
     [{ allowedDays: [] }, 'Select at least one'],
@@ -82,6 +88,18 @@ describe('Voucher Manager code creation', () => {
     expect(normalizeRandomCodeRequest({ count: 101, randomLength: 8 }, 'MSTR-')).toMatchObject({ ok: false });
     expect(normalizeRandomCodeRequest({ count: 1, randomLength: 17 }, 'MSTR-')).toMatchObject({ ok: false });
   });
+
+  test('normalizes exact organizer imports and rejects duplicates atomically', () => {
+    expect(normalizeVoucherImportRecords([
+      { code: 'mstr-2alye', assignedName: 'Krit Uppatep', assignedDraw: "Men's Doubles 3.0", assignedNickname: 'Tony' },
+      { code: 'MSTR-2C3GP', assignedName: 'Kosin Putpim' },
+    ])).toMatchObject({ ok: true, records: [
+      { code: 'MSTR-2ALYE', assignedName: 'Krit Uppatep', assignedNickname: 'Tony' },
+      { code: 'MSTR-2C3GP', assignedName: 'Kosin Putpim' },
+    ] });
+    expect(normalizeVoucherImportRecords([{ code: 'MSTR-2ALYE' }, { code: 'mstr-2alye' }]))
+      .toMatchObject({ ok: false, error: 'Duplicate code in import: MSTR-2ALYE' });
+  });
 });
 
 describe('Voucher Manager security surface', () => {
@@ -93,7 +111,11 @@ describe('Voucher Manager security surface', () => {
   test('uses the existing multiplexed API and repeats the Art-owner gate server-side', () => {
     expect(adminHtml).toContain('fetch("/api/admin-user-action"');
     expect(adminApi).toContain("adminName !== 'Art' || !requireRole(session, 'owner')");
-    for (const action of ['voucher_list', 'voucher_save_campaign', 'voucher_set_campaign_active', 'voucher_create_codes', 'voucher_set_code_active']) {
+    for (const action of [
+      'voucher_list', 'voucher_save_campaign', 'voucher_set_campaign_active', 'voucher_create_codes',
+      'voucher_import_codes', 'voucher_set_code_active', 'event_pass_list_requests',
+      'event_pass_approve_request', 'event_pass_reject_request', 'event_pass_reset_code',
+    ]) {
       expect(adminApi).toContain(`'${action}'`);
     }
   });

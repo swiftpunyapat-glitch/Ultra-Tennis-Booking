@@ -77,3 +77,14 @@ The first release supports:
 - campaign and code audit-log entries.
 
 Voucher duration remains fixed at 60 minutes because the current customer booking route intentionally rejects vouchers on other durations. Reserved codes cannot be disabled, and redeemed codes cannot be enabled again.
+
+## Approval-based Event Pass
+
+Campaigns with `voucherType: event_pass` use a separate entitlement flow and never act as a price discount:
+
+1. A signed-in LINE customer submits an exact code. The code moves from `available` to `pending_approval` and an `event_pass_requests` record is created.
+2. The Art owner compares the customer identity with the organizer-assigned name and approves or rejects the request.
+3. Approval issues one `monstr_event_pass` package with 60 minutes and the campaign expiry. Rejection returns the code to `available` by default.
+4. The customer selects an eligible slot and the normal server pass-booking transaction confirms it immediately.
+
+Event Pass bookings are exactly 60 minutes, Monday-Friday, exclude holidays, and the service date must not exceed the pass expiry. They cannot be rescheduled. Cancellation releases the court but forfeits the pass. The owner-only test reset may return a code after its booking is terminal; it refuses to reset a code with an active booking.

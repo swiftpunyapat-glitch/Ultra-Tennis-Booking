@@ -508,6 +508,13 @@
           <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="registerSub">Verify name/phone for passes</div>
         </div>
       </button>
+      <button class="hcard" id="btnEventRedeem" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px;border-color:#f5c542">
+        <div class="hcard-icon" style="font-size:2rem">🎟️</div>
+        <div>
+          <div class="hcard-label" style="font-size:1rem">Redeem Event Code</div>
+          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px">กรอก Code จากผู้จัดงาน · รอ Admin อนุมัติ · รับ Event Pass</div>
+        </div>
+      </button>
       <!-- Coach V2: visible ONLY when this LINE account is an active coach
            (server-checked via coach_whoami — hidden card is cosmetic, the
            real gate is on every coach API call). -->
@@ -540,6 +547,27 @@
     <p style="text-align:center;margin:14px 0 4px">
       <a href="/coach.html" id="coachFooterLink" style="font-size:.78rem;color:var(--muted);text-decoration:underline;font-weight:700">👨‍🏫 สำหรับโค้ช — เข้าสู่ระบบโค้ช (Coach Terminal)</a>
     </p>
+  </div>
+
+  <!-- VIEW: EVENT PASS CODE REDEMPTION -->
+  <div id="viewEventRedeem" style="display:none">
+    <div class="view">
+      <button class="back" id="eventRedeemBack">← Back</button>
+      <div class="ptitle">🎟️ Redeem Event Code</div>
+      <div class="card">
+        <p style="font-size:.82rem;line-height:1.6;color:var(--muted);margin-bottom:12px">กรอก Code ที่ได้รับจาก Organizer เมื่อ Admin ตรวจสอบและอนุมัติแล้ว Event Pass 1 ชั่วโมงจะเข้าบัญชี LINE นี้</p>
+        <label><span>Event Code</span><input type="text" id="eventRedeemCode" autocomplete="off" placeholder="MSTR-XXXXX" maxlength="64" style="text-transform:uppercase;font-weight:800;letter-spacing:.6px"/></label>
+        <button class="btn-go" id="eventRedeemSubmit" style="width:100%;margin-top:12px">ส่ง Code ให้ Admin ตรวจสอบ</button>
+      </div>
+      <div class="card">
+        <div class="slabel">สถานะคำขอ</div>
+        <div id="eventRedeemStatus"><p style="font-size:.78rem;color:var(--muted)">ยังไม่มีคำขอ</p></div>
+        <button class="back" id="eventRedeemRefresh" style="margin-top:10px">↻ Refresh status</button>
+      </div>
+      <div class="card" style="font-size:.76rem;line-height:1.6;color:var(--muted)">
+        ใช้จองได้ 1 ชั่วโมง · จันทร์–ศุกร์ · ไม่รวมวันหยุด · ไม่สามารถ Reschedule · Cancel แล้วไม่คืน Pass
+      </div>
+    </div>
   </div>
 
   <!-- VIEW: BOOKING -->
@@ -1140,7 +1168,7 @@ function updateDebugTelemetry(values={}){
 
 // ── DOM ─────────────────────────────────────────────────────────
 const $     = id => document.getElementById(id);
-const VIEWS = ["viewHome","viewBooking","viewCoach","viewPayment","viewMyBookings","viewSuccess","viewRegister","viewPromotions"];
+const VIEWS = ["viewHome","viewEventRedeem","viewBooking","viewCoach","viewPayment","viewMyBookings","viewSuccess","viewRegister","viewPromotions"];
 const LANG_KEY = "ultra_lang";
 let currentLang = localStorage.getItem(LANG_KEY) || "th";
 if(!["th","en"].includes(currentLang)) currentLang="th";
@@ -1782,6 +1810,10 @@ function setupNav() {
   initPassSelfPurchase();
   $("btnMyBookings").addEventListener("click",()=>{ activeMyNav="bookings"; openMyBookings(); });
   $("btnRegister").addEventListener("click", ()=>{ openRegisterView(); });
+  $("btnEventRedeem").addEventListener("click", openEventRedeemView);
+  $("eventRedeemBack").addEventListener("click", ()=>showView("viewHome"));
+  $("eventRedeemRefresh").addEventListener("click", loadEventRedeemStatus);
+  $("eventRedeemSubmit").addEventListener("click", submitEventRedeemCode);
   $("btnPromotions").addEventListener("click", ()=>{ showView("viewPromotions"); });
   $("bkBack").addEventListener("click",   ()=>showView("viewHome"));
   $("myBack").addEventListener("click",   ()=>showView("viewHome"));
@@ -1884,6 +1916,64 @@ async function fetchBookingFeatures(){
 }
 
 let isAlreadyRegistered = false;
+
+async function openEventRedeemView(){
+  if(state.lineProfile.userId==="guest"){
+    showToast("กรุณาเปิดผ่าน LINE เพื่อรับ Event Pass",true);
+    return;
+  }
+  showView("viewEventRedeem");
+  try{
+    const deep=sessionStorage.getItem(VOUCHER_DEEP_LINK_KEY)||"";
+    if(/^MSTR-/i.test(deep)&&!$("eventRedeemCode").value) $("eventRedeemCode").value=deep;
+  }catch(_){ }
+  await loadEventRedeemStatus();
+}
+
+const eventRequestLabel=status=>({
+  pending:"⏳ รอ Admin ตรวจสอบ", approved:"✓ อนุมัติแล้ว — Event Pass พร้อมใช้",
+  rejected:"✗ ไม่อนุมัติ", reset:"↻ Code ถูกคืนและพร้อมทดสอบใหม่",
+}[status]||status);
+
+async function loadEventRedeemStatus(){
+  const box=$("eventRedeemStatus");
+  box.innerHTML=`<p style="font-size:.78rem;color:var(--muted)">Loading...</p>`;
+  try{
+    const idToken=await protectedIdToken();
+    const res=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"event_pass_status",idToken})});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok) throw new Error(data.error||"โหลดสถานะไม่สำเร็จ");
+    const items=data.requests||[];
+    if(!items.length){box.innerHTML=`<p style="font-size:.78rem;color:var(--muted)">ยังไม่มีคำขอ</p>`;return;}
+    box.innerHTML=items.map(item=>`<div style="border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:8px">
+      <strong style="letter-spacing:.5px">${esc(item.code)}</strong><br>
+      <span style="font-size:.76rem;color:${item.status==="approved"?"var(--success)":item.status==="pending"?"#f5c542":"var(--muted)"}">${esc(eventRequestLabel(item.status))}</span>
+      ${item.status==="approved"?`<button class="btn-go" data-event-book style="width:100%;margin-top:9px">เลือกเวลาจองด้วย Event Pass</button>`:""}
+    </div>`).join("");
+    box.querySelectorAll("[data-event-book]").forEach(btn=>btn.addEventListener("click",async()=>{
+      await openBookingView();
+      if(state.eligibility.hasEvent) $("ptEvent").click();
+      else showToast("Event Pass ยังไม่พร้อม กรุณารีเฟรชอีกครั้ง",true);
+    }));
+  }catch(e){box.innerHTML=`<p style="font-size:.78rem;color:var(--danger)">${esc(e.message||"โหลดสถานะไม่สำเร็จ")}</p>`;}
+}
+
+async function submitEventRedeemCode(){
+  const code=$("eventRedeemCode").value.trim().toUpperCase();
+  if(!/^[A-Z0-9][A-Z0-9_-]{2,63}$/.test(code)){showToast("กรุณากรอก Event Code ให้ถูกต้อง",true);return;}
+  const btn=$("eventRedeemSubmit");btn.disabled=true;btn.textContent="กำลังส่ง...";
+  try{
+    const idToken=await protectedIdToken();
+    const res=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      action:"event_pass_redeem",code,idToken,lineDisplayName:state.lineProfile.displayName,
+    })});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok) throw new Error(data.error||"ส่ง Code ไม่สำเร็จ");
+    showToast(data.replayed?"Code นี้รอตรวจสอบอยู่แล้ว":"ส่ง Code ให้ Admin แล้ว");
+    await loadEventRedeemStatus();
+  }catch(e){showToast(e.message||"ส่ง Code ไม่สำเร็จ",true);}
+  finally{btn.disabled=false;btn.textContent="ส่ง Code ให้ Admin ตรวจสอบ";}
+}
 
 async function openRegisterView() {
   const userId = state.lineProfile?.userId;

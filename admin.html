@@ -109,6 +109,8 @@
     .smf label{font-size:.68rem;color:var(--m);font-weight:700;text-transform:uppercase;}
     .smf input[type=date]{background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.85rem;width:100%;}
     .smf input[type=date]:focus{outline:none;border-color:var(--g);}
+    .smf textarea{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:9px 10px;font-size:.8rem;line-height:1.45;resize:vertical;}
+    .smf textarea:focus{outline:none;border-color:var(--g);}
     .smbtn{padding:8px 14px;border-radius:7px;font-size:.78rem;font-weight:800;white-space:nowrap;border:1px solid transparent;}
     .smg{background:var(--gd);border-color:var(--g);color:var(--g);}.smg:hover{background:var(--gh);}
     .smgr{background:var(--s2);border-color:var(--bd);color:var(--mid);}.smgr:hover{border-color:var(--mid);color:var(--t);}
@@ -710,7 +712,7 @@
         <div class="smrow" style="margin-bottom:10px">
           <div class="smf"><label>Campaign ID</label><input id="vcCampaignId" maxlength="64" placeholder="e.g. monstr-2026"/></div>
           <div class="smf" style="flex:2"><label>Campaign Name</label><input id="vcName" maxlength="100" placeholder="e.g. MONSTR Sponsor 2026"/></div>
-          <div class="smf"><label>Voucher Type</label><select id="vcType"><option value="free_booking">Free Booking</option><option value="discount_amount">Discount (THB)</option><option value="discount_percent">Discount (%)</option></select></div>
+          <div class="smf"><label>Voucher Type</label><select id="vcType"><option value="free_booking">Free Booking</option><option value="discount_amount">Discount (THB)</option><option value="discount_percent">Discount (%)</option><option value="event_pass">Event Pass (Admin approval)</option></select></div>
         </div>
         <div class="smrow" style="margin-bottom:10px">
           <div class="smf"><label>Keyword (reporting)</label><input id="vcKeyword" maxlength="32" placeholder="MONSTR" style="text-transform:uppercase"/></div>
@@ -750,6 +752,7 @@
         </div>
         <div class="qbtns" style="gap:8px">
           <button class="smbtn smg" id="voucherSaveCampaignBtn">✓ Save Campaign</button>
+          <button class="smbtn smgr" id="voucherMonstrPresetBtn">Load MONSTR Preset</button>
           <button class="smbtn smgr" id="voucherResetCampaignBtn">New / Reset</button>
         </div>
       </div>
@@ -767,7 +770,22 @@
           <div class="smf"><label>Random Characters</label><input id="voucherRandomLength" type="number" min="5" max="16" value="8"/></div>
           <button class="smbtn smg" id="voucherGenerateBtn">⚡ Generate Random Codes</button>
         </div>
+        <div class="smdiv"></div>
+        <div class="smf">
+          <label>Bulk Exact Import (paste from Excel: No. / Draw / Name / Nickname / Code)</label>
+          <textarea id="voucherBulkImport" rows="6" placeholder="1&#9;Men's Doubles 3.0&#9;Full Name&#9;Nickname&#9;MSTR-ABCDE"></textarea>
+        </div>
+        <button class="smbtn smg" id="voucherBulkImportBtn" style="margin-top:9px">⇧ Validate & Import Exact Codes</button>
         <div id="voucherCreatedResult" style="display:none;margin-top:12px;background:var(--s2);border:1px solid var(--success);border-radius:8px;padding:10px;font-size:.75rem;word-break:break-word"></div>
+      </div>
+
+      <div class="smcard">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap">
+          <h2 style="margin:0">Event Pass Approval</h2>
+          <button class="smbtn smgr" id="eventPassRequestsRefresh">↻ Refresh Requests</button>
+        </div>
+        <p style="font-size:.72rem;color:var(--m);margin:7px 0 10px">Approve ออก Pass 1 ชั่วโมง · Reject คืน Code เป็นค่าเริ่มต้น · Reset ใช้สำหรับทดสอบโดย Art</p>
+        <div id="eventPassRequestList"><div class="smempty">Open this tab to load requests.</div></div>
       </div>
 
       <div class="smcard">
@@ -779,7 +797,7 @@
         <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:10px">
           <div class="smf" style="flex:2"><label>View Codes For</label><select id="voucherViewCampaign"><option value="">Select campaign...</option></select></div>
           <div class="smf" style="flex:2"><label>Search Code</label><input id="voucherCodeSearch" placeholder="Search..." style="text-transform:uppercase"/></div>
-          <div class="smf"><label>Status</label><select id="voucherCodeStatus"><option value="all">All</option><option value="available">Available</option><option value="reserved">Reserved</option><option value="redeemed">Redeemed</option><option value="disabled">Disabled</option></select></div>
+          <div class="smf"><label>Status</label><select id="voucherCodeStatus"><option value="all">All</option><option value="available">Available</option><option value="pending_approval">Pending Approval</option><option value="reserved">Reserved</option><option value="redeemed">Redeemed</option><option value="disabled">Disabled</option></select></div>
         </div>
         <div id="voucherCodeList"><div class="smempty">Select a campaign to view codes.</div></div>
       </div>
@@ -1335,7 +1353,11 @@ const ACTIVITY_ACTION_LABELS = {
   voucher_campaign_update: "แก้ไขแคมเปญ Voucher",
   voucher_campaign_status: "เปลี่ยนสถานะแคมเปญ Voucher",
   voucher_codes_create: "สร้าง Voucher Code",
+  voucher_codes_import: "นำเข้า Voucher Code",
   voucher_code_status: "เปลี่ยนสถานะ Voucher Code",
+  event_pass_approve: "อนุมัติ Event Pass",
+  event_pass_reject: "ปฏิเสธ Event Pass",
+  event_pass_reset_code: "คืน Code สำหรับทดสอบ",
 };
 
 const ACTIVITY_STATUS_LABELS = {
@@ -2061,7 +2083,8 @@ function cardHTML(b){
   const tc=b.bookingType?.includes("Ultra")?"tu":b.bookingType?.includes("Off")?"to":"ts";
   const statusText=bookingStatusDisplay(b);
   // canReschedule = not cancelled/expired/completed/no_show (paid bookings CAN reschedule)
-  const canResch=!["cancelled","expired","completed","no_show"].includes(b.bookingStatus);
+  const isEventPassBooking=b.isEventBooking===true||b.packageType==="monstr_event_pass"||b.usedPackageType==="monstr_event_pass";
+  const canResch=!isEventPassBooking&&!["cancelled","expired","completed","no_show"].includes(b.bookingStatus);
   const isCancelled=b.bookingStatus==="cancelled";
   const isTerminal=["cancelled","expired","completed","no_show"].includes(b.bookingStatus);
   const isConfirmed=b.bookingStatus==="confirmed";
@@ -5004,8 +5027,8 @@ async function voucherApi(action,payload={}){
   return data;
 }
 
-const voucherTypeLabel=type=>({free_booking:"Free Booking",discount_amount:"Discount THB",discount_percent:"Discount %"}[type]||type);
-const voucherStateLabel=state=>({available:"Available",reserved:"Reserved",redeemed:"Redeemed",disabled:"Disabled",expired:"Expired"}[state]||state||"—");
+const voucherTypeLabel=type=>({free_booking:"Free Booking",discount_amount:"Discount THB",discount_percent:"Discount %",event_pass:"Event Pass"}[type]||type);
+const voucherStateLabel=state=>({available:"Available",pending_approval:"Pending Approval",reserved:"Reserved",redeemed:"Redeemed",disabled:"Disabled",expired:"Expired"}[state]||state||"—");
 const voucherDateOnly=value=>{
   if(!value)return "";
   const date=new Date(value);
@@ -5016,13 +5039,13 @@ const voucherDateOnly=value=>{
 const voucherDeepLink=code=>`https://liff.line.me/2010034901-ClPr9N5v?voucher=${encodeURIComponent(code)}`;
 
 function voucherStatusChip(state,active=true){
-  const color=state==="available"&&active?"var(--success)":state==="reserved"?"var(--warn)":state==="redeemed"?"#8b5cf6":"var(--m)";
+  const color=state==="available"&&active?"var(--success)":state==="pending_approval"||state==="reserved"?"var(--warn)":state==="redeemed"?"#8b5cf6":"var(--m)";
   return `<span style="display:inline-block;border:1px solid ${color};color:${color};border-radius:999px;padding:2px 7px;font-size:.65rem;font-weight:800">${esc(voucherStateLabel(state))}</span>`;
 }
 
 function updateVoucherTypeFields(){
   const type=$("vcType").value;
-  const discount=type!=="free_booking";
+  const discount=type==="discount_amount"||type==="discount_percent";
   $("vcDiscountFields").style.display=discount?"flex":"none";
   $("vcAmountWrap").style.display=type==="discount_amount"?"block":"none";
   $("vcPercentWrap").style.display=type==="discount_percent"?"block":"none";
@@ -5104,12 +5127,35 @@ function renderVoucherCodes(){
   if(!filtered.length){$("voucherCodeList").innerHTML=`<div class="smempty">No matching codes.</div>`;return;}
   $("voucherCodeList").innerHTML=`<div style="font-size:.68rem;color:var(--m);margin-bottom:8px">Showing ${filtered.length} of ${voucherCodes.length} codes · server view capped at 500</div>`+filtered.map(v=>{
     const canToggle=v.state==="available"||v.state==="disabled";
-    const usage=v.state==="reserved"?`Booking ${v.reservedBookingCode||"—"}`:v.state==="redeemed"?`Booking ${v.redeemedBookingCode||"—"}`:`Used ${v.usedCount}/${v.maxUses}`;
+    const usage=v.state==="pending_approval"?`Request ${v.pendingRequestId||"—"}`:v.state==="reserved"?`Booking ${v.reservedBookingCode||"—"}`:v.state==="redeemed"?`Package ${v.redeemedPackageId||v.redeemedBookingCode||"—"}`:`Used ${v.usedCount}/${v.maxUses}`;
+    const assigned=v.assignedName?`<br><span style="font-size:.68rem;color:var(--t)">${esc(v.assignedName)}${v.assignedNickname?` (${esc(v.assignedNickname)})`:""} · ${esc(v.assignedDraw||"—")}</span>`:"";
+    const campaign=voucherCampaigns.find(c=>c.id===campaignId);
+    const canReset=campaign?.voucherType==="event_pass";
     return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:9px;margin-bottom:6px">
-      <div><strong style="letter-spacing:.4px">${esc(v.code)}</strong> ${voucherStatusChip(v.state,v.active)}<br><span style="font-size:.68rem;color:var(--m)">${esc(usage)} · Restored ${Number(v.cancellationRestoreCount)||0}/${Number(v.maxCancellationRestores)||0}</span></div>
-      <div class="qbtns" style="gap:5px"><button class="smbtn smgr" data-vcode-copy="${esc(v.code)}">Copy Link</button>${canToggle?`<button class="smbtn ${v.state==="disabled"?"smg":""}" data-vcode-toggle="${esc(v.code)}" data-next-active="${v.state==="disabled"?"true":"false"}">${v.state==="disabled"?"Enable":"Disable"}</button>`:""}</div>
+      <div><strong style="letter-spacing:.4px">${esc(v.code)}</strong> ${voucherStatusChip(v.state,v.active)}<br><span style="font-size:.68rem;color:var(--m)">${esc(usage)} · Restored ${Number(v.cancellationRestoreCount)||0}/${Number(v.maxCancellationRestores)||0}</span>${assigned}</div>
+      <div class="qbtns" style="gap:5px"><button class="smbtn smgr" data-vcode-copy="${esc(v.code)}">Copy Link</button>${canToggle?`<button class="smbtn ${v.state==="disabled"?"smg":""}" data-vcode-toggle="${esc(v.code)}" data-next-active="${v.state==="disabled"?"true":"false"}">${v.state==="disabled"?"Enable":"Disable"}</button>`:""}${canReset?`<button class="smbtn smgr" data-event-code-reset="${esc(v.code)}">↻ Reset Test</button>`:""}</div>
     </div>`;
   }).join("");
+}
+
+function renderEventPassRequests(requests){
+  const box=$("eventPassRequestList");
+  const pending=(requests||[]).filter(item=>item.status==="pending");
+  const reviewed=(requests||[]).filter(item=>item.status!=="pending").slice(0,20);
+  if(!pending.length&&!reviewed.length){box.innerHTML=`<div class="smempty">No Event Pass requests.</div>`;return;}
+  const row=(item,isPending)=>`<div style="background:var(--s2);border:1px solid ${isPending?"var(--warn)":"var(--bd)"};border-radius:9px;padding:10px;margin-bottom:7px">
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><div><strong>${esc(item.code)}</strong> · ${esc(item.customerName||item.lineDisplayName||"—")}<br><span style="font-size:.69rem;color:var(--m)">${esc(item.customerPhone||"—")} · LINE ${esc(item.lineDisplayName||"—")}</span></div><span style="font-size:.68rem;color:${isPending?"var(--warn)":"var(--m)"}">${esc(item.status)}</span></div>
+    <div style="font-size:.7rem;margin-top:7px">Organizer: <strong>${esc(item.assignedName||"—")}</strong>${item.assignedNickname?` (${esc(item.assignedNickname)})`:""} · ${esc(item.assignedDraw||"—")}</div>
+    ${isPending?`<div class="qbtns" style="gap:6px;margin-top:9px"><button class="smbtn smg" data-event-approve="${esc(item.id)}">✓ Approve & Issue Pass</button><button class="smbtn smgr" data-event-reject="${esc(item.id)}">Reject + Return Code</button><button class="smbtn" data-event-reject-disable="${esc(item.id)}">Reject + Disable</button></div>`:`<div style="font-size:.67rem;color:var(--m);margin-top:6px">Reviewed by ${esc(item.reviewedBy||"—")}${item.codeReturned?" · Code returned":""}</div>`}
+  </div>`;
+  box.innerHTML=(pending.length?`<div style="font-size:.68rem;color:var(--warn);margin-bottom:7px">Pending ${pending.length}</div>${pending.map(item=>row(item,true)).join("")}`:"")+
+    (reviewed.length?`<div style="font-size:.68rem;color:var(--m);margin:10px 0 7px">Recent reviewed</div>${reviewed.map(item=>row(item,false)).join("")}`:"");
+}
+
+async function loadEventPassRequests(){
+  if(!canManageVouchers())return;
+  try{const data=await voucherApi("event_pass_list_requests");renderEventPassRequests(data.requests||[]);}
+  catch(e){$("eventPassRequestList").innerHTML=`<div class="smempty" style="color:var(--dan)">${esc(e.message)}</div>`;}
 }
 
 async function loadVoucherManager(campaignId=""){
@@ -5122,6 +5168,7 @@ async function loadVoucherManager(campaignId=""){
     const data=await voucherApi("voucher_list",requested?{campaignId:requested}:{});
     voucherCampaigns=data.campaigns||[];voucherCodes=data.codes||[];
     renderVoucherCampaigns();updateVoucherCampaignSelects(requested);renderVoucherCodes();
+    await loadEventPassRequests();
     if(!requested&&voucherCampaigns.length){
       const first=voucherCampaigns[0].id;
       $("voucherCodeCampaign").value=first;$("voucherViewCampaign").value=first;
@@ -5157,6 +5204,14 @@ $("vcName").addEventListener("blur",()=>{
   }
 });
 $("voucherResetCampaignBtn").addEventListener("click",resetVoucherCampaignForm);
+$("voucherMonstrPresetBtn").addEventListener("click",()=>{
+  resetVoucherCampaignForm();
+  $("vcCampaignId").value="monstr-2026";$("vcName").value="MONSTR Tournament x Ultra Tennis";
+  $("vcType").value="event_pass";$("vcKeyword").value="MONSTR";$("vcPrefix").value="MSTR-";
+  $("vcValidFrom").value="2026-08-24";$("vcExpiresAt").value="2026-09-24";
+  $("vcRestores").value="0";$("vcExcludeHolidays").checked=true;$("vcRequiresLine").checked=true;$("vcTransferable").checked=true;
+  updateVoucherTypeFields();showToast("MONSTR preset loaded — review and Save Campaign");
+});
 $("voucherRefreshBtn").addEventListener("click",()=>loadVoucherManager($("voucherViewCampaign").value));
 $("voucherSaveCampaignBtn").addEventListener("click",async()=>{
   if(!canManageVouchers())return showToast("Unauthorized: Art owner only.",true);
@@ -5198,6 +5253,32 @@ async function createVoucherCodes(mode){
 }
 $("voucherCreateCustomBtn").addEventListener("click",()=>createVoucherCodes("custom"));
 $("voucherGenerateBtn").addEventListener("click",()=>createVoucherCodes("random"));
+$("voucherBulkImportBtn").addEventListener("click",async()=>{
+  const campaignId=$("voucherCodeCampaign").value;
+  if(!campaignId)return showToast("Select a campaign first.",true);
+  const lines=$("voucherBulkImport").value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+  const records=[];
+  for(const [index,line] of lines.entries()){
+    const cols=line.split("\t").map(value=>value.trim());
+    if(cols.some(value=>/^code$|^โค้ด$/i.test(value)))continue;
+    const codeIndex=cols.findIndex(value=>/^[A-Z0-9][A-Z0-9_-]{2,63}$/i.test(value)&&value.includes("-"));
+    if(codeIndex<0){showToast(`Row ${index+1}: code not found`,true);return;}
+    records.push({
+      code:cols[codeIndex].toUpperCase(),
+      assignedDraw:codeIndex>=4?(cols[1]||""):"",
+      assignedName:codeIndex>=4?(cols[2]||""):"",
+      assignedNickname:codeIndex>=4?(cols[3]||""):"",
+    });
+  }
+  if(!records.length)return showToast("No codes to import.",true);
+  if(!confirm(`Import ${records.length} exact code(s)?\n\nThe import is all-or-nothing if any code already exists.`))return;
+  const btn=$("voucherBulkImportBtn"),old=btn.textContent;btn.disabled=true;btn.textContent="Importing...";
+  try{
+    const data=await voucherApi("voucher_import_codes",{campaignId,records});
+    showToast(`✓ Imported ${data.imported} exact code(s)`);$("voucherBulkImport").value="";
+    $("voucherViewCampaign").value=campaignId;await loadVoucherManager(campaignId);
+  }catch(e){showToast(e.message,true);}finally{btn.disabled=false;btn.textContent=old;}
+});
 $("voucherCreatedResult").addEventListener("click",async event=>{
   if(!event.target.closest("[data-vcreated-copy]"))return;
   try{const codes=JSON.parse($("voucherCreatedResult").dataset.codes||"[]");await navigator.clipboard.writeText(codes.join("\n"));showToast("✓ Codes copied");}catch{showToast("Copy failed",true);}
@@ -5208,12 +5289,34 @@ $("voucherCodeStatus").addEventListener("change",renderVoucherCodes);
 $("voucherCodeList").addEventListener("click",async event=>{
   const copy=event.target.closest("[data-vcode-copy]");
   if(copy){try{await navigator.clipboard.writeText(voucherDeepLink(copy.dataset.vcodeCopy));showToast("✓ Voucher link copied");}catch{showToast("Copy failed",true);}return;}
+  const reset=event.target.closest("[data-event-code-reset]");
+  if(reset){
+    if(!confirm(`Reset ${reset.dataset.eventCodeReset} for testing?\n\nActive bookings must be cancelled first. Issued passes will be deactivated.`))return;
+    reset.disabled=true;
+    try{await voucherApi("event_pass_reset_code",{code:reset.dataset.eventCodeReset});showToast("✓ Code returned for testing");await Promise.all([loadVoucherManager($("voucherViewCampaign").value),loadEventPassRequests()]);}
+    catch(e){showToast(e.message,true);}finally{reset.disabled=false;}return;
+  }
   const toggle=event.target.closest("[data-vcode-toggle]");if(!toggle)return;
   const active=toggle.dataset.nextActive==="true";
   if(!confirm(`${active?"Enable":"Disable"} ${toggle.dataset.vcodeToggle}?`))return;
   toggle.disabled=true;
   try{await voucherApi("voucher_set_code_active",{code:toggle.dataset.vcodeToggle,active});showToast("✓ Voucher status updated");await loadVoucherManager($("voucherViewCampaign").value);}
   catch(e){showToast(e.message,true);}finally{toggle.disabled=false;}
+});
+$("eventPassRequestsRefresh").addEventListener("click",loadEventPassRequests);
+$("eventPassRequestList").addEventListener("click",async event=>{
+  const approve=event.target.closest("[data-event-approve]");
+  const reject=event.target.closest("[data-event-reject]");
+  const disable=event.target.closest("[data-event-reject-disable]");
+  const button=approve||reject||disable;if(!button)return;
+  const requestId=approve?.dataset.eventApprove||reject?.dataset.eventReject||disable?.dataset.eventRejectDisable;
+  const action=approve?"event_pass_approve_request":"event_pass_reject_request";
+  const payload=approve?{requestId}:{requestId,returnCode:!!reject};
+  const label=approve?"Approve and issue Event Pass":reject?"Reject and return Code":"Reject and disable Code";
+  if(!confirm(`${label}?`))return;
+  button.disabled=true;
+  try{await voucherApi(action,payload);showToast(`✓ ${label}`);await Promise.all([loadEventPassRequests(),loadVoucherManager($("voucherViewCampaign").value)]);}
+  catch(e){showToast(e.message,true);}finally{button.disabled=false;}
 });
 resetVoucherCampaignForm();
 

@@ -189,6 +189,8 @@ function isLiveBookedSlot(slotData, nowMs = Date.now()) {
 const ULTRA_PACKAGE_TYPES = new Set([
   'ultra_starter_3', 'ultra_pass_10', 'ultra_pass_20', 'ultra_10', 'ultra_20',
 ]);
+const isEventPassBooking = booking => booking?.isEventBooking === true ||
+  String(booking?.packageType || booking?.usedPackageType || '') === 'monstr_event_pass';
 
 function packageMinutesUsed(booking) {
   const explicit = Number(booking?.packageMinutesUsed);
@@ -207,10 +209,12 @@ function passRestoreMutation(pkg, booking) {
 
   const update = { updatedAt: FieldValue.serverTimestamp() };
   const remaining = Number(pkg?.remainingMinutes);
-  if (ULTRA_PACKAGE_TYPES.has(type) || type === 'monstr_event_pass') {
+  // Event Pass is deliberately forfeited on cancellation/deletion. The owner
+  // can still use the separate test-reset action after the booking is terminal.
+  if (type === 'monstr_event_pass') return null;
+  if (ULTRA_PACKAGE_TYPES.has(type)) {
     if (!Number.isFinite(remaining)) throw new Error('PASS_RESTORE_INVALID');
     update.remainingMinutes = remaining + used;
-    if (type === 'monstr_event_pass') update.eventUsedAt = FieldValue.delete();
   } else if (type === 'offpeak') {
     if (Number(pkg?.totalMinutes) > 0) {
       if (!Number.isFinite(remaining)) throw new Error('PASS_RESTORE_INVALID');
@@ -1734,6 +1738,9 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
   if (booking.bookingStatus === 'cancelled') {
     return res.status(409).json({ ok: false, error: 'Cannot reschedule a cancelled booking' });
   }
+  if (isEventPassBooking(booking)) {
+    return res.status(409).json({ ok: false, error: 'Event Pass bookings cannot be rescheduled' });
+  }
   if (isPendingRescheduleBooking(booking)) {
     return res.status(409).json({ ok: false, error: 'Booking is already pending reschedule' });
   }
@@ -1756,6 +1763,7 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       const bNow = bSnap.data();
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
+      if (isEventPassBooking(bNow)) throw new Error('EVENT_PASS_NO_RESCHEDULE');
       if (isPendingRescheduleBooking(bNow)) throw new Error('ALREADY_PENDING');
 
       t.update(bookingRef, {
@@ -1790,6 +1798,7 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
     const map = {
       BOOKING_MISSING: [404, 'Booking not found'],
       CANCELLED:       [409, 'Cannot reschedule a cancelled booking'],
+      EVENT_PASS_NO_RESCHEDULE: [409, 'Event Pass bookings cannot be rescheduled'],
       ALREADY_PENDING: [409, 'Booking is already pending reschedule'],
     };
     const [code, msg] = map[e.message] || [500, 'Failed to move to pending reschedule'];
@@ -1829,6 +1838,9 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
   }
   if (booking.bookingStatus === 'cancelled') {
     return res.status(409).json({ ok: false, error: 'Cannot reschedule a cancelled booking' });
+  }
+  if (isEventPassBooking(booking)) {
+    return res.status(409).json({ ok: false, error: 'Event Pass bookings cannot be rescheduled' });
   }
   const { newDate, newStartTime } = body;
   if (typeof newDate !== 'string' || !RESCHED_DATE_RE.test(newDate)) {
@@ -1897,6 +1909,7 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       const bNow = bSnap.data();
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
+      if (isEventPassBooking(bNow)) throw new Error('EVENT_PASS_NO_RESCHEDULE');
       const currentTotalDur = bookingDurationMin(bNow);
       if (currentTotalDur !== totalDurMin) throw new Error('STALE_DURATION');
       const partial = requestedAssign < currentTotalDur;
@@ -2039,6 +2052,7 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
     const map = {
       BOOKING_MISSING: [404, 'Booking not found'],
       CANCELLED:       [409, 'Cannot reschedule a cancelled booking'],
+      EVENT_PASS_NO_RESCHEDULE: [409, 'Event Pass bookings cannot be rescheduled'],
       STALE_DURATION:  [409, 'Booking duration changed; reload and try again'],
       PARTIAL_REQUIRES_PENDING: [409, 'Partial assignment is allowed only for a pending-reschedule booking'],
       ALREADY_REFUNDED: [409, 'Cannot split a booking that already has a refund'],
