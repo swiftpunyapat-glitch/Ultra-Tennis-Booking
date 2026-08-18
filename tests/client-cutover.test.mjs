@@ -30,6 +30,17 @@ describe('customer authentication and fail-closed cutover',()=>{
   });
 });
 
+describe('customer promotions purchase flow',()=>{
+  test('shows only online package purchasing plus one fallback admin contact',()=>{
+    expect(index).toContain('id="passBuyWrap"');
+    expect(index).toContain('ยืนยันซื้อ ${p.packageName}');
+    expect(index.match(/data-i18n="contactToBuy"/g)||[]).toHaveLength(1);
+    expect(index).not.toContain('<div class="pkggrid">');
+    expect(index).not.toContain('ทักแอดมินเพื่อซื้อ');
+    expect(index).not.toContain('Contact admin to buy');
+  });
+});
+
 describe('active protected direct-write inventory',()=>{
   test('customer client has only the owner-scoped registered_users profile write',()=>{
     const calls=[...index.matchAll(/\b(setDoc|updateDoc|addDoc|deleteDoc|writeBatch|runTransaction)\s*\(/g)];

@@ -529,7 +529,7 @@
         <div class="hcard-icon" style="font-size:2rem">🎫</div>
         <div>
           <div class="hcard-label" style="font-size:1rem" data-i18n="promotions">Promotions</div>
-          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="promotionsSub">Ultra Starter, Pass, and Coaching</div>
+          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="promotionsSub">ซื้อแพ็กเกจออนไลน์ · จ่ายผ่าน QR</div>
         </div>
       </button>
       <button class="hcard" id="btnMyBookings" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
@@ -829,7 +829,7 @@
 
       <div class="card" style="background: var(--soft); border-color: var(--ut-border); margin-bottom: 14px;">
         <p style="font-size:.78rem;line-height:1.5;color:var(--ut-navy);text-align:center" data-i18n="promoNote">
-          ถ้ายังไม่เคยจอง กรุณากด Register ก่อน เพื่อให้แอดมินเติมแพ็กเข้าบัญชี LINE ของคุณได้ถูกต้อง
+          เลือกแพ็กเกจ กรอกข้อมูล และชำระผ่าน QR ได้ในหน้านี้ · Pass จะเปิดใช้งานหลังแอดมินตรวจสอบสลิป
         </p>
       </div>
 
@@ -853,43 +853,8 @@
         </div>
       </div>
 
-      <div class="pkggrid">
-        <!-- Ultra Starter -->
-        <div class="pkgcard">
-          <div class="pkgcard-top">
-            <div class="pkg-name">Ultra Starter</div>
-            <div class="pkg-price" style="white-space:nowrap">฿999</div>
-          </div>
-          <div class="pkg-desc" style="margin-top:5px;">3 Hours (180 mins) · Valid 30 days · Average ฿333/hr</div>
-          <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
-            <a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener noreferrer" class="btn-rpay" style="text-decoration:none; text-align:center;" data-i18n="contactToBuy">Contact admin to buy</a>
-          </div>
-        </div>
-
-        <!-- Ultra Pass -->
-        <div class="pkgcard" style="margin-top: 10px;">
-          <div class="pkgcard-top">
-            <div class="pkg-name">Ultra Pass</div>
-            <div class="pkg-price" style="white-space:nowrap">฿3,100</div>
-          </div>
-          <div class="pkg-desc" style="margin-top:5px;">10 Hours (600 mins) · Valid 90 days · Average ฿310/hr · Save ฿40/hr</div>
-          <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
-            <a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener noreferrer" class="btn-rpay" style="text-decoration:none; text-align:center;" data-i18n="contactToBuy">Contact admin to buy</a>
-          </div>
-        </div>
-
-
-        <!-- Beginner Coaching -->
-        <div class="pkgcard" style="margin-top: 10px;">
-          <div class="pkgcard-top">
-            <div class="pkg-name">Beginner Coaching</div>
-            <div class="pkg-price" style="white-space:nowrap">เริ่มต้น ฿4,000</div>
-          </div>
-          <div class="pkg-desc" style="margin-top:5px;">5 Hours (300 mins) · Valid 60 days · Includes court and coach · ราคาขึ้นกับโค้ช</div>
-          <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
-            <a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener noreferrer" class="btn-rpay" style="text-decoration:none; text-align:center;" data-i18n="contactToBuy">Contact admin to buy</a>
-          </div>
-        </div>
+      <div style="margin-top:14px;display:flex">
+        <a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener noreferrer" class="btn-rpay" style="width:100%;text-decoration:none;text-align:center" data-i18n="contactToBuy">ติดต่อแอดมิน / สอบถามเพิ่มเติม</a>
       </div>
     </div>
   </div>
@@ -1288,11 +1253,11 @@ const I18N = {
     registerProfile:"ลงทะเบียนสมาชิก",
     registerSub:"ยืนยันชื่อ/เบอร์โทรเพื่อเติมแพ็กเกจ",
     promotions:"โปรโมชั่น",
-    promotionsSub:"แพ็กเกจ Starter, Pass และ Coaching",
+    promotionsSub:"ซื้อแพ็กเกจออนไลน์ · จ่ายผ่าน QR",
     activePromotions:"โปรโมชั่นทั้งหมด",
-    contactToBuy:"ทักแอดมินเพื่อซื้อ",
+    contactToBuy:"ติดต่อแอดมิน / สอบถามเพิ่มเติม",
     regIntroText:"ถ้ายังไม่เคยจอง กรุณากด Register ก่อน เพื่อให้แอดมินเติมแพ็กเข้าบัญชี LINE ของคุณได้ถูกต้อง",
-    promoNote:"ถ้ายังไม่เคยจอง กรุณากด Register ก่อน เพื่อให้แอดมินเติมแพ็กเข้าบัญชี LINE ของคุณได้ถูกต้อง",
+    promoNote:"เลือกแพ็กเกจ กรอกข้อมูล และชำระผ่าน QR ได้ในหน้านี้ · Pass จะเปิดใช้งานหลังแอดมินตรวจสอบสลิป",
     registerSubmit:"ลงทะเบียน",
     alreadyRegistered:"ข้อมูลการลงทะเบียน",
     regSuccess:"ลงทะเบียนสมาชิกเรียบร้อยแล้ว",
@@ -1435,11 +1400,11 @@ const I18N = {
     registerProfile:"Register Profile",
     registerSub:"Verify name/phone for passes",
     promotions:"Promotions",
-    promotionsSub:"Ultra Starter, Pass, and Coaching",
+    promotionsSub:"Buy packages online · Pay by QR",
     activePromotions:"Promotions",
-    contactToBuy:"Contact admin to buy",
+    contactToBuy:"Contact admin / Ask a question",
     regIntroText:"If you have never booked, please Register first so the admin can add the package to your LINE account correctly.",
-    promoNote:"If you have never booked, please Register first so the admin can add the package to your LINE account correctly.",
+    promoNote:"Choose a package, enter your details, and pay by QR here. Your pass activates after the admin verifies the slip.",
     registerSubmit:"Register",
     alreadyRegistered:"Registered Profile",
     regSuccess:"Registration successful!",
