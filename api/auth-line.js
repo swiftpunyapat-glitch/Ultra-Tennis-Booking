@@ -21,10 +21,40 @@ import { getAdminAuth } from './_lib/firebase-admin.js';
 // Not a secret — the LIFF id is already shipped in the client. Env overrides
 // the default so the value can be rotated without a redeploy.
 const LINE_LOGIN_CHANNEL_ID = process.env.LINE_LOGIN_CHANNEL_ID || '2010034901';
+const LINE_VERIFY_TIMEOUT_MS = 5000;
+const FIREBASE_MINT_TIMEOUT_MS = 5000;
 
 function parseBody(req) {
   if (req.body && typeof req.body === 'object') return req.body;
   try { return JSON.parse(req.body); } catch { return null; }
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = LINE_VERIFY_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function promiseWithTimeout(promise, timeoutMs, label) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(label);
+          error.code = 'AUTH_TIMEOUT';
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export default async function handler(req, res) {
@@ -49,7 +79,7 @@ export default async function handler(req, res) {
   let displayName = null;
   if (idToken && !accessToken) {
     try {
-      const r = await fetch('https://api.line.me/oauth2/v2.1/verify', {
+      const r = await fetchWithTimeout('https://api.line.me/oauth2/v2.1/verify', {
         method:  'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body:    new URLSearchParams({ id_token: idToken, client_id: LINE_LOGIN_CHANNEL_ID }).toString(),
@@ -61,7 +91,8 @@ export default async function handler(req, res) {
       }
     } catch (e) {
       console.error('[auth-line] LINE id_token verify threw:', e.message);
-      return res.status(502).json({ ok: false, error: 'Could not reach LINE verification' });
+      const timeout = e?.name === 'AbortError';
+      return res.status(timeout ? 504 : 502).json({ ok: false, error: timeout ? 'LINE verification timed out' : 'Could not reach LINE verification' });
     }
 
     // Defensive re-validation of security-critical claims.
@@ -77,7 +108,7 @@ export default async function handler(req, res) {
     displayName = typeof payload.name === 'string' ? payload.name : null;
   } else {
     try {
-      const r = await fetch('https://api.line.me/v2/profile', {
+      const r = await fetchWithTimeout('https://api.line.me/v2/profile', {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       const profile = await r.json().catch(() => null);
@@ -89,17 +120,23 @@ export default async function handler(req, res) {
       displayName = typeof profile.displayName === 'string' ? profile.displayName : null;
     } catch (e) {
       console.error('[auth-line] LINE profile verify threw:', e.message);
-      return res.status(502).json({ ok: false, error: 'Could not reach LINE profile verification' });
+      const timeout = e?.name === 'AbortError';
+      return res.status(timeout ? 504 : 502).json({ ok: false, error: timeout ? 'LINE profile verification timed out' : 'Could not reach LINE profile verification' });
     }
   }
 
   // ── Mint Firebase custom token (uid = verified lineUserId) ──────────
   let customToken;
   try {
-    customToken = await getAdminAuth().createCustomToken(lineUserId, { line: true });
+    customToken = await promiseWithTimeout(
+      getAdminAuth().createCustomToken(lineUserId, { line: true }),
+      FIREBASE_MINT_TIMEOUT_MS,
+      'Firebase custom token mint timed out'
+    );
   } catch (e) {
     console.error('[auth-line] createCustomToken failed:', e.message);
-    return res.status(500).json({ ok: false, error: 'Could not mint auth token' });
+    const timeout = e?.code === 'AUTH_TIMEOUT';
+    return res.status(timeout ? 504 : 500).json({ ok: false, error: timeout ? 'Firebase token mint timed out' : 'Could not mint auth token' });
   }
 
   console.log(`[auth-line] minted token for ${lineUserId}`);

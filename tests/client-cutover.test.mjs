@@ -6,10 +6,10 @@ const index=read('index.html');
 const admin=read('admin.html');
 const coach=read('coach.html');
 const availability=read('availability.html');
+const authLine=read('api/auth-line.js');
 
 describe('customer authentication and fail-closed cutover',()=>{
   test('Firebase authentication is awaited before protected customer reads',()=>{
-    expect(index).toContain('await ensureFirebaseAuth(state.lineProfile.userId)');
     for(const functionName of ['checkEligibility','openRegisterView','prefillCustomerInfo','openMyBookings']){
       const start=index.indexOf(`async function ${functionName}`);
       expect(start,functionName).toBeGreaterThan(-1);
@@ -17,6 +17,26 @@ describe('customer authentication and fail-closed cutover',()=>{
       const body=index.slice(start,end);
       expect(body,functionName).toMatch(/await (protectedIdToken|ensureFirebaseAuth)\(/);
     }
+  });
+
+  test('home boot does not wait on auth or silently destroy LIFF redirect state',()=>{
+    expect(index).toContain('ensureFirebaseAuth(state.lineProfile.userId).catch(()=>{})');
+    expect(index).not.toContain('await ensureFirebaseAuth(state.lineProfile.userId)');
+    expect(index).not.toContain('location.replace(location.pathname)');
+    expect(index).not.toContain('BOOT_RETRY_KEY');
+    expect(index).toContain('window.utRetryLiffBoot = retryLiffBoot');
+    expect(index).toContain('Boot took >13 s – showing recovery');
+    expect(index).toMatch(/const bookingRead[\s\S]*await protectedIdToken\(\);[\s\S]*getDoc\(doc\(db, "bookings", pending\.docId\)\)/);
+  });
+
+  test('customer and server authentication calls have bounded timeouts',()=>{
+    expect(index).toContain('const AUTH_API_TIMEOUT_MS = 6000');
+    expect(index).toContain('const FIREBASE_SIGNIN_TIMEOUT_MS = 6000');
+    expect(index).toContain('signal:controller.signal');
+    expect(authLine).toContain('const LINE_VERIFY_TIMEOUT_MS = 5000');
+    expect(authLine).toContain('const FIREBASE_MINT_TIMEOUT_MS = 5000');
+    expect(authLine).toContain('fetchWithTimeout');
+    expect(authLine).toContain("error.code = 'AUTH_TIMEOUT'");
   });
 
   test('all booking, pass, slip, cancellation and guest mutations use server actions',()=>{

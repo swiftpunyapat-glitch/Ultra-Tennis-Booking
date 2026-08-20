@@ -932,30 +932,73 @@ function authMetric(event){
     }).catch(()=>{});
   }catch(_){ /* ignore */ }
 }
-async function ensureFirebaseAuth(lineUserId){
+const AUTH_API_TIMEOUT_MS = 6000;
+const FIREBASE_SIGNIN_TIMEOUT_MS = 6000;
+let firebaseAuthInFlight = null;
+let firebaseAuthInFlightUid = null;
+
+async function withClientTimeout(promise, timeoutMs, label){
+  let timer;
   try{
-    if(!lineUserId || lineUserId === "guest" || lineUserId === "manual") return false;
-    if(fbAuth.currentUser && fbAuth.currentUser.uid === lineUserId) return true; // already signed in
-    authMetric("auth_attempt");
-    const idToken = liff.getIDToken();
-    const accessToken = liff.getAccessToken();
-    if(!idToken && !accessToken){ authMetric("auth_skip_no_id_token"); console.warn("[auth] no LIFF identity token available"); return false; }
-    const r = await fetch("/api/auth-line",{
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ idToken: idToken||undefined, accessToken: accessToken||undefined })
-    });
-    const d = await r.json().catch(()=>({}));
-    if(!r.ok || !d.ok || !d.customToken){ authMetric("auth_failed"); console.warn("[auth] mint failed:", d.error || r.status); return false; }
-    await signInWithCustomToken(fbAuth, d.customToken);
-    authMetric("auth_success");
-    const match = fbAuth.currentUser?.uid === lineUserId;
-    authMetric(match ? "uid_match_true" : "uid_match_false");
-    console.log("[auth] signed in uid=", fbAuth.currentUser?.uid, "match=", match);
-    return match;
-  }catch(e){
-    authMetric("auth_failed");
-    console.warn("[auth] additive sign-in failed, continuing unauthenticated:", e);
-    return false;
+    return await Promise.race([
+      promise,
+      new Promise((_,reject)=>{ timer=setTimeout(()=>reject(new Error(label)),timeoutMs); }),
+    ]);
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
+async function ensureFirebaseAuth(lineUserId){
+  if(!lineUserId || lineUserId === "guest" || lineUserId === "manual") return false;
+  if(fbAuth.currentUser && fbAuth.currentUser.uid === lineUserId) return true;
+  if(firebaseAuthInFlight && firebaseAuthInFlightUid===lineUserId) return firebaseAuthInFlight;
+
+  const attempt=(async()=>{
+    try{
+      authMetric("auth_attempt");
+      const idToken = liff.getIDToken();
+      const accessToken = liff.getAccessToken();
+      if(!idToken && !accessToken){ authMetric("auth_skip_no_id_token"); console.warn("[auth] no LIFF identity token available"); return false; }
+      const controller=new AbortController();
+      const abortTimer=setTimeout(()=>controller.abort(),AUTH_API_TIMEOUT_MS);
+      let r;
+      try{
+        r=await fetch("/api/auth-line",{
+          method:"POST", headers:{"Content-Type":"application/json"}, signal:controller.signal,
+          body: JSON.stringify({ idToken: idToken||undefined, accessToken: accessToken||undefined })
+        });
+      }finally{
+        clearTimeout(abortTimer);
+      }
+      const d = await r.json().catch(()=>({}));
+      if(!r.ok || !d.ok || !d.customToken){ authMetric("auth_failed"); console.warn("[auth] mint failed:", d.error || r.status); return false; }
+      await withClientTimeout(
+        signInWithCustomToken(fbAuth, d.customToken),
+        FIREBASE_SIGNIN_TIMEOUT_MS,
+        "Firebase sign-in timeout"
+      );
+      authMetric("auth_success");
+      const match = fbAuth.currentUser?.uid === lineUserId;
+      authMetric(match ? "uid_match_true" : "uid_match_false");
+      console.log("[auth] signed in uid=", fbAuth.currentUser?.uid, "match=", match);
+      return match;
+    }catch(e){
+      authMetric("auth_failed");
+      console.warn("[auth] sign-in failed; protected actions can retry:", e?.name||e?.message||e);
+      return false;
+    }
+  })();
+
+  firebaseAuthInFlight=attempt;
+  firebaseAuthInFlightUid=lineUserId;
+  try{
+    return await attempt;
+  }finally{
+    if(firebaseAuthInFlight===attempt){
+      firebaseAuthInFlight=null;
+      firebaseAuthInFlightUid=null;
+    }
   }
 }
 
@@ -1518,25 +1561,14 @@ function getMonthKey(date) {
 }
 
 // ── LIFF RECOVERY UI ────────────────────────────────────────────
-// Reloading with the same URL hangs again on Android LINE: the URL still
-// carries spent login params (code / liff.state). Every retry path must
-// navigate to a CLEAN URL — same behaviour as tapping Book Now afresh.
-function cleanReload(){ location.replace(location.pathname); }
-window.utCleanReload = cleanReload; // used by inline onclick in recovery UI
-
-const BOOT_RETRY_KEY = "ut_boot_retry";
-// First hang: silently retry once with a clean URL (customer-confirmed fix —
-// a fresh navigation succeeds where a plain reload does not). Only if the
-// retry ALSO hangs do we show the manual recovery UI.
+// Never rewrite or strip LIFF redirect parameters while liff.init() may still
+// be resolving. Recovery is user-initiated and preserves the current URL.
+function retryLiffBoot(){ location.reload(); }
+window.utRetryLiffBoot = retryLiffBoot;
+let bootRecoveryShown=false;
 function bootRecover(){
-  try{
-    if(!sessionStorage.getItem(BOOT_RETRY_KEY)){
-      sessionStorage.setItem(BOOT_RETRY_KEY,"1");
-      console.warn("[watchdog] Boot hung – auto-retrying once with clean URL");
-      cleanReload();
-      return;
-    }
-  }catch(_){ /* sessionStorage blocked — fall through to manual UI */ }
+  if(bootRecoveryShown) return;
+  bootRecoveryShown=true;
   showLiffRecoveryUI();
 }
 
@@ -1553,9 +1585,9 @@ function showLiffRecoveryUI() {
       '<a href="https://line.me/R/ti/p/%40ultratennis" target="_blank" rel="noopener" ' +
         'style="display:inline-block;padding:14px 28px;border-radius:8px;background:linear-gradient(135deg,#06c755,#00a041);color:#fff;font-weight:900;font-size:1rem;text-decoration:none;box-shadow:0 8px 20px rgba(6,199,85,.30)">' +
         '💬 กลับไปหน้าแชท LINE</a><br><br>' +
-      '<button type="button" onclick="utCleanReload()" ' +
+      '<button type="button" onclick="utRetryLiffBoot()" ' +
         'style="display:inline-block;padding:10px 20px;border-radius:8px;border:1px solid var(--ut-border,#d8e8f5);cursor:pointer;background:#fff;color:var(--ut-navy,#0b2742);font-weight:700;font-size:.85rem">' +
-        '🔄 หรือลองโหลดหน้านี้ใหม่</button>';
+        '🔄 ลองเชื่อมต่ออีกครั้ง</button>';
   }
   const sp=document.querySelector(".loverlay .spinner");
   if(sp) sp.style.display="none";
@@ -1565,24 +1597,23 @@ function showLiffRecoveryUI() {
 async function initLiff() {
   const tStart = performance.now();
   $("ltext").textContent=t("connectingLine");
-  let liffInitOk = false;
   try {
     await Promise.race([
       liff.init({ liffId:LIFF_ID }),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF init timeout after 10s")),10000))
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF init timeout after 8s")),8000))
     ]);
-    liffInitOk = true;
     // redirectUri must be clean: window.location.href can still carry spent
     // code/liff.state params which make the Android login redirect hang.
     if(!liff.isLoggedIn()){ liff.login({ redirectUri: location.origin + location.pathname }); return; }
     state.lineProfile = await Promise.race([
       liff.getProfile(),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF getProfile timeout after 5s")),5000))
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error("LIFF getProfile timeout after 4s")),4000))
     ]);
   } catch(e) {
     console.warn("LIFF init/profile failed:", e);
     if (_isLineApp) {
-      // Inside LINE's browser — auto-retry once, then recovery UI; never fall to Guest.
+      // Inside LINE's browser, surface a retry instead of silently reloading
+      // and discarding LIFF redirect state.
       bootRecover();
       return;
     }
@@ -1595,18 +1626,18 @@ async function initLiff() {
   if(state.lineProfile.pictureUrl) av.innerHTML=`<img src="${state.lineProfile.pictureUrl}" alt="Avatar"/>`;
   else av.textContent = state.lineProfile.displayName.charAt(0).toUpperCase();
 
-  // Rules-cutover contract: authentication completes before any owner-only
-  // booking/package/pass read is started.
+  // Authentication is deliberately non-blocking for the home screen. Every
+  // protected read/mutation still awaits protectedIdToken(), so the security
+  // cutover remains fail-closed without making customers stare at this loader.
   if(state.lineProfile?.userId && state.lineProfile.userId!=="guest"){
-    await ensureFirebaseAuth(state.lineProfile.userId);
+    ensureFirebaseAuth(state.lineProfile.userId).catch(()=>{});
   }
 
   // Set default pricing text first, then immediately hide loading screen
   updateHomeSingleUsePricing();
   $("loverlay").style.display="none";
   $("shell").style.display="block";
-  // Boot succeeded — allow a future hang (same tab) to auto-retry again.
-  try{ sessionStorage.removeItem(BOOT_RETRY_KEY); }catch(_){}
+  bootRecoveryShown=false;
   setupNav(); // bind nav immediately so buttons work during pending-booking restore
 
   // Fetch pricing config asynchronously in the background
@@ -1635,15 +1666,18 @@ async function initLiff() {
       if (pending && pending.expiresAt > now) {
         console.log("[perf] Found pending booking in cache. Checking document status...");
         const t0 = performance.now();
-        const bookingRead = state.lineProfile.userId==="guest"
-          ? (async()=>{
+          const bookingRead = state.lineProfile.userId==="guest"
+            ? (async()=>{
               if(!pending.guestToken) throw new Error("Guest access token missing");
               const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"guest_booking",bookingId:pending.docId,guestToken:pending.guestToken})});
               const d=await r.json().catch(()=>({}));
               if(!r.ok||!d.ok) throw new Error(d.error||"Guest booking read failed");
               return {exists:()=>true,data:()=>d.booking};
             })()
-          : getDoc(doc(db, "bookings", pending.docId));
+          : (async()=>{
+              await protectedIdToken();
+              return getDoc(doc(db, "bookings", pending.docId));
+            })();
         const bDoc = await Promise.race([
           bookingRead,
           new Promise((_,rej)=>setTimeout(()=>rej(new Error("Pending booking restore timeout")),5000))
@@ -3998,14 +4032,13 @@ function displayStatus(status){
 // leave the user staring at a forever-spinning overlay. Always surface a message.
 setupLanguageToggle();
 
-// Watchdog: if the loading overlay is still visible after 12 s (LIFF / network hung),
-// auto-retry once with a clean URL, then show a Thai recovery prompt so the
-// customer is never stuck forever.
+// Watchdog is presentation-only: never navigate while LIFF may still be
+// resolving. The explicit retry button preserves the full LIFF URL/state.
 setTimeout(()=>{
   if($("loverlay").style.display==="none") return; // boot succeeded in time — nothing to do
-  console.warn("[watchdog] Boot took >12 s – recovering");
+  console.warn("[watchdog] Boot took >13 s – showing recovery");
   bootRecover();
-},12000);
+},13000);
 
 initLiff().catch(err=>{
   console.error("App boot failed:", err);
