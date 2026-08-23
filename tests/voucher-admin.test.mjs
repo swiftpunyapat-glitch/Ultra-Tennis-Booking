@@ -47,9 +47,11 @@ describe('Voucher Manager campaign validation', () => {
     }))).toMatchObject({ ok: true, data: { discountPercent: 25, maxDiscountAmount: 100 } });
   });
 
-  test('supports an approval-based Event Pass campaign without discount fields', () => {
+  test('defaults Event Pass campaigns to auto approval and preserves a manual override', () => {
     expect(normalizeCampaignInput(validCampaign({ voucherType: 'event_pass', maxCancellationRestores: 0 })))
-      .toMatchObject({ ok: true, data: { voucherType: 'event_pass', exactDurationMinutes: 60, maxCancellationRestores: 0 } });
+      .toMatchObject({ ok: true, data: { voucherType: 'event_pass', eventPassApprovalMode: 'auto', exactDurationMinutes: 60, maxCancellationRestores: 0 } });
+    expect(normalizeCampaignInput(validCampaign({ voucherType: 'event_pass', eventPassApprovalMode: 'manual' })))
+      .toMatchObject({ ok: true, data: { eventPassApprovalMode: 'manual' } });
   });
 
   test.each([
@@ -103,6 +105,13 @@ describe('Voucher Manager code creation', () => {
 });
 
 describe('Voucher Manager security surface', () => {
+  test('exposes an owner-controlled Event Pass approval mode with MONSTR set to auto', () => {
+    expect(adminHtml).toContain('id="vcEventApprovalMode"');
+    expect(adminHtml).toContain('eventPassApprovalMode:$("vcEventApprovalMode").value');
+    expect(adminHtml).toContain('$("vcEventApprovalMode").value="auto"');
+    expect(adminApi).toContain("data.eventPassApprovalMode === 'manual' ? 'manual' : 'auto'");
+  });
+
   test('hides the tab unless the authenticated session is Art owner', () => {
     expect(adminHtml).toContain('id="voucherTabBtn"');
     expect(adminHtml).toContain('currentAdminName==="Art"&&currentAdminRole==="owner"');

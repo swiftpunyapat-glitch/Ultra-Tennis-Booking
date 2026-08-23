@@ -48,6 +48,13 @@ export function normalizeCampaignInput(input = {}) {
   if (!PREFIX_RE.test(codePrefix)) return { ok: false, error: 'Code prefix contains unsupported characters' };
   if (!VOUCHER_CAMPAIGN_TYPES.includes(voucherType)) return { ok: false, error: 'Voucher type is invalid' };
 
+  // Existing Event Pass campaigns predate this setting. Default them to auto
+  // so deploying the feature activates the simpler customer flow immediately;
+  // owners can still opt a future campaign back into manual review.
+  const eventPassApprovalMode = voucherType === 'event_pass'
+    ? (input.eventPassApprovalMode === 'manual' ? 'manual' : 'auto')
+    : null;
+
   const allowedDays = [...new Set((Array.isArray(input.allowedDays) ? input.allowedDays : []).map(Number))]
     .filter(day => Number.isInteger(day) && day >= 0 && day <= 6)
     .sort((a, b) => a - b);
@@ -129,6 +136,7 @@ export function normalizeCampaignInput(input = {}) {
       exactDurationMinutes,
       requiresLineLogin: input.requiresLineLogin !== false,
       transferable: input.transferable === true,
+      eventPassApprovalMode,
       maxUsesPerCode: 1,
       maxCancellationRestores,
       branchId: 'ladprao1',

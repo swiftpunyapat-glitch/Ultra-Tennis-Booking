@@ -512,7 +512,7 @@
         <div class="hcard-icon" style="font-size:2rem">🎟️</div>
         <div>
           <div class="hcard-label" style="font-size:1rem">Redeem Event Code</div>
-          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px">กรอก Code จากผู้จัดงาน · รอ Admin อนุมัติ · รับ Event Pass</div>
+          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px">กรอก Code จากผู้จัดงาน · รับ Event Pass ทันที · เลือกเวลาจอง</div>
         </div>
       </button>
       <!-- Coach V2: visible ONLY when this LINE account is an active coach
@@ -555,12 +555,12 @@
       <button class="back" id="eventRedeemBack">← Back</button>
       <div class="ptitle">🎟️ Redeem Event Code</div>
       <div class="card">
-        <p style="font-size:.82rem;line-height:1.6;color:var(--muted);margin-bottom:12px">กรอก Code ที่ได้รับจาก Organizer เมื่อ Admin ตรวจสอบและอนุมัติแล้ว Event Pass 1 ชั่วโมงจะเข้าบัญชี LINE นี้</p>
+        <p style="font-size:.82rem;line-height:1.6;color:var(--muted);margin-bottom:12px">กรอก Code ที่ได้รับจาก Organizer ระบบจะออก Event Pass 1 ชั่วโมงเข้าบัญชี LINE นี้ทันที</p>
         <label><span>Event Code</span><input type="text" id="eventRedeemCode" autocomplete="off" placeholder="MSTR-XXXXX" maxlength="64" style="text-transform:uppercase;font-weight:800;letter-spacing:.6px"/></label>
-        <button class="btn-go" id="eventRedeemSubmit" style="width:100%;margin-top:12px">ส่ง Code ให้ Admin ตรวจสอบ</button>
+        <button class="btn-go" id="eventRedeemSubmit" style="width:100%;margin-top:12px">รับ Event Pass</button>
       </div>
       <div class="card">
-        <div class="slabel">สถานะคำขอ</div>
+        <div class="slabel">Event Pass ของฉัน</div>
         <div id="eventRedeemStatus"><p style="font-size:.78rem;color:var(--muted)">ยังไม่มีคำขอ</p></div>
         <button class="back" id="eventRedeemRefresh" style="margin-top:10px">↻ Refresh status</button>
       </div>
@@ -1930,7 +1930,7 @@ async function openEventRedeemView(){
 }
 
 const eventRequestLabel=status=>({
-  pending:"⏳ รอ Admin ตรวจสอบ", approved:"✓ อนุมัติแล้ว — Event Pass พร้อมใช้",
+  pending:"⏳ รอ Admin ตรวจสอบ", approved:"✓ รับสิทธิ์แล้ว — Event Pass พร้อมใช้",
   rejected:"✗ ไม่อนุมัติ", reset:"↻ Code ถูกคืนและพร้อมทดสอบใหม่",
 }[status]||status);
 
@@ -1960,7 +1960,7 @@ async function loadEventRedeemStatus(){
 async function submitEventRedeemCode(){
   const code=$("eventRedeemCode").value.trim().toUpperCase();
   if(!/^[A-Z0-9][A-Z0-9_-]{2,63}$/.test(code)){showToast("กรุณากรอก Event Code ให้ถูกต้อง",true);return;}
-  const btn=$("eventRedeemSubmit");btn.disabled=true;btn.textContent="กำลังส่ง...";
+  const btn=$("eventRedeemSubmit");btn.disabled=true;btn.textContent="กำลังตรวจ Code...";
   try{
     const idToken=await protectedIdToken();
     const res=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
@@ -1968,10 +1968,11 @@ async function submitEventRedeemCode(){
     })});
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok) throw new Error(data.error||"ส่ง Code ไม่สำเร็จ");
-    showToast(data.replayed?"Code นี้รอตรวจสอบอยู่แล้ว":"ส่ง Code ให้ Admin แล้ว");
+    if(data.status==="approved") showToast(data.replayed?"Event Pass นี้อยู่ในบัญชีแล้ว":"✓ รับ Event Pass สำเร็จ เลือกเวลาจองได้เลย");
+    else showToast(data.replayed?"Code นี้รอตรวจสอบอยู่แล้ว":"ส่ง Code ให้ Admin แล้ว");
     await loadEventRedeemStatus();
   }catch(e){showToast(e.message||"ส่ง Code ไม่สำเร็จ",true);}
-  finally{btn.disabled=false;btn.textContent="ส่ง Code ให้ Admin ตรวจสอบ";}
+  finally{btn.disabled=false;btn.textContent="รับ Event Pass";}
 }
 
 async function openRegisterView() {

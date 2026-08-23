@@ -712,7 +712,7 @@
         <div class="smrow" style="margin-bottom:10px">
           <div class="smf"><label>Campaign ID</label><input id="vcCampaignId" maxlength="64" placeholder="e.g. monstr-2026"/></div>
           <div class="smf" style="flex:2"><label>Campaign Name</label><input id="vcName" maxlength="100" placeholder="e.g. MONSTR Sponsor 2026"/></div>
-          <div class="smf"><label>Voucher Type</label><select id="vcType"><option value="free_booking">Free Booking</option><option value="discount_amount">Discount (THB)</option><option value="discount_percent">Discount (%)</option><option value="event_pass">Event Pass (Admin approval)</option></select></div>
+          <div class="smf"><label>Voucher Type</label><select id="vcType"><option value="free_booking">Free Booking</option><option value="discount_amount">Discount (THB)</option><option value="discount_percent">Discount (%)</option><option value="event_pass">Event Pass</option></select></div>
         </div>
         <div class="smrow" style="margin-bottom:10px">
           <div class="smf"><label>Keyword (reporting)</label><input id="vcKeyword" maxlength="32" placeholder="MONSTR" style="text-transform:uppercase"/></div>
@@ -749,6 +749,10 @@
           <label><input id="vcExcludeHolidays" type="checkbox" checked/> Exclude holidays</label>
           <label><input id="vcRequiresLine" type="checkbox" checked/> Require LINE login</label>
           <label><input id="vcTransferable" type="checkbox" checked/> Transferable bearer code</label>
+        </div>
+        <div id="vcEventApprovalWrap" class="smrow" style="display:none;margin-bottom:13px">
+          <div class="smf"><label>Event Pass Approval</label><select id="vcEventApprovalMode"><option value="auto">Auto — issue Pass immediately</option><option value="manual">Manual — wait for Admin</option></select></div>
+          <div class="smf" style="flex:2"><label>Customer Flow</label><input id="vcEventApprovalHint" value="Code → Event Pass → choose booking time" disabled/></div>
         </div>
         <div class="qbtns" style="gap:8px">
           <button class="smbtn smg" id="voucherSaveCampaignBtn">✓ Save Campaign</button>
@@ -1356,6 +1360,7 @@ const ACTIVITY_ACTION_LABELS = {
   voucher_codes_import: "นำเข้า Voucher Code",
   voucher_code_status: "เปลี่ยนสถานะ Voucher Code",
   event_pass_approve: "อนุมัติ Event Pass",
+  event_pass_auto_approve: "Auto Approve Event Pass",
   event_pass_reject: "ปฏิเสธ Event Pass",
   event_pass_reset_code: "คืน Code สำหรับทดสอบ",
 };
@@ -5050,6 +5055,7 @@ function updateVoucherTypeFields(){
   $("vcAmountWrap").style.display=type==="discount_amount"?"block":"none";
   $("vcPercentWrap").style.display=type==="discount_percent"?"block":"none";
   $("vcMaxDiscountWrap").style.display=type==="discount_percent"?"block":"none";
+  $("vcEventApprovalWrap").style.display=type==="event_pass"?"flex":"none";
 }
 
 function setVoucherEndTime(value){
@@ -5068,6 +5074,7 @@ function resetVoucherCampaignForm(){
   $("vcCampaignId").value="";$("vcName").value="";$("vcKeyword").value="";$("vcPrefix").value="";
   $("vcType").value="free_booking";$("vcValidFrom").value="";$("vcExpiresAt").value="";
   $("vcStartTime").value="06:00";setVoucherEndTime("24:00");$("vcRestores").value="0";
+  $("vcEventApprovalMode").value="auto";
   $("vcActive").checked=true;$("vcExcludeHolidays").checked=true;$("vcRequiresLine").checked=true;$("vcTransferable").checked=true;
   document.querySelectorAll("[data-vday]").forEach(el=>el.checked=[1,2,3,4,5].includes(Number(el.dataset.vday)));
   document.querySelectorAll("[data-vpricing]").forEach(el=>el.checked=false);
@@ -5084,6 +5091,7 @@ function editVoucherCampaign(campaignId){
   $("vcName").value=c.name||"";$("vcKeyword").value=c.keyword||"";$("vcPrefix").value=c.codePrefix||"";
   $("vcType").value=c.voucherType||"discount_amount";$("vcValidFrom").value=voucherDateOnly(c.validFrom);$("vcExpiresAt").value=voucherDateOnly(c.expiresAt);
   $("vcStartTime").value=c.startTime||"06:00";setVoucherEndTime(c.endTime||"24:00");$("vcRestores").value=Number(c.maxCancellationRestores)||0;
+  $("vcEventApprovalMode").value=c.eventPassApprovalMode==="manual"?"manual":"auto";
   $("vcActive").checked=c.active===true;$("vcExcludeHolidays").checked=c.excludeHolidays===true;$("vcRequiresLine").checked=c.requiresLineLogin!==false;$("vcTransferable").checked=c.transferable===true;
   document.querySelectorAll("[data-vday]").forEach(el=>el.checked=(c.allowedDays||[]).includes(Number(el.dataset.vday)));
   document.querySelectorAll("[data-vpricing]").forEach(el=>el.checked=(c.allowedPricingTypes||[]).includes(el.dataset.vpricing));
@@ -5100,7 +5108,7 @@ function renderVoucherCampaigns(){
     const days=(c.allowedDays||[]).map(d=>["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d]).join(", ")||"None";
     return `<div style="background:var(--s2);border:1px solid var(--bd);border-radius:9px;padding:11px;margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
-        <div><strong>${esc(c.name)}</strong> <span style="font-size:.66rem;color:var(--m)">${esc(c.id)}</span><br><span style="font-size:.7rem;color:var(--m)">${esc(voucherTypeLabel(c.voucherType))} · ${esc(c.codePrefix||"No prefix")} · ${esc(dateRange)}</span></div>
+        <div><strong>${esc(c.name)}</strong> <span style="font-size:.66rem;color:var(--m)">${esc(c.id)}</span><br><span style="font-size:.7rem;color:var(--m)">${esc(voucherTypeLabel(c.voucherType))}${c.voucherType==="event_pass"?` · ${c.eventPassApprovalMode==="manual"?"Manual Approval":"Auto Approval"}`:""} · ${esc(c.codePrefix||"No prefix")} · ${esc(dateRange)}</span></div>
         <div><span style="display:inline-block;border:1px solid ${c.active?"var(--success)":"var(--m)"};color:${c.active?"var(--success)":"var(--m)"};border-radius:999px;padding:2px 7px;font-size:.65rem;font-weight:800">${c.active?"Active":"Inactive"}</span></div>
       </div>
       <div style="font-size:.68rem;color:var(--m);margin-top:7px">${esc(days)} · ${esc(c.startTime)}–${esc(c.endTime)} · Holiday ${c.excludeHolidays?"excluded":"allowed"} · Restore ${Number(c.maxCancellationRestores)||0}</div>
@@ -5190,6 +5198,7 @@ function voucherCampaignPayload(){
     startTime:$("vcStartTime").value,endTime:$("vcEndTime").value,exactDurationMinutes:60,
     maxCancellationRestores:Number($("vcRestores").value),active:$("vcActive").checked,
     excludeHolidays:$("vcExcludeHolidays").checked,requiresLineLogin:$("vcRequiresLine").checked,transferable:$("vcTransferable").checked,
+    eventPassApprovalMode:$("vcEventApprovalMode").value,
     allowedDays:[...document.querySelectorAll("[data-vday]:checked")].map(el=>Number(el.dataset.vday)),
     allowedPricingTypes:[...document.querySelectorAll("[data-vpricing]:checked")].map(el=>el.dataset.vpricing),
     discountAmount:Number($("vcDiscountAmount").value),discountPercent:Number($("vcDiscountPercent").value),
@@ -5208,6 +5217,7 @@ $("voucherMonstrPresetBtn").addEventListener("click",()=>{
   resetVoucherCampaignForm();
   $("vcCampaignId").value="monstr-2026";$("vcName").value="MONSTR Tournament x Ultra Tennis";
   $("vcType").value="event_pass";$("vcKeyword").value="MONSTR";$("vcPrefix").value="MSTR-";
+  $("vcEventApprovalMode").value="auto";
   $("vcValidFrom").value="2026-08-24";$("vcExpiresAt").value="2026-09-24";
   $("vcRestores").value="0";$("vcExcludeHolidays").checked=true;$("vcRequiresLine").checked=true;$("vcTransferable").checked=true;
   updateVoucherTypeFields();showToast("MONSTR preset loaded — review and Save Campaign");
@@ -5217,7 +5227,7 @@ $("voucherSaveCampaignBtn").addEventListener("click",async()=>{
   if(!canManageVouchers())return showToast("Unauthorized: Art owner only.",true);
   const campaign=voucherCampaignPayload();
   if(!campaign.campaignId||!campaign.name)return showToast("Campaign ID and name are required.",true);
-  if(!confirm(`Save campaign “${campaign.name}”?\n\nType: ${voucherTypeLabel(campaign.voucherType)}\nActive: ${campaign.active?"Yes":"No"}\nNew User quotes will use these rules immediately when codes exist.`))return;
+  if(!confirm(`Save campaign “${campaign.name}”?\n\nType: ${voucherTypeLabel(campaign.voucherType)}${campaign.voucherType==="event_pass"?`\nApproval: ${campaign.eventPassApprovalMode==="manual"?"Manual":"Auto"}`:""}\nActive: ${campaign.active?"Yes":"No"}\nNew User quotes will use these rules immediately when codes exist.`))return;
   const btn=$("voucherSaveCampaignBtn");btn.disabled=true;btn.textContent="Saving...";
   try{await voucherApi("voucher_save_campaign",{campaign});showToast("✓ Campaign saved");const id=campaign.campaignId;resetVoucherCampaignForm();await loadVoucherManager(id);editVoucherCampaign(id);}
   catch(e){showToast(e.message,true);}finally{btn.disabled=false;btn.textContent="✓ Save Campaign";}

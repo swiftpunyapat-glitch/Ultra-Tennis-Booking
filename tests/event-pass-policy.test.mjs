@@ -51,5 +51,8 @@ describe('Event Pass booking policy', () => {
     expect(adminHtml).toContain('voucher_import_codes');
     expect(customerHtml).toContain('Redeem Event Code');
     expect(customerHtml).toContain('event_pass_redeem');
+    expect(customerHtml).toContain('รับ Event Pass ทันที');
+    expect(customerHtml).toContain('data.status==="approved"');
+    expect(adminHtml).toContain('Auto Approval');
   });
 });

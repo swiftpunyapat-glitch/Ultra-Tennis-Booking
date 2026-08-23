@@ -463,7 +463,7 @@ export default async function handler(req, res) {
 
   if (body.action === 'price_quote')   return handlePriceQuote(res, body);
   if (body.action === 'create')        return handleCreate(req, res, body);
-  if (body.action === 'event_pass_redeem') return handleEventPassRedeem(res, body);
+  if (body.action === 'event_pass_redeem') return handleEventPassRedeem(req, res, body);
   if (body.action === 'event_pass_status') return handleEventPassStatus(res, body);
   // Server-side pass booking (Security Hotfix 2026-08-04 — closes SEC-02).
   // Gated by system_settings/features.useServerPassBooking. The cutover client
@@ -500,7 +500,7 @@ async function eventPassUser(idToken) {
   catch { return null; }
 }
 
-async function handleEventPassRedeem(res, body) {
+async function handleEventPassRedeem(req, res, body) {
   const normalized = normalizeCustomVoucherCode(body.code);
   if (!normalized.ok) return res.status(400).json({ ok: false, code: 'INVALID_CODE', error: 'รูปแบบ Event Code ไม่ถูกต้อง' });
   const uid = await eventPassUser(body.idToken);
@@ -509,9 +509,20 @@ async function handleEventPassRedeem(res, body) {
   try { db = getAdminDb(); }
   catch (e) { console.error('[event_pass_redeem] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
 
+  // Auto approval turns possession of a code into an immediate entitlement,
+  // so bound guessing attempts by both authenticated LINE user and source IP.
+  const redeemGate = await checkRateLimit(db, {
+    bucket: 'eventPassRedeem', key: `${uid}|${clientIp(req)}`, ...RATE_LIMITS.eventPassRedeem,
+  });
+  if (!redeemGate.allowed) {
+    res.setHeader('Retry-After', String(redeemGate.retryAfterSec));
+    return res.status(429).json({ ok: false, code: 'RATE_LIMIT', error: 'ลองใช้ Event Code หลายครั้งเกินไป กรุณารอสักครู่' });
+  }
+
   const voucherRef = db.collection('vouchers').doc(normalized.code);
   const userRef = db.collection('registered_users').doc(uid);
   const requestRef = db.collection('event_pass_requests').doc();
+  const packageRef = db.collection('customer_packages').doc();
   let result;
   try {
     await db.runTransaction(async transaction => {
@@ -535,24 +546,93 @@ async function handleEventPassRedeem(res, body) {
         result = { requestId: voucher.pendingRequestId, status: 'pending', replayed: true };
         return;
       }
+      if (voucher.state === 'redeemed' && voucher.issuedTo === uid && voucher.redeemedRequestId && voucher.redeemedPackageId) {
+        result = {
+          requestId: voucher.redeemedRequestId, packageId: voucher.redeemedPackageId,
+          status: 'approved', autoApproved: true, replayed: true,
+        };
+        return;
+      }
       if ((voucher.state || 'available') !== 'available' || Number(voucher.usedCount) > 0) throw new Error('UNAVAILABLE');
       const user = userSnap.data();
-      transaction.create(requestRef, {
+      const approvalMode = campaign.eventPassApprovalMode === 'manual' ? 'manual' : 'auto';
+      const requestPayload = {
         code: normalized.code, campaignId: voucher.campaignId,
-        status: 'pending', lineUserId: uid,
+        status: approvalMode === 'auto' ? 'approved' : 'pending', lineUserId: uid,
         lineDisplayName: String(body.lineDisplayName || user.lineDisplayName || '').slice(0, 120),
         customerName: String(user.name || '').slice(0, 160),
         customerPhone: String(user.phone || '').slice(0, 40),
         assignedName: voucher.assignedName || '', assignedDraw: voucher.assignedDraw || '',
         assignedNickname: voucher.assignedNickname || '',
         createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+        ...(approvalMode === 'auto' ? {
+          issuedPackageId: packageRef.id,
+          reviewedAt: FieldValue.serverTimestamp(), reviewedBy: 'SYSTEM_AUTO',
+        } : {}),
+      };
+      transaction.create(requestRef, requestPayload);
+
+      if (approvalMode === 'manual') {
+        transaction.update(voucherRef, {
+          state: 'pending_approval', issuedTo: uid, pendingRequestId: requestRef.id,
+          pendingAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+        });
+        result = { requestId: requestRef.id, status: 'pending', autoApproved: false, replayed: false };
+        return;
+      }
+
+      transaction.create(packageRef, {
+        lineUserId: uid,
+        customerName: user.name || '', customerPhone: user.phone || '',
+        customerPhoneNormalized: normalizePhone(user.phone),
+        lineDisplayName: String(body.lineDisplayName || user.lineDisplayName || '').slice(0, 120),
+        packageType: 'monstr_event_pass', packageName: campaign.name || 'Event Pass',
+        price: 0, ownerRole: 'customer', totalMinutes: 60, remainingMinutes: 60,
+        validityDays: null, validFrom: FieldValue.serverTimestamp(), validUntil: campaign.expiresAt,
+        status: 'active', isEventPass: true,
+        restrictDays: Array.isArray(campaign.allowedDays) ? campaign.allowedDays : [1, 2, 3, 4, 5],
+        branchId: campaign.branchId || DEFAULT_BRANCH_ID,
+        resourceId: campaign.resourceId || RESOURCE_ID,
+        excludeHolidays: campaign.excludeHolidays === true,
+        exactDurationMinutes: 60, eventUsedAt: null,
+        eventName: campaign.name || 'Event Pass',
+        sourceVoucherCode: normalized.code, sourceEventPassRequestId: requestRef.id,
+        addedByAdmin: 'SYSTEM_AUTO', source: 'event_code_auto_approved',
+        createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+        weeklyUsage: {}, monthlyUsage: {}, note: '',
       });
       transaction.update(voucherRef, {
-        state: 'pending_approval', issuedTo: uid, pendingRequestId: requestRef.id,
-        pendingAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+        state: 'redeemed', usedCount: 1, issuedTo: uid,
+        redeemedBy: uid, redeemedAt: FieldValue.serverTimestamp(),
+        redeemedPackageId: packageRef.id, redeemedRequestId: requestRef.id,
+        updatedAt: FieldValue.serverTimestamp(), updatedBy: 'SYSTEM_AUTO',
       });
-      result = { requestId: requestRef.id, status: 'pending', replayed: false };
+      result = {
+        requestId: requestRef.id, packageId: packageRef.id,
+        status: 'approved', autoApproved: true, replayed: false,
+        packageName: campaign.name || 'Event Pass', expiresAtMs: expiresAt,
+      };
     });
+
+    if (result.autoApproved && !result.replayed) {
+      await writeAuditLog(db, {
+        actor: uid, actorRole: 'customer', branchId: DEFAULT_BRANCH_ID,
+        action: 'event_pass_auto_approve', targetId: result.requestId,
+        before: { status: 'available' },
+        after: { status: 'approved', packageId: result.packageId, code: normalized.code },
+      });
+      try {
+        await sendAndLog({
+          eventId: `${normalized.code}_event_pass_activated_customer`,
+          type: 'pass_activated_customer', targetType: 'customer',
+          lineUserId: uid, bookingCode: normalized.code,
+          payload: {
+            packageName: result.packageName, remainingMinutes: 60,
+            validUntil: new Date(result.expiresAtMs).toLocaleDateString('en-GB', { timeZone: 'Asia/Bangkok' }),
+          },
+        });
+      } catch (e) { console.error('[event_pass_auto_approve] notify (non-fatal):', e.message); }
+    }
     return res.status(200).json({ ok: true, code: normalized.code, ...result });
   } catch (e) {
     const map = {

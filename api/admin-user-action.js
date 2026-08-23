@@ -845,6 +845,9 @@ function projectVoucherCampaign(doc) {
     exactDurationMinutes: Number(data.exactDurationMinutes) || 60,
     requiresLineLogin: data.requiresLineLogin !== false,
     transferable: data.transferable === true,
+    eventPassApprovalMode: data.voucherType === 'event_pass'
+      ? (data.eventPassApprovalMode === 'manual' ? 'manual' : 'auto')
+      : null,
     maxUsesPerCode: Number(data.maxUsesPerCode) || 1,
     maxCancellationRestores: Number(data.maxCancellationRestores) || 0,
     branchId: data.branchId || DEFAULT_BRANCH_ID,
@@ -953,7 +956,7 @@ async function handleVoucherAction({ req, res, adminName, session, action }) {
         action: before.exists ? 'voucher_campaign_update' : 'voucher_campaign_create',
         targetId: normalized.campaignId,
         before: before.exists ? { name: before.data().name || '', active: before.data().active === true, voucherType: before.data().voucherType || null } : null,
-        after: { name: value.name, active: value.active, voucherType: value.voucherType },
+        after: { name: value.name, active: value.active, voucherType: value.voucherType, eventPassApprovalMode: value.eventPassApprovalMode },
       });
       return res.status(200).json({ ok: true, campaignId: normalized.campaignId });
     } catch (e) {
