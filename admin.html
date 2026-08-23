@@ -708,6 +708,29 @@
       </div>
 
       <div class="smcard">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+          <div>
+            <h2 style="margin-bottom:4px">🤖 AI Booking Report Access</h2>
+            <p style="font-size:.75rem;color:var(--m);line-height:1.5">ลิงก์อ่านอย่างเดียวสำหรับ AI/ผู้ช่วยวิเคราะห์ยอดจอง เลือกเดือนได้และดูย้อนหลังได้ โดยไม่ส่งชื่อลูกค้า เบอร์โทร LINE ID หรือสลิป</p>
+          </div>
+          <button class="smbtn smgr" id="aiReportRefreshBtn">↻ Refresh Links</button>
+        </div>
+        <div class="smrow" style="margin:12px 0 10px">
+          <div class="smf" style="flex:2"><label>Link Label</label><input id="aiReportLabel" maxlength="80" value="AI Booking Report" placeholder="e.g. Ace Monthly Report"/></div>
+          <div class="smf"><label>Expires In (days)</label><input id="aiReportExpiresDays" type="number" min="1" max="3650" step="1" value="365"/></div>
+          <div class="smf"><label>Initial Month</label><input id="aiReportMonth" type="month"/></div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <label style="font-size:.75rem"><input id="aiReportDetails" type="checkbox"/> Include sanitized booking rows</label>
+          <button class="smbtn smg" id="aiReportCreateBtn">＋ Create Read-only Link</button>
+        </div>
+        <p style="font-size:.68rem;color:var(--warn);margin:9px 0 0">ลิงก์เต็มจะแสดงเพียงครั้งเดียว กรุณา Copy เก็บไว้ และกด Revoke ได้ทันทีเมื่อไม่ต้องการใช้</p>
+        <div id="aiReportCreated" style="display:none;margin-top:12px;background:var(--s2);border:1px solid var(--success);border-radius:8px;padding:10px;font-size:.72rem;word-break:break-all"></div>
+        <div class="smdiv"></div>
+        <div id="aiReportAccessList"><div class="smempty">Open this tab to load AI Report links.</div></div>
+      </div>
+
+      <div class="smcard">
         <h2 id="voucherCampaignFormTitle">Create Campaign</h2>
         <div class="smrow" style="margin-bottom:10px">
           <div class="smf"><label>Campaign ID</label><input id="vcCampaignId" maxlength="64" placeholder="e.g. monstr-2026"/></div>
@@ -5043,6 +5066,34 @@ const voucherDateOnly=value=>{
 };
 const voucherDeepLink=code=>`https://liff.line.me/2010034901-ClPr9N5v?voucher=${encodeURIComponent(code)}`;
 
+function renderAiReportAccess(links){
+  const box=$("aiReportAccessList");
+  if(!links.length){box.innerHTML=`<div class="smempty">ยังไม่มี AI Report link</div>`;return;}
+  box.innerHTML=links.map(link=>{
+    const expired=link.expiresAt&&new Date(link.expiresAt).getTime()<=Date.now();
+    const usable=link.active&&!expired;
+    const color=usable?"var(--success)":"var(--m)";
+    const status=expired?"Expired":link.active?"Active":"Revoked";
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:10px;margin-bottom:7px">
+      <div><strong>${esc(link.label)}</strong> <span style="border:1px solid ${color};color:${color};border-radius:999px;padding:2px 7px;font-size:.64rem;font-weight:800">${status}</span><br><span style="font-size:.68rem;color:var(--m)">Token •••${esc(link.tokenSuffix||"—")} · Expires ${link.expiresAt?esc(voucherDateOnly(link.expiresAt)):"—"} · Used ${Number(link.requestCount)||0} time(s)${link.lastUsedAt?` · Last ${esc(new Date(link.lastUsedAt).toLocaleString("th-TH",{timeZone:"Asia/Bangkok"}))}`:""}</span></div>
+      ${usable?`<button class="smbtn" data-ai-report-revoke="${esc(link.id)}">Revoke</button>`:""}
+    </div>`;
+  }).join("");
+}
+
+async function loadAiReportAccess(){
+  if(!canManageVouchers())return;
+  try{const data=await voucherApi("ai_report_access_list");renderAiReportAccess(data.links||[]);}
+  catch(e){$("aiReportAccessList").innerHTML=`<div class="smempty" style="color:var(--dan)">${esc(e.message)}</div>`;}
+}
+
+function showCreatedAiReportLink(url){
+  const box=$("aiReportCreated");
+  box.style.display="block";box.dataset.url=url;
+  box.innerHTML=`<strong>สร้างลิงก์แล้ว — Copy ตอนนี้ (ระบบไม่เก็บ token ตัวจริง)</strong><div data-ai-report-url style="margin:8px 0;user-select:all"></div><button class="smbtn smgr" data-ai-report-copy>Copy Link</button>`;
+  box.querySelector("[data-ai-report-url]").textContent=url;
+}
+
 function voucherStatusChip(state,active=true){
   const color=state==="available"&&active?"var(--success)":state==="pending_approval"||state==="reserved"?"var(--warn)":state==="redeemed"?"#8b5cf6":"var(--m)";
   return `<span style="display:inline-block;border:1px solid ${color};color:${color};border-radius:999px;padding:2px 7px;font-size:.65rem;font-weight:800">${esc(voucherStateLabel(state))}</span>`;
@@ -5176,7 +5227,7 @@ async function loadVoucherManager(campaignId=""){
     const data=await voucherApi("voucher_list",requested?{campaignId:requested}:{});
     voucherCampaigns=data.campaigns||[];voucherCodes=data.codes||[];
     renderVoucherCampaigns();updateVoucherCampaignSelects(requested);renderVoucherCodes();
-    await loadEventPassRequests();
+    await Promise.all([loadEventPassRequests(),loadAiReportAccess()]);
     if(!requested&&voucherCampaigns.length){
       const first=voucherCampaigns[0].id;
       $("voucherCodeCampaign").value=first;$("voucherViewCampaign").value=first;
@@ -5223,6 +5274,35 @@ $("voucherMonstrPresetBtn").addEventListener("click",()=>{
   updateVoucherTypeFields();showToast("MONSTR preset loaded — review and Save Campaign");
 });
 $("voucherRefreshBtn").addEventListener("click",()=>loadVoucherManager($("voucherViewCampaign").value));
+$("aiReportRefreshBtn").addEventListener("click",loadAiReportAccess);
+$("aiReportCreateBtn").addEventListener("click",async()=>{
+  if(!canManageVouchers())return showToast("Unauthorized: Art owner only.",true);
+  const label=$("aiReportLabel").value.trim();
+  const expiresDays=Number($("aiReportExpiresDays").value);
+  if(label.length<2)return showToast("Link label is required.",true);
+  if(!Number.isInteger(expiresDays)||expiresDays<1||expiresDays>3650)return showToast("Expiry must be 1–3,650 days.",true);
+  if(!confirm(`Create read-only AI Report link “${label}”?\n\nThe full link is shown once and contains no customer PII.`))return;
+  const btn=$("aiReportCreateBtn"),old=btn.textContent;btn.disabled=true;btn.textContent="Creating...";
+  try{
+    const data=await voucherApi("ai_report_access_create",{label,expiresDays});
+    const url=new URL("/api/ai-report",location.origin);
+    url.searchParams.set("token",data.token);
+    if($("aiReportMonth").value)url.searchParams.set("month",$("aiReportMonth").value);
+    if($("aiReportDetails").checked)url.searchParams.set("details","1");
+    showCreatedAiReportLink(url.toString());showToast("✓ AI Report link created");await loadAiReportAccess();
+  }catch(e){showToast(e.message,true);}finally{btn.disabled=false;btn.textContent=old;}
+});
+$("aiReportCreated").addEventListener("click",async event=>{
+  if(!event.target.closest("[data-ai-report-copy]"))return;
+  try{await navigator.clipboard.writeText($("aiReportCreated").dataset.url||"");showToast("✓ AI Report link copied");}catch{showToast("Copy failed",true);}
+});
+$("aiReportAccessList").addEventListener("click",async event=>{
+  const button=event.target.closest("[data-ai-report-revoke]");if(!button)return;
+  if(!confirm("Revoke this AI Report link? It will stop working immediately."))return;
+  button.disabled=true;
+  try{await voucherApi("ai_report_access_revoke",{id:button.dataset.aiReportRevoke});showToast("✓ AI Report link revoked");await loadAiReportAccess();}
+  catch(e){showToast(e.message,true);}finally{button.disabled=false;}
+});
 $("voucherSaveCampaignBtn").addEventListener("click",async()=>{
   if(!canManageVouchers())return showToast("Unauthorized: Art owner only.",true);
   const campaign=voucherCampaignPayload();
@@ -5329,6 +5409,7 @@ $("eventPassRequestList").addEventListener("click",async event=>{
   catch(e){showToast(e.message,true);}finally{button.disabled=false;}
 });
 resetVoucherCampaignForm();
+$("aiReportMonth").value=voucherDateOnly(new Date()).slice(0,7);
 
 // ── SPECIAL PROMOTION MANAGEMENT (Art only) ──────────────────────
 async function loadPromoTab() {

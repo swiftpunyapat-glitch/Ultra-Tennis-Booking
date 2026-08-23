@@ -84,7 +84,7 @@ async function seedTwoHourPaidBooking(start='10:00',{bookingId=`paid2h_${start.r
 }
 
 async function wipe(){
-  for(const c of ['bookings','booking_slots','booking_slot_claims','available_slots','holidays','customer_packages','customer_package_logs','registered_users','audit_logs','voucher_campaigns','vouchers']){
+  for(const c of ['bookings','booking_slots','booking_slot_claims','available_slots','holidays','customer_packages','customer_package_logs','registered_users','audit_logs','voucher_campaigns','vouchers','ai_report_access']){
     const s=await db.collection(c).get();await Promise.all(s.docs.map(d=>d.ref.delete()));
   }
   await db.collection('system_settings').doc('pricing').set({});
@@ -185,6 +185,9 @@ describe('locked owner role and capability matrix',()=>{
       {action:'event_pass_approve_request'},
       {action:'event_pass_reject_request'},
       {action:'event_pass_reset_code'},
+      {action:'ai_report_access_list'},
+      {action:'ai_report_access_create'},
+      {action:'ai_report_access_revoke'},
     ];
     for(const body of passActions){
       expect((await call(userActionHandler,body,'Staff')).statusCode,`staff ${body.action}`).toBe(403);
@@ -223,6 +226,22 @@ describe('locked owner role and capability matrix',()=>{
       expect((await call(userActionHandler,{action},'Art')).statusCode,`Art ${action}`).not.toBe(403);
       expect((await call(userActionHandler,{action},'Boss')).statusCode,`Boss ${action}`).toBe(403);
     }
+  });
+
+  test('AI Report access management is pinned to Art owner and never lists raw tokens',async()=>{
+    for(const action of ['ai_report_access_list','ai_report_access_create','ai_report_access_revoke']){
+      expect((await call(userActionHandler,{action},'Boss')).statusCode,`Boss ${action}`).toBe(403);
+    }
+    const created=await call(userActionHandler,{action:'ai_report_access_create',label:'Ace Test',expiresDays:30},'Art');
+    expect(created.statusCode).toBe(200);
+    expect(created.body.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const listed=await call(userActionHandler,{action:'ai_report_access_list'},'Art');
+    expect(listed.statusCode).toBe(200);
+    expect(listed.body.links).toHaveLength(1);
+    expect(JSON.stringify(listed.body)).not.toContain(created.body.token);
+    const revoked=await call(userActionHandler,{action:'ai_report_access_revoke',id:created.body.access.id},'Art');
+    expect(revoked.statusCode).toBe(200);
+    expect((await db.collection('ai_report_access').doc(created.body.access.id).get()).data().active).toBe(false);
   });
 
   test('branch staff manual booking is unpaid-only',async()=>{

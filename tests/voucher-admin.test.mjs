@@ -105,6 +105,17 @@ describe('Voucher Manager code creation', () => {
 });
 
 describe('Voucher Manager security surface', () => {
+  test('adds Art-only read-only AI Report controls without PII', () => {
+    for (const id of ['aiReportLabel', 'aiReportExpiresDays', 'aiReportMonth', 'aiReportDetails', 'aiReportCreateBtn', 'aiReportAccessList']) {
+      expect(adminHtml).toContain(`id="${id}"`);
+    }
+    for (const action of ['ai_report_access_list', 'ai_report_access_create', 'ai_report_access_revoke']) {
+      expect(adminApi).toContain(`'${action}'`);
+    }
+    expect(adminApi).toContain("includesPii: false");
+    expect(adminApi).toContain("tokenShownOnce: true");
+  });
+
   test('exposes an owner-controlled Event Pass approval mode with MONSTR set to auto', () => {
     expect(adminHtml).toContain('id="vcEventApprovalMode"');
     expect(adminHtml).toContain('eventPassApprovalMode:$("vcEventApprovalMode").value');

@@ -425,6 +425,7 @@ export const RATE_LIMITS = {
   guestRead:     { limit: 30, windowMs: 15 * 60 * 1000, blockMs: 0 },
   guestMutation: { limit: 5,  windowMs: 15 * 60 * 1000, blockMs: 0 },
   eventPassRedeem: { limit: 10, windowMs: 10 * 60 * 1000, blockMs: 10 * 60 * 1000 },
+  aiReportRead: { limit: 60, windowMs: 60 * 60 * 1000, blockMs: 60 * 60 * 1000 },
 };
 
 export function canonicalIp(value) {

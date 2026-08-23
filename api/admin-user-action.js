@@ -20,6 +20,9 @@ import {
   generateVoucherCodes, normalizeCampaignInput,
   normalizeCustomVoucherCode, normalizeRandomCodeRequest, normalizeVoucherImportRecords,
 } from './_lib/voucher-admin.js';
+import {
+  createAiReportToken, hashAiReportToken, normalizeAiReportAccessInput,
+} from './_lib/ai-report.js';
 
 const ACTIVE_PACKAGES = {
   ultra_starter_3: {
@@ -119,6 +122,16 @@ export default async function handler(req, res) {
       return res.status(403).json({ ok: false, error: 'Access denied: Art owner only.' });
     }
     return handleVoucherAction({ req, res, adminName, session, action });
+  }
+
+  const aiReportAccessActions = new Set([
+    'ai_report_access_list', 'ai_report_access_create', 'ai_report_access_revoke',
+  ]);
+  if (aiReportAccessActions.has(action)) {
+    if (adminName !== 'Art' || !requireRole(session, 'owner')) {
+      return res.status(403).json({ ok: false, error: 'Access denied: Art owner only.' });
+    }
+    return handleAiReportAccessAction({ req, res, adminName, session, action });
   }
 
   // ── Pricing actions (owner-only) ─────────────────────────────────
@@ -817,6 +830,129 @@ async function handleDeactivatePass({ req, res, adminName, session }) {
   });
 
   return res.status(200).json({ ok: true });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// AI Report access — Art owner only. Raw tokens are returned once and
+// never stored; Firestore contains only their SHA-256 hashes.
+// ════════════════════════════════════════════════════════════════════
+const aiReportTimestampIso = value => value?.toDate?.()?.toISOString?.() ?? null;
+
+function projectAiReportAccess(doc) {
+  const data = doc.data();
+  return {
+    id: doc.id,
+    label: data.label || 'AI Booking Report',
+    active: data.active === true,
+    tokenSuffix: data.tokenSuffix || '',
+    scopes: Array.isArray(data.scopes) ? data.scopes : [],
+    includesPii: false,
+    createdAt: aiReportTimestampIso(data.createdAt),
+    createdBy: data.createdBy || null,
+    expiresAt: aiReportTimestampIso(data.expiresAt),
+    lastUsedAt: aiReportTimestampIso(data.lastUsedAt),
+    requestCount: Number(data.requestCount) || 0,
+    revokedAt: aiReportTimestampIso(data.revokedAt),
+    revokedBy: data.revokedBy || null,
+  };
+}
+
+async function handleAiReportAccessAction({ req, res, adminName, session, action }) {
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) {
+    console.error('[ai_report_access] DB init:', e.message);
+    return res.status(500).json({ ok: false, error: 'Database not available' });
+  }
+  const collection = db.collection('ai_report_access');
+
+  if (action === 'ai_report_access_list') {
+    try {
+      const snap = await collection.limit(100).get();
+      const links = snap.docs.map(projectAiReportAccess)
+        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      return res.status(200).json({ ok: true, links, limit: 100 });
+    } catch (e) {
+      console.error('[ai_report_access_list]', e.message);
+      return res.status(500).json({ ok: false, error: 'Failed to load AI Report links' });
+    }
+  }
+
+  if (action === 'ai_report_access_create') {
+    const normalized = normalizeAiReportAccessInput(req.body || {});
+    if (!normalized.ok) return res.status(400).json({ ok: false, error: normalized.error });
+    const token = createAiReportToken();
+    const tokenHash = hashAiReportToken(token);
+    const expiresAtMs = Date.now() + normalized.expiresDays * 24 * 60 * 60 * 1000;
+    const ref = collection.doc(tokenHash);
+    try {
+      await ref.create({
+        schemaVersion: 1,
+        label: normalized.label,
+        active: true,
+        tokenSuffix: token.slice(-6),
+        scopes: ['booking_summary', 'booking_details_sanitized'],
+        includesPii: false,
+        createdAt: FieldValue.serverTimestamp(),
+        createdBy: adminName,
+        expiresAt: Timestamp.fromMillis(expiresAtMs),
+        lastUsedAt: null,
+        requestCount: 0,
+        revokedAt: null,
+        revokedBy: null,
+      });
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+        action: 'ai_report_access_create', targetId: tokenHash,
+        before: null,
+        after: { label: normalized.label, active: true, expiresAt: new Date(expiresAtMs).toISOString(), includesPii: false },
+        note: 'Created read-only AI Booking Report access',
+      });
+      return res.status(200).json({
+        ok: true,
+        token,
+        access: {
+          id: tokenHash,
+          label: normalized.label,
+          active: true,
+          tokenSuffix: token.slice(-6),
+          includesPii: false,
+          expiresAt: new Date(expiresAtMs).toISOString(),
+        },
+        tokenShownOnce: true,
+      });
+    } catch (e) {
+      console.error('[ai_report_access_create]', e.message);
+      return res.status(500).json({ ok: false, error: 'Failed to create AI Report link' });
+    }
+  }
+
+  if (action === 'ai_report_access_revoke') {
+    const id = String(req.body?.id || '').trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(id)) return res.status(400).json({ ok: false, error: 'Invalid AI Report link ID' });
+    const ref = collection.doc(id);
+    try {
+      const before = await ref.get();
+      if (!before.exists) return res.status(404).json({ ok: false, error: 'AI Report link not found' });
+      await ref.update({
+        active: false,
+        revokedAt: FieldValue.serverTimestamp(),
+        revokedBy: adminName,
+      });
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+        action: 'ai_report_access_revoke', targetId: id,
+        before: { active: before.data().active === true }, after: { active: false },
+        note: `Revoked read-only AI Booking Report access (${before.data().label || 'unnamed'})`,
+      });
+      return res.status(200).json({ ok: true });
+    } catch (e) {
+      console.error('[ai_report_access_revoke]', e.message);
+      return res.status(500).json({ ok: false, error: 'Failed to revoke AI Report link' });
+    }
+  }
+
+  return res.status(400).json({ ok: false, error: `Unsupported AI Report action: ${action}` });
 }
 
 // ════════════════════════════════════════════════════════════════════
