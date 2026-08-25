@@ -9,6 +9,8 @@ describe('Admin unified customer profile Hub', () => {
       'customerProfileSearch',
       'customerProfileSearchBtn',
       'customerProfileClearBtn',
+      'customerProfileSort',
+      'customerProfilePassFilter',
       'customersList',
     ]) expect(adminHtml).toContain(`id="${id}"`);
 
@@ -17,6 +19,21 @@ describe('Admin unified customer profile Hub', () => {
     expect(adminHtml).toContain('customerProfileState==="loading"');
     expect(adminHtml).toContain('customerProfileState==="error"');
     expect(adminHtml).toContain('ไม่พบลูกค้าที่ตรงกับ');
+  });
+
+  test('sorts by real visits and supports practical customer filters', () => {
+    for (const value of ['last_played', 'most_played', 'upcoming', 'pass_minutes', 'name']) {
+      expect(adminHtml).toContain(`value="${value}"`);
+    }
+    for (const value of ['all', 'with_pass', 'without_pass']) {
+      expect(adminHtml).toContain(`value="${value}"`);
+    }
+    expect(adminHtml).toContain('function filterAndSortCustomerProfiles(profiles)');
+    expect(adminHtml).toContain('profile.lastPlayedAt=playedBookings.reduce');
+    expect(adminHtml).toContain('booking.bookingStatus==="completed"');
+    expect(adminHtml).toContain('booking.bookingStatus!=="confirmed"');
+    expect(adminHtml).toContain('return (b.lastPlayedAt||"").localeCompare(a.lastPlayedAt||"")');
+    expect(adminHtml).toContain('b.playedCount-a.playedCount');
   });
 
   test('joins existing booking, registered-user and package data without schema changes', () => {

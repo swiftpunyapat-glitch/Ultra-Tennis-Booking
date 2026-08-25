@@ -308,6 +308,11 @@
     .customer-searchbar{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:8px;align-items:end;}
     .customer-searchbar input{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:8px;color:var(--t);padding:9px 11px;font-size:.84rem;}
     .customer-searchbar input:focus{outline:none;border-color:var(--g);}
+    .customer-filterbar{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap;}
+    .customer-filterbar .smf{flex:0 1 230px;min-width:180px;}
+    .customer-filterbar select{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:8px;color:var(--t);padding:8px 10px;font-size:.8rem;}
+    .customer-filterbar select:focus{outline:none;border-color:var(--g);}
+    .customer-filterbar .rfbtn{margin-left:auto;min-height:36px;}
     .customer-hub-grid{display:grid;grid-template-columns:minmax(250px,320px) minmax(0,1fr);gap:12px;align-items:start;}
     .customer-directory,.customer-profile{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;}
     .customer-panel-hdr{padding:10px 12px;background:var(--s2);border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;gap:8px;}
@@ -379,6 +384,9 @@
       .cl-row{grid-template-columns:1fr;}
       .customer-searchbar{grid-template-columns:1fr 1fr;}
       .customer-searchbar .smf{grid-column:1/-1;}
+      .customer-filterbar{display:grid;grid-template-columns:1fr 1fr;}
+      .customer-filterbar .smf{min-width:0;}
+      .customer-filterbar .rfbtn{grid-column:1/-1;margin-left:0;}
       .customer-hub-grid{grid-template-columns:1fr;}
       .customer-result-list{max-height:270px;}
       .customer-profile-top{display:block;}
@@ -732,8 +740,28 @@
       <button class="smbtn smg" id="customerProfileSearchBtn">ค้นหา</button>
       <button class="smbtn smgr" id="customerProfileClearBtn">ล้าง</button>
     </div>
+    <div class="filters customer-filterbar">
+      <div class="smf">
+        <label for="customerProfileSort">เรียงลูกค้าตาม</label>
+        <select id="customerProfileSort">
+          <option value="last_played">วันที่มาเล่นล่าสุด</option>
+          <option value="most_played">จำนวนครั้งที่เล่นมากสุด</option>
+          <option value="upcoming">มีคิวเร็วที่สุด</option>
+          <option value="pass_minutes">นาที Pass คงเหลือมากสุด</option>
+          <option value="name">ชื่อ A–Z</option>
+        </select>
+      </div>
+      <div class="smf">
+        <label for="customerProfilePassFilter">กรองตาม Pass</label>
+        <select id="customerProfilePassFilter">
+          <option value="all">ลูกค้าทั้งหมด</option>
+          <option value="with_pass">มี Active Pass</option>
+          <option value="without_pass">ไม่มี Active Pass</option>
+        </select>
+      </div>
+      <button class="rfbtn" id="custRefreshBtn">↻ Refresh ทั้งหมด</button>
+    </div>
     <div class="main">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="rfbtn" id="custRefreshBtn">↻ Refresh ทั้งหมด</button></div>
       <div id="customersList"><div class="lstate"><div class="spinner"></div><p>Loading customer profiles...</p></div></div>
     </div>
   </div>
@@ -3088,19 +3116,36 @@ function buildCustomerProfiles(){
     if(!profile.customerPhone&&pass.customerPhone)profile.customerPhone=pass.customerPhone;
   });
 
-  const todayISO=formatLocalISODate(new Date());
+  const now=new Date();
+  const todayISO=formatLocalISODate(now);
+  const nowTime=`${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
   custListData=[...profiles.values()].map(profile=>{
     profile.bookings.sort((a,b)=>`${b.date||""} ${b.startTime||""}`.localeCompare(`${a.date||""} ${a.startTime||""}`));
     profile.passes.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    const playedBookings=profile.bookings.filter(booking=>{
+      if(!booking.date||booking.date>todayISO)return false;
+      if(booking.bookingStatus==="completed")return true;
+      if(booking.bookingStatus!=="confirmed")return false;
+      return booking.date<todayISO||(booking.date===todayISO&&(booking.endTime||booking.startTime||"00:00")<=nowTime);
+    });
+    const upcomingBookings=profile.bookings.filter(booking=>booking.bookingStatus==="confirmed"&&booking.date&&(
+      booking.date>todayISO||(booking.date===todayISO&&(booking.startTime||"23:59")>nowTime)
+    )).sort((a,b)=>`${a.date} ${a.startTime||""}`.localeCompare(`${b.date} ${b.startTime||""}`));
     profile.total=profile.bookings.length;
     profile.confirmed=profile.bookings.filter(b=>b.bookingStatus==="confirmed"||b.bookingStatus==="completed").length;
     profile.cancelled=profile.bookings.filter(b=>b.bookingStatus==="cancelled").length;
     profile.pending=profile.bookings.filter(b=>b.bookingStatus==="pending_payment"||isPendingRescheduleBooking(b)).length;
-    profile.playedCount=profile.bookings.filter(b=>(b.bookingStatus==="confirmed"||b.bookingStatus==="completed")&&b.date&&b.date<=todayISO).length;
-    profile.upcomingCount=profile.bookings.filter(b=>b.bookingStatus==="confirmed"&&b.date>todayISO).length;
+    profile.playedCount=playedBookings.length;
+    profile.upcomingCount=upcomingBookings.length;
+    profile.lastPlayedAt=playedBookings.reduce((latest,booking)=>{
+      const playedAt=`${booking.date} ${booking.endTime||booking.startTime||"00:00"}`;
+      return playedAt>latest?playedAt:latest;
+    },"");
+    profile.lastPlayedDate=profile.lastPlayedAt.slice(0,10);
+    profile.nextBookingAt=upcomingBookings.length?`${upcomingBookings[0].date} ${upcomingBookings[0].startTime||""}`:"";
     profile.remainingMinutes=profile.passes.reduce((sum,pass)=>sum+(Number(pass.remainingMinutes)||0),0);
     return profile;
-  }).sort((a,b)=>(b.lastDate||"").localeCompare(a.lastDate||"")||(a.customerName||"").localeCompare(b.customerName||""));
+  });
   if(selectedCustomerProfileKey&&!custListData.some(profile=>profile.key===selectedCustomerProfileKey))selectedCustomerProfileKey=null;
 }
 
@@ -3111,6 +3156,25 @@ function customerProfileMatches(profile,query){
   const text=[profile.customerName,profile.customerPhone,profile.normalizedPhone,profile.lineDisplayName,
     ...profile.passes.map(pass=>pass.packageName)].filter(Boolean).join(" ").toLowerCase();
   return text.includes(q)||(phoneQuery&&String(profile.normalizedPhone||"").includes(phoneQuery));
+}
+function filterAndSortCustomerProfiles(profiles){
+  const passFilter=$("customerProfilePassFilter")?.value||"all";
+  const sortMode=$("customerProfileSort")?.value||"last_played";
+  const filtered=profiles.filter(profile=>passFilter==="with_pass"?profile.passes.length>0:passFilter==="without_pass"?profile.passes.length===0:true);
+  const byName=(a,b)=>(a.customerName||a.lineDisplayName||"").localeCompare(b.customerName||b.lineDisplayName||"","th",{sensitivity:"base"});
+  const compare=(a,b)=>{
+    if(sortMode==="most_played")return b.playedCount-a.playedCount||(b.lastPlayedAt||"").localeCompare(a.lastPlayedAt||"")||byName(a,b);
+    if(sortMode==="upcoming"){
+      if(!a.nextBookingAt&&!b.nextBookingAt)return byName(a,b);
+      if(!a.nextBookingAt)return 1;
+      if(!b.nextBookingAt)return -1;
+      return a.nextBookingAt.localeCompare(b.nextBookingAt)||byName(a,b);
+    }
+    if(sortMode==="pass_minutes")return b.remainingMinutes-a.remainingMinutes||b.passes.length-a.passes.length||byName(a,b);
+    if(sortMode==="name")return byName(a,b);
+    return (b.lastPlayedAt||"").localeCompare(a.lastPlayedAt||"")||b.playedCount-a.playedCount||byName(a,b);
+  };
+  return filtered.sort(compare);
 }
 function customerPassValidity(pass){
   const date=tsToDate(pass.validUntil);
@@ -3175,13 +3239,14 @@ function renderCustomerListTab(){
   if(customerProfileState==="loading"){el.innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading customer profiles...</p></div>`;return;}
   if(customerProfileState==="error"){el.innerHTML=`<div class="customer-state">❌ โหลดข้อมูลลูกค้าไม่สำเร็จ<br><button class="smbtn smgr" id="customerProfileRetry" style="margin-top:10px">ลองอีกครั้ง</button></div>`;$("customerProfileRetry")?.addEventListener("click",()=>loadCustomerProfileHub({force:true}));return;}
   const query=$("customerProfileSearch")?.value||"";
-  const filtered=custListData.filter(profile=>customerProfileMatches(profile,query));
+  const filtered=filterAndSortCustomerProfiles(custListData.filter(profile=>customerProfileMatches(profile,query)));
   if(!selectedCustomerProfileKey&&filtered.length)selectedCustomerProfileKey=filtered[0].key;
   if(selectedCustomerProfileKey&&!filtered.some(profile=>profile.key===selectedCustomerProfileKey))selectedCustomerProfileKey=filtered[0]?.key||null;
   const selected=custListData.find(profile=>profile.key===selectedCustomerProfileKey)||null;
   const results=filtered.map(profile=>`<button class="customer-result${profile.key===selectedCustomerProfileKey?" on":""}" data-customer-key="${esc(profile.key)}">
     <div class="customer-result-name">${esc(profile.customerName||profile.lineDisplayName||"ไม่ระบุชื่อ")}</div>
-    <div class="customer-result-meta">${esc(profile.customerPhone||"ไม่มีเบอร์")} · ${profile.total} bookings · ${profile.passes.length} active pass</div>
+    <div class="customer-result-meta">${esc(profile.customerPhone||"ไม่มีเบอร์")} · มาแล้ว ${profile.playedCount} ครั้ง · ล่าสุด ${esc(profile.lastPlayedDate||"ยังไม่เคยมา")}</div>
+    <div class="customer-result-meta">${profile.total} bookings · ${profile.passes.length} active pass${profile.nextBookingAt?` · คิวถัดไป ${esc(profile.nextBookingAt.slice(0,10))}`:""}</div>
   </button>`).join("")||`<div class="customer-state">ไม่พบลูกค้าที่ตรงกับ “${esc(query)}”</div>`;
   el.innerHTML=`<div class="customer-hub-grid">
     <section class="customer-directory">
@@ -5425,6 +5490,11 @@ function applyCustomerProfileSearch(){
 $("customerProfileSearchBtn").addEventListener("click",applyCustomerProfileSearch);
 $("customerProfileSearch").addEventListener("input",applyCustomerProfileSearch);
 $("customerProfileSearch").addEventListener("keydown",event=>{if(event.key==="Enter")applyCustomerProfileSearch();});
+$("customerProfileSort").addEventListener("change",renderCustomerListTab);
+$("customerProfilePassFilter").addEventListener("change",()=>{
+  selectedCustomerProfileKey=null;
+  renderCustomerListTab();
+});
 $("customerProfileClearBtn").addEventListener("click",()=>{
   $("customerProfileSearch").value="";
   applyCustomerProfileSearch();
