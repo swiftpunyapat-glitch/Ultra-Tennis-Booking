@@ -28,17 +28,40 @@
     .lbtn:hover{background:#e6c200;}
     .lerr{color:var(--dan);font-size:.8rem;margin-top:10px;display:none;}
 
-    /* HEADER */
+    /* HEADER + UNIFIED ADMIN NAVIGATION */
     .ahdr{background:var(--s);border-bottom:1px solid var(--bd);padding:13px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;gap:12px;}
     .ahdr-l h1{font-size:.95rem;font-weight:900;}
     .ahdr-l span{font-size:.68rem;color:var(--m);}
-    .ahdr-r{display:flex;align-items:center;gap:8px;}
+    .ahdr-r{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;}
+    .ahdr-r a{color:var(--mid);text-decoration:none;font-size:.72rem;font-weight:800;}
     .abadge{background:var(--gd);border:1px solid var(--g);color:var(--g);padding:3px 9px;border-radius:999px;font-size:.72rem;font-weight:700;}
     .loutbtn{background:var(--s2);border:1px solid var(--bd);color:var(--m);padding:5px 11px;border-radius:8px;font-size:.72rem;font-weight:700;}
     .loutbtn:hover{border-color:var(--dan);color:var(--dan);}
+    .mode-switch{display:none;background:#2d1e5f;border:1px solid #a78bfa;color:#d8c8ff;padding:6px 10px;border-radius:999px;font-size:.7rem;font-weight:900;white-space:nowrap;}
+    .mode-switch.staff{background:var(--s2);border-color:var(--bd);color:var(--mid);}
+    .quickbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:10px 18px;background:#091725;border-bottom:1px solid var(--bd);}
+    .quick-action{position:relative;min-height:42px;padding:8px 10px;border-radius:9px;background:var(--s2);border:1px solid var(--bd);color:var(--mid);font-size:.72rem;font-weight:850;line-height:1.25;text-align:center;}
+    .quick-action:hover{border-color:var(--g);color:var(--g);}
+    .quick-action.primary{background:var(--gd);border-color:var(--g);color:var(--g);}
+    .queue-badge{display:none;min-width:19px;height:19px;padding:0 5px;border-radius:999px;background:var(--dan);color:#fff;font-size:.62rem;font-weight:950;align-items:center;justify-content:center;vertical-align:middle;margin-left:4px;}
+    .queue-badge.show{display:inline-flex;}
+    .queue-badge.loading{display:inline-flex;background:var(--bd);color:var(--mid);}
+    .hubbar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;padding:10px 18px;background:var(--s);border-bottom:1px solid var(--bd);}
+    .hub-btn{min-width:0;padding:10px 8px;border-radius:10px;background:var(--s2);border:1px solid var(--bd);color:var(--m);font-size:.74rem;font-weight:900;line-height:1.25;}
+    .hub-btn:hover{color:var(--t);border-color:var(--mid);}
+    .hub-btn.on{background:var(--gd);border-color:var(--g);color:var(--g);box-shadow:0 0 0 1px var(--gd) inset;}
+    .hub-btn[hidden]{display:none;}
+    .hub-context{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 18px;background:#0a1826;border-bottom:1px solid var(--bd);}
+    .hub-title{font-size:.69rem;color:var(--m);font-weight:850;white-space:nowrap;}
+    .hub-subnav{display:flex;justify-content:flex-end;gap:6px;overflow-x:auto;scrollbar-width:thin;}
+    .hub-subbtn{flex:0 0 auto;padding:6px 10px;border-radius:999px;background:var(--s2);border:1px solid var(--bd);color:var(--m);font-size:.68rem;font-weight:850;white-space:nowrap;text-decoration:none;}
+    .hub-subbtn:hover{border-color:var(--mid);color:var(--t);}
+    .hub-subbtn.on{border-color:var(--g);background:var(--gd);color:var(--g);}
+    .hub-subbtn[hidden]{display:none;}
 
     /* TABS */
     .tabbar{display:flex;background:var(--s);border-bottom:1px solid var(--bd);}
+    .legacy-tabbar{display:none!important;}
     .tab{flex:1;padding:11px 6px;font-size:.8rem;font-weight:800;color:var(--m);background:none;border-bottom:2px solid transparent;transition:all .15s;}
     .tab.on{color:var(--g);border-bottom-color:var(--g);}
 
@@ -306,6 +329,17 @@
     }
 
     @media(max-width:600px){
+      .ahdr{position:static;padding:10px 13px;align-items:flex-start;}
+      .ahdr-l h1{font-size:.84rem;}
+      .ahdr-r{gap:5px;}
+      .ahdr-r a,.abadge,.loutbtn,.mode-switch{font-size:.64rem;padding:5px 8px;}
+      .quickbar{grid-template-columns:repeat(2,minmax(0,1fr));padding:8px 10px;gap:6px;}
+      .quick-action{min-height:44px;padding:7px 6px;font-size:.68rem;}
+      .hubbar{grid-template-columns:repeat(2,minmax(0,1fr));padding:8px 10px;gap:6px;}
+      .hub-btn{min-height:48px;font-size:.69rem;padding:7px 5px;}
+      .hub-context{display:block;padding:8px 10px;}
+      .hub-title{margin-bottom:7px;}
+      .hub-subnav{justify-content:flex-start;padding-bottom:2px;}
       .main{padding:12px 13px;}
       .bfields{grid-template-columns:1fr 1fr;}
       .srow{grid-template-columns:88px 1fr auto;}
@@ -355,10 +389,28 @@
 <div id="mainApp" style="display:none">
   <header class="ahdr">
     <div class="ahdr-l"><h1>🎾 Ultra Tennis · Admin</h1><span id="lastUpd">—</span></div>
-    <div class="ahdr-r"><a href="/ultra-finance.html">💰 Finance</a><span id="gcalHdrChip" style="display:none" class="gcal-chip gcal-dim" title="Google Calendar connection status">📅 GCal</span><span class="abadge" id="adminBadge">—</span><button class="loutbtn" id="logoutBtn">Logout</button></div>
+    <div class="ahdr-r"><a id="financeHeaderLink" href="/ultra-finance.html" style="display:none">💰 Finance</a><button class="mode-switch staff" id="adminModeSwitch" type="button" aria-pressed="false">🧑‍💼 Staff View</button><span id="gcalHdrChip" style="display:none" class="gcal-chip gcal-dim" title="Google Calendar connection status">📅 GCal</span><span class="abadge" id="adminBadge">—</span><button class="loutbtn" id="logoutBtn">Logout</button></div>
   </header>
 
-  <div class="tabbar" style="overflow-x:auto;flex-wrap:nowrap">
+  <div class="quickbar" id="quickActionBar" aria-label="Quick actions">
+    <button class="quick-action primary" id="quickManualBooking" type="button">➕ จอง Walk-in / Manual</button>
+    <button class="quick-action" id="quickSlipQueue" type="button">🧾 ตรวจสลิปด่วน <span class="queue-badge loading" id="quickSlipBadge">…</span></button>
+    <button class="quick-action" id="quickRescheduleQueue" type="button">📅 คิวเลื่อนวัน <span class="queue-badge loading" id="quickRescheduleBadge">…</span></button>
+    <button class="quick-action" id="quickCopySlotAlert" type="button">⚡ คัดลอกข้อความสนามว่าง</button>
+  </div>
+
+  <nav class="hubbar" id="adminHubBar" aria-label="Admin hubs">
+    <button class="hub-btn" type="button" data-admin-hub="ops">🟢 1. หน้าสนาม &amp; ตาราง</button>
+    <button class="hub-btn on" type="button" data-admin-hub="bookings">🟡 2. จอง &amp; ตรวจสลิป <span class="queue-badge loading" id="bookingHubBadge">…</span></button>
+    <button class="hub-btn" type="button" data-admin-hub="customers">🔵 3. ลูกค้า &amp; Pass</button>
+    <button class="hub-btn" id="managementHubBtn" type="button" data-admin-hub="management" hidden>⚙️ 4. ตั้งค่า &amp; การเงิน</button>
+  </nav>
+  <div class="hub-context" id="adminHubContext">
+    <div class="hub-title" id="adminHubTitle">รายการจอง &amp; ตรวจสลิป</div>
+    <div class="hub-subnav" id="adminHubSubnav" aria-label="Hub sections"></div>
+  </div>
+
+  <div class="tabbar legacy-tabbar" aria-hidden="true">
     <button class="tab on" data-tab="bookings" style="flex:0 0 auto">📋 Bookings</button>
     <button class="tab" data-tab="daily" style="flex:0 0 auto">📅 Daily View</button>
     <button class="tab" data-tab="slots" style="flex:0 0 auto">🗓 Slots</button>
@@ -486,7 +538,7 @@
       </div>
 
       <!-- LATE NIGHT SLOTS — 00:00–06:00, manual admin control only -->
-      <div class="smcard" style="border-color:#fb923c">
+      <div class="smcard" id="lateNightSlotsCard" style="border-color:#fb923c">
         <h2 style="color:#fb923c">🌙 Late Night Slots (00:00–06:00)</h2>
         <p id="lnPriceInfo" style="font-size:.75rem;color:var(--m);margin-bottom:11px;line-height:1.5">Price: ฿450 · <strong>NOT opened</strong> by Open This Day or Open Full Week. Admin must open manually before broadcasting to customers.</p>
         <div class="smrow">
@@ -1295,8 +1347,10 @@ function showApp(n){
   $("loginScreen").style.display="none";
   $("mainApp").style.display="block";
   $("adminBadge").textContent=n;
+  initializeAdminNavigation();
   updateActivityTabAccess();
   updateVoucherTabAccess();
+  syncUnifiedNavigation(document.querySelector(".tab.on")?.dataset.tab||"bookings");
 }
 $("pinEye").addEventListener("click",()=>{const p=$("pinIn");p.type=p.type==="password"?"text":"password";});
 $("pinIn").addEventListener("keydown",e=>{if(e.key==="Enter")$("loginBtn").click();});
@@ -1316,13 +1370,174 @@ $("logoutBtn").addEventListener("click",async()=>{
   try{await fetch('/api/admin-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'logout'})});}catch{}
   currentAdminName=null;
   currentAdminRole=null;
+  adminViewMode="staff";
+  document.body.dataset.adminView="staff";
   $("mainApp").style.display="none";$("loginScreen").style.display="flex";
   $("adminSel").value="";$("pinIn").value="";
 });
 
-// ── TABS ─────────────────────────────────────────────────────────
+// ── FOUR UNIFIED HUBS + STAFF / OWNER VIEW ───────────────────────
+// Every destination points to one of the original eleven panels. The legacy
+// panel IDs and click lifecycle stay intact so this navigation layer cannot
+// silently drop an existing feature.
+const ADMIN_HUBS={
+  ops:{title:"หน้าสนาม & ตารางประจำวัน",defaultTab:"daily",items:[
+    {key:"daily",tab:"daily",label:"📅 ตารางรายวัน"},
+    {key:"slots",tab:"slots",label:"🗓 เปิด/ปิดสนาม"},
+    {key:"late-night",tab:"slots",label:"🌙 สล็อตดึก & วันหยุด",focusId:"lateNightSlotsCard"},
+  ]},
+  bookings:{title:"รายการจอง & ตรวจสลิป",defaultTab:"bookings",items:[
+    {key:"bookings",tab:"bookings",label:"📋 รายการจอง"},
+    {key:"slips",tab:"slips",label:"🧾 รอตรวจสลิป",badgeId:"subSlipBadge"},
+    {key:"pending",tab:"pending",label:"⏳ รอเลื่อนวัน",badgeId:"subRescheduleBadge"},
+  ]},
+  customers:{title:"ลูกค้า & แพ็กเกจ Pass",defaultTab:"customers",items:[
+    {key:"customers",tab:"customers",label:"👥 ลูกค้า"},
+    {key:"passes",tab:"passes",label:"🎫 Pass"},
+  ]},
+  management:{title:"การบริหาร & การเงิน",defaultTab:"promo",ownerOnly:true,items:[
+    {key:"finance",href:"/ultra-finance.html",label:"💰 การเงิน"},
+    {key:"promo",tab:"promo",label:"🔥 ราคา & โปรโมชัน"},
+    {key:"vouchers",tab:"vouchers",label:"🎟 Voucher & Event Pass",permission:"vouchers"},
+    {key:"coach",tab:"coach",label:"🎾 โค้ช & ค้างโอน"},
+    {key:"activity",tab:"activity",label:"📜 Activity Logs",permission:"activity"},
+  ]},
+};
+const TAB_TO_ADMIN_HUB=Object.fromEntries(Object.entries(ADMIN_HUBS).flatMap(([hub,config])=>config.items.filter(item=>item.tab).map(item=>[item.tab,hub])));
+const adminHubLastTab={ops:"daily",bookings:"bookings",customers:"customers",management:"promo"};
+const adminHubLastSub={ops:"daily",bookings:"bookings",customers:"customers",management:"promo"};
+let adminViewMode="staff",activeAdminHub="bookings",activeAdminSubKey="bookings",lastStaffAdminTab="bookings",adminQueueState="loading";
+
+function canSwitchOwnerView(){
+  return currentAdminRole==="owner"||currentAdminRole==="ultra_admin";
+}
+function adminViewPreferenceKey(){
+  return `ultra_admin_view_${String(currentAdminName||"admin").replace(/[^a-z0-9_-]/gi,"_")}`;
+}
+function readAdminViewPreference(){
+  if(!canSwitchOwnerView())return "staff";
+  try{return localStorage.getItem(adminViewPreferenceKey())==="owner"?"owner":"staff";}catch{return "staff";}
+}
+function storeAdminViewPreference(){
+  if(!canSwitchOwnerView())return;
+  try{localStorage.setItem(adminViewPreferenceKey(),adminViewMode);}catch{}
+}
+function isAdminHubAvailable(hub){
+  return hub!=="management"||(adminViewMode==="owner"&&canSwitchOwnerView());
+}
+function isAdminItemAvailable(item){
+  if(!item)return false;
+  if(item.permission==="vouchers")return canManageVouchers();
+  if(item.permission==="activity")return canViewActivityFeed();
+  return true;
+}
+function isAdminTabAllowed(tab){
+  const hub=TAB_TO_ADMIN_HUB[tab];
+  const item=hub&&ADMIN_HUBS[hub].items.find(candidate=>candidate.tab===tab);
+  return !!hub&&isAdminHubAvailable(hub)&&isAdminItemAvailable(item);
+}
+function setQueueBadge(id,count,state="ready"){
+  const badge=$(id);if(!badge)return;
+  badge.classList.remove("loading","show");
+  if(state==="loading"){badge.textContent="…";badge.classList.add("loading");return;}
+  if(state==="error"){badge.textContent="!";badge.classList.add("show");return;}
+  badge.textContent=String(count||0);
+  if(Number(count)>0)badge.classList.add("show");
+}
+function updateAdminQueueBadges(state=adminQueueState){
+  adminQueueState=state;
+  if(state!=="ready"){
+    ["quickSlipBadge","quickRescheduleBadge","bookingHubBadge","subSlipBadge","subRescheduleBadge"].forEach(id=>setQueueBadge(id,0,state));return;
+  }
+  const slips=allBookings.filter(b=>b.paymentStatus==="pending_review"&&!!getSlipUrl(b)).length;
+  const reschedules=allBookings.filter(isPendingRescheduleBooking).length;
+  setQueueBadge("quickSlipBadge",slips);setQueueBadge("subSlipBadge",slips);
+  setQueueBadge("quickRescheduleBadge",reschedules);setQueueBadge("subRescheduleBadge",reschedules);
+  setQueueBadge("bookingHubBadge",slips+reschedules);
+}
+function renderAdminHubSubnav(tab){
+  const hub=ADMIN_HUBS[activeAdminHub];
+  const items=hub.items.filter(isAdminItemAvailable);
+  $("adminHubTitle").textContent=hub.title;
+  $("adminHubSubnav").innerHTML=items.map(item=>{
+    if(item.href)return `<a class="hub-subbtn" href="${item.href}">${item.label}</a>`;
+    const on=item.key===activeAdminSubKey||(item.tab===tab&&!items.some(other=>other.key===activeAdminSubKey&&other.tab===tab));
+    const badge=item.badgeId?` <span class="queue-badge" id="${item.badgeId}"></span>`:"";
+    return `<button class="hub-subbtn${on?" on":""}" type="button" data-admin-tab="${item.tab}" data-admin-sub="${item.key}"${item.focusId?` data-admin-focus="${item.focusId}"`:""}>${item.label}${badge}</button>`;
+  }).join("");
+  updateAdminQueueBadges(adminQueueState);
+}
+function syncUnifiedNavigation(tab,subKey=null){
+  const hub=TAB_TO_ADMIN_HUB[tab]||"bookings";
+  activeAdminHub=hub;
+  adminHubLastTab[hub]=tab;
+  if(hub!=="management")lastStaffAdminTab=tab;
+  const matching=ADMIN_HUBS[hub].items.find(item=>item.key===(subKey||activeAdminSubKey)&&item.tab===tab)
+    ||ADMIN_HUBS[hub].items.find(item=>item.tab===tab);
+  activeAdminSubKey=matching?.key||tab;
+  adminHubLastSub[hub]=activeAdminSubKey;
+  document.querySelectorAll("[data-admin-hub]").forEach(button=>button.classList.toggle("on",button.dataset.adminHub===hub));
+  renderAdminHubSubnav(tab);
+}
+function focusAdminSection(focusId){
+  if(!focusId)return;
+  requestAnimationFrame(()=>requestAnimationFrame(()=>$(focusId)?.scrollIntoView({behavior:"smooth",block:"start"})));
+}
+function activateAdminTab(tab,{subKey=null,focusId=null}={}){
+  if(!isAdminTabAllowed(tab)){showToast("เมนูนี้ใช้ได้เฉพาะ Owner View",true);return false;}
+  activeAdminSubKey=subKey||tab;
+  const button=document.querySelector(`.tab[data-tab="${tab}"]`);
+  if(!button)return false;
+  button.click();focusAdminSection(focusId);return true;
+}
+function openAdminHub(hub){
+  if(!isAdminHubAvailable(hub)){showToast("Owner View is required.",true);return;}
+  const config=ADMIN_HUBS[hub];
+  const preferred=config.items.find(item=>item.tab===adminHubLastTab[hub]&&item.key===adminHubLastSub[hub]&&isAdminItemAvailable(item))
+    ||config.items.find(item=>item.tab&&isAdminItemAvailable(item));
+  if(preferred)activateAdminTab(preferred.tab,{subKey:preferred.key,focusId:preferred.focusId});
+}
+function applyAdminViewMode({navigate=true}={}){
+  if(!canSwitchOwnerView())adminViewMode="staff";
+  document.body.dataset.adminView=adminViewMode;
+  const ownerView=adminViewMode==="owner"&&canSwitchOwnerView();
+  $("managementHubBtn").hidden=!ownerView;
+  $("financeHeaderLink").style.display=ownerView?"inline":"none";
+  const toggle=$("adminModeSwitch");
+  toggle.style.display=canSwitchOwnerView()?"inline-block":"none";
+  toggle.classList.toggle("staff",!ownerView);
+  toggle.textContent=ownerView?"👑 Owner View":"🧑‍💼 Staff View";
+  toggle.title=ownerView?"Switch to Staff View":"Switch to Owner View";
+  toggle.setAttribute("aria-pressed",String(ownerView));
+  if(navigate&&activeAdminHub==="management"&&!ownerView)activateAdminTab(lastStaffAdminTab||"bookings");
+  else syncUnifiedNavigation(document.querySelector(".tab.on")?.dataset.tab||"bookings");
+}
+function initializeAdminNavigation(){
+  adminViewMode=readAdminViewPreference();
+  applyAdminViewMode({navigate:false});
+  const selected=document.querySelector(".tab.on")?.dataset.tab||"bookings";
+  if(!isAdminTabAllowed(selected))activateAdminTab("bookings");
+  else syncUnifiedNavigation(selected);
+  updateAdminQueueBadges("loading");
+}
+
+$("adminModeSwitch").addEventListener("click",()=>{
+  if(!canSwitchOwnerView())return;
+  adminViewMode=adminViewMode==="owner"?"staff":"owner";
+  storeAdminViewPreference();applyAdminViewMode();
+});
+$("adminHubBar").addEventListener("click",event=>{
+  const button=event.target.closest("[data-admin-hub]");if(button)openAdminHub(button.dataset.adminHub);
+});
+$("adminHubSubnav").addEventListener("click",event=>{
+  const button=event.target.closest("[data-admin-tab]");if(!button)return;
+  activateAdminTab(button.dataset.adminTab,{subKey:button.dataset.adminSub,focusId:button.dataset.adminFocus||null});
+});
+
+// ── LEGACY PANEL LIFECYCLE (feature-parity layer) ───────────────
 document.querySelectorAll(".tab").forEach(btn=>{
   btn.addEventListener("click",()=>{
+    if(!isAdminTabAllowed(btn.dataset.tab)){showToast("เมนูนี้ใช้ได้เฉพาะ Owner View",true);return;}
     document.querySelectorAll(".tab").forEach(b=>b.classList.remove("on"));btn.classList.add("on");
     $("tabBookings").style.display  =btn.dataset.tab==="bookings"  ?"block":"none";
     $("tabDaily").style.display     =btn.dataset.tab==="daily"     ?"block":"none";
@@ -1349,7 +1564,24 @@ document.querySelectorAll(".tab").forEach(btn=>{
     if(btn.dataset.tab==="vouchers") loadVoucherManager();
     if(btn.dataset.tab==="coach")    renderCoachTab();
     if(btn.dataset.tab==="activity") loadActivityFeed();
+    syncUnifiedNavigation(btn.dataset.tab,activeAdminSubKey);
   });
+});
+
+// ── QUICK ACTION BAR (reuses existing flows) ─────────────────────
+$("quickManualBooking").addEventListener("click",()=>{
+  activateAdminTab("daily");openManualModal(todayISOString(),null);
+});
+$("quickSlipQueue").addEventListener("click",()=>{
+  activateAdminTab("slips");
+  document.querySelector('[data-sr-status="pending_review"]')?.click();
+});
+$("quickRescheduleQueue").addEventListener("click",()=>activateAdminTab("pending"));
+$("quickCopySlotAlert").addEventListener("click",async()=>{
+  const button=$("quickCopySlotAlert"),old=button.textContent;button.disabled=true;button.textContent="กำลังโหลดเวลาว่าง...";
+  try{
+    activateAdminTab("daily");$("dvDate").value=todayISOString();await loadDailyView();await copyDailySlotAlert();
+  }finally{button.disabled=false;button.textContent=old;}
 });
 
 // ── BOOKINGS ─────────────────────────────────────────────────────
@@ -1416,6 +1648,7 @@ function updateActivityTabAccess(){
   if(!allowed&&isActivityTabSelected()){
     document.querySelector('[data-tab="bookings"]').click();
   }
+  if($("mainApp").style.display!=="none")renderAdminHubSubnav(document.querySelector(".tab.on")?.dataset.tab||"bookings");
 }
 
 function canManageVouchers(){
@@ -1429,6 +1662,7 @@ function updateVoucherTabAccess(){
   if(!allowed&&document.querySelector(".tab.on")?.dataset.tab==="vouchers"){
     document.querySelector('[data-tab="bookings"]').click();
   }
+  if($("mainApp").style.display!=="none")renderAdminHubSubnav(document.querySelector(".tab.on")?.dataset.tab||"bookings");
 }
 
 function activityTimeLabel(value){
@@ -1552,11 +1786,12 @@ async function copyConfirmedTextToClipboard(b) {
 
 async function loadBookings(){
   $("bookingsList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading...</p></div>`;
+  updateAdminQueueBadges("loading");
   try{
     allBookings=await adminRead("bookings",{limit:500});
     updateStats();renderBookings();
     $("lastUpd").textContent=`Updated ${new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}`;
-  }catch(e){console.error(e);$("bookingsList").innerHTML=`<div class="estate">❌ Failed to load. Check Firestore rules.</div>`;}
+  }catch(e){console.error(e);updateAdminQueueBadges("error");$("bookingsList").innerHTML=`<div class="estate">❌ Failed to load. Check Firestore rules.</div>`;}
 }
 
 function updateStats(){
@@ -1567,6 +1802,7 @@ function updateStats(){
   $("stReview").textContent=mb.filter(b=>b.paymentStatus==="pending_review").length;
   $("stPaid").textContent=mb.filter(b=>b.paymentStatus==="paid").length;
   $("stCancelled").textContent=mb.filter(b=>b.bookingStatus==="cancelled").length;
+  updateAdminQueueBadges("ready");
 }
 
 function isPendingRescheduleBooking(b){
