@@ -305,6 +305,36 @@
     .cl-row{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);padding:11px 14px;display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start;margin-bottom:8px;}
     .cl-info{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;}
     .cl-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:flex-start;padding-top:2px;}
+    .customer-searchbar{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:8px;align-items:end;}
+    .customer-searchbar input{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:8px;color:var(--t);padding:9px 11px;font-size:.84rem;}
+    .customer-searchbar input:focus{outline:none;border-color:var(--g);}
+    .customer-hub-grid{display:grid;grid-template-columns:minmax(250px,320px) minmax(0,1fr);gap:12px;align-items:start;}
+    .customer-directory,.customer-profile{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;}
+    .customer-panel-hdr{padding:10px 12px;background:var(--s2);border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;gap:8px;}
+    .customer-panel-hdr h2{font-size:.78rem;font-weight:900;color:var(--mid);text-transform:uppercase;letter-spacing:.5px;}
+    .customer-result-list{max-height:68vh;overflow-y:auto;padding:7px;}
+    .customer-result{width:100%;display:block;text-align:left;background:transparent;border:1px solid transparent;border-radius:8px;color:var(--t);padding:9px 10px;margin-bottom:4px;}
+    .customer-result:hover{background:var(--s2);border-color:var(--bd);}
+    .customer-result.on{background:var(--gd);border-color:var(--g);}
+    .customer-result-name{font-size:.82rem;font-weight:850;overflow-wrap:anywhere;}
+    .customer-result-meta{font-size:.68rem;color:var(--m);margin-top:3px;line-height:1.4;overflow-wrap:anywhere;}
+    .customer-profile-body{padding:13px;}
+    .customer-profile-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px;}
+    .customer-profile-name{font-size:1.05rem;font-weight:950;overflow-wrap:anywhere;}
+    .customer-profile-meta{font-size:.73rem;color:var(--m);margin-top:4px;line-height:1.55;overflow-wrap:anywhere;}
+    .customer-profile-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;}
+    .customer-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-bottom:13px;}
+    .customer-kpi{background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:8px 9px;min-width:0;}
+    .customer-kpi strong{display:block;font-size:.94rem;color:var(--t);overflow-wrap:anywhere;}
+    .customer-kpi span{display:block;font-size:.6rem;color:var(--m);text-transform:uppercase;margin-top:2px;}
+    .customer-section{border-top:1px solid var(--bd);padding-top:11px;margin-top:11px;}
+    .customer-section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;font-size:.74rem;font-weight:900;color:var(--mid);text-transform:uppercase;letter-spacing:.4px;}
+    .customer-pass-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:9px 10px;margin-bottom:6px;}
+    .customer-pass-name{font-size:.8rem;font-weight:850;overflow-wrap:anywhere;}
+    .customer-pass-meta{font-size:.68rem;color:var(--m);margin-top:3px;line-height:1.45;overflow-wrap:anywhere;}
+    .customer-history-row{display:grid;grid-template-columns:92px 92px minmax(0,1fr) auto;gap:8px;align-items:center;padding:7px 2px;border-bottom:1px solid var(--bd);font-size:.72rem;}
+    .customer-history-row:last-child{border-bottom:0;}
+    .customer-state{padding:28px 16px;text-align:center;color:var(--m);font-size:.8rem;line-height:1.55;}
 
     /* SCREENSHOT BLOCK */
     .bcard-screenshot-block{
@@ -347,6 +377,15 @@
       .stats{flex-wrap:wrap;}
       .stat{min-width:33.33%;border-bottom:1px solid var(--bd);}
       .cl-row{grid-template-columns:1fr;}
+      .customer-searchbar{grid-template-columns:1fr 1fr;}
+      .customer-searchbar .smf{grid-column:1/-1;}
+      .customer-hub-grid{grid-template-columns:1fr;}
+      .customer-result-list{max-height:270px;}
+      .customer-profile-top{display:block;}
+      .customer-profile-actions{justify-content:flex-start;margin-top:10px;}
+      .customer-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}
+      .customer-history-row{grid-template-columns:80px minmax(0,1fr) auto;}
+      .customer-history-row>span:nth-child(2){display:none;}
       .activity-grid{grid-template-columns:105px 90px minmax(130px,1fr);}
       .activity-grid .activity-head:nth-child(4),.activity-grid .activity-head:nth-child(5),
       .activity-grid .activity-cell:nth-child(5n+4),.activity-grid .activity-cell:nth-child(5n+5){display:none;}
@@ -685,11 +724,18 @@
 
   <!-- CUSTOMERS TAB -->
   <div id="tabCustomers" style="display:none">
-    <div class="filters" style="justify-content:space-between;align-items:center">
-      <span style="font-size:.68rem;font-weight:800;color:var(--m);text-transform:uppercase;letter-spacing:.4px">All-time customers · aggregated from bookings</span>
-      <button class="rfbtn" id="custRefreshBtn">↻ Refresh</button>
+    <div class="filters customer-searchbar">
+      <div class="smf">
+        <label for="customerProfileSearch">ค้นหาลูกค้า</label>
+        <input type="search" id="customerProfileSearch" autocomplete="off" placeholder="ชื่อ เบอร์โทร หรือชื่อ LINE..."/>
+      </div>
+      <button class="smbtn smg" id="customerProfileSearchBtn">ค้นหา</button>
+      <button class="smbtn smgr" id="customerProfileClearBtn">ล้าง</button>
     </div>
-    <div class="main"><div id="customersList"><div class="lstate"><div class="spinner"></div><p>Loading...</p></div></div></div>
+    <div class="main">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="rfbtn" id="custRefreshBtn">↻ Refresh ทั้งหมด</button></div>
+      <div id="customersList"><div class="lstate"><div class="spinner"></div><p>Loading customer profiles...</p></div></div>
+    </div>
   </div>
 
   <!-- PROMO TAB -->
@@ -2982,110 +3028,202 @@ $("exportCustomersBtn").addEventListener("click",async()=>{
   finally{ btn.disabled=false; btn.textContent="Customers"; }
 });
 
-// ── CUSTOMER LIST TAB ─────────────────────────────────────────────
-// Aggregates allBookings into a per-customer list. No extra Firestore fetches.
+// ── UNIFIED CUSTOMER PROFILE HUB ─────────────────────────────────
+// Read-only joins across the existing bookings, registered users and packages.
+// Mutating quick actions deliberately reuse the existing Pass and minute flows.
 let custListData=[];
+let customerRegisteredUsers=[];
+let customerPackageData=[];
+let customerProfileState="idle";
+let customerProfileLoadPromise=null;
+let selectedCustomerProfileKey=null;
+
+function canManageCustomerPasses(){
+  return ["owner","ultra_admin","branch_manager"].includes(currentAdminRole);
+}
+function usableCustomerLineId(value){
+  const id=String(value||"").trim();
+  return id&&id!=="guest"&&id!=="manual"?id:"";
+}
+function buildCustomerProfiles(){
+  const profiles=new Map(),byLine=new Map(),byPhone=new Map();
+  let fallbackIndex=0;
+  const ensure=(data={},allowDocumentId=false)=>{
+    const lineId=usableCustomerLineId(data.lineUserId||(allowDocumentId?data.id:""));
+    const normalizedPhone=data.phoneNormalized||data.customerPhoneNormalized||normalizePhone(data.phone||data.customerPhone);
+    let profile=(lineId&&byLine.get(lineId))||(normalizedPhone&&byPhone.get(normalizedPhone));
+    if(!profile){
+      const key=lineId?`line:${lineId}`:normalizedPhone?`phone:${normalizedPhone}`:`unknown:${++fallbackIndex}`;
+      profile={key,customerName:"",customerPhone:"",normalizedPhone:"",lineDisplayName:"",lineUserId:"",registeredUser:null,bookings:[],passes:[],lastDate:"",_lastTs:-1};
+      profiles.set(key,profile);
+    }
+    if(lineId){profile.lineUserId=lineId;byLine.set(lineId,profile);}
+    if(normalizedPhone){profile.normalizedPhone=normalizedPhone;if(!byPhone.has(normalizedPhone))byPhone.set(normalizedPhone,profile);}
+    return profile;
+  };
+
+  customerRegisteredUsers.forEach(user=>{
+    const profile=ensure(user,true);
+    profile.registeredUser=user;
+    if(user.name)profile.customerName=user.name;
+    if(user.phone)profile.customerPhone=user.phone;
+    if(user.lineDisplayName)profile.lineDisplayName=user.lineDisplayName;
+  });
+  allBookings.forEach(booking=>{
+    const profile=ensure(booking);
+    profile.bookings.push(booking);
+    if((booking.date||"")>profile.lastDate)profile.lastDate=booking.date||"";
+    const timestamp=booking.createdAt?.seconds||0;
+    if(timestamp>=profile._lastTs){
+      profile._lastTs=timestamp;
+      if(!profile.registeredUser&&booking.customerName)profile.customerName=booking.customerName;
+      if(!profile.registeredUser&&booking.customerPhone)profile.customerPhone=booking.customerPhone;
+      if(booking.lineDisplayName)profile.lineDisplayName=booking.lineDisplayName;
+    }
+  });
+  customerPackageData.filter(pass=>pass.status==="active").forEach(pass=>{
+    const profile=ensure(pass);
+    profile.passes.push(pass);
+    if(!profile.customerName&&pass.customerName)profile.customerName=pass.customerName;
+    if(!profile.customerPhone&&pass.customerPhone)profile.customerPhone=pass.customerPhone;
+  });
+
+  const todayISO=formatLocalISODate(new Date());
+  custListData=[...profiles.values()].map(profile=>{
+    profile.bookings.sort((a,b)=>`${b.date||""} ${b.startTime||""}`.localeCompare(`${a.date||""} ${a.startTime||""}`));
+    profile.passes.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    profile.total=profile.bookings.length;
+    profile.confirmed=profile.bookings.filter(b=>b.bookingStatus==="confirmed"||b.bookingStatus==="completed").length;
+    profile.cancelled=profile.bookings.filter(b=>b.bookingStatus==="cancelled").length;
+    profile.pending=profile.bookings.filter(b=>b.bookingStatus==="pending_payment"||isPendingRescheduleBooking(b)).length;
+    profile.playedCount=profile.bookings.filter(b=>(b.bookingStatus==="confirmed"||b.bookingStatus==="completed")&&b.date&&b.date<=todayISO).length;
+    profile.upcomingCount=profile.bookings.filter(b=>b.bookingStatus==="confirmed"&&b.date>todayISO).length;
+    profile.remainingMinutes=profile.passes.reduce((sum,pass)=>sum+(Number(pass.remainingMinutes)||0),0);
+    return profile;
+  }).sort((a,b)=>(b.lastDate||"").localeCompare(a.lastDate||"")||(a.customerName||"").localeCompare(b.customerName||""));
+  if(selectedCustomerProfileKey&&!custListData.some(profile=>profile.key===selectedCustomerProfileKey))selectedCustomerProfileKey=null;
+}
+
+function customerProfileMatches(profile,query){
+  const q=String(query||"").trim().toLowerCase();
+  if(!q)return true;
+  const phoneQuery=normalizePhone(q);
+  const text=[profile.customerName,profile.customerPhone,profile.normalizedPhone,profile.lineDisplayName,
+    ...profile.passes.map(pass=>pass.packageName)].filter(Boolean).join(" ").toLowerCase();
+  return text.includes(q)||(phoneQuery&&String(profile.normalizedPhone||"").includes(phoneQuery));
+}
+function customerPassValidity(pass){
+  const date=tsToDate(pass.validUntil);
+  return date||"—";
+}
+function renderSelectedCustomerProfile(profile){
+  if(!profile)return `<div class="customer-state">เลือกลูกค้าจากรายชื่อด้านซ้ายเพื่อดูข้อมูลทั้งหมด</div>`;
+  const lineLinked=canNotifyLine(profile.lineUserId);
+  const mayManage=canManageCustomerPasses();
+  const registered=!!profile.registeredUser;
+  const issueTitle=!mayManage?"บัญชีนี้ไม่มีสิทธิ์ออก Pass":!registered?"ลูกค้าต้องลงทะเบียนผ่าน LINE ก่อนออก Pass":"ออก Pass ใหม่";
+  const passRows=profile.passes.map(pass=>{
+    const isUltra=String(pass.packageType||"").includes("ultra");
+    const balance=isUltra?`${Number(pass.remainingMinutes)||0} นาทีคงเหลือ`:`ใช้ได้ถึง ${customerPassValidity(pass)}`;
+    return `<div class="customer-pass-card">
+      <div><div class="customer-pass-name">${esc(pass.packageName||"Pass")}</div><div class="customer-pass-meta">${esc(balance)} · Active</div></div>
+      ${isUltra&&mayManage?`<button class="smbtn smgr" data-customer-adjust="${esc(pass.id)}" style="padding:6px 9px;font-size:.7rem">⏱ ปรับนาที</button>`:""}
+    </div>`;
+  }).join("")||`<div class="customer-state" style="padding:14px">ยังไม่มี Active Pass</div>`;
+  const historyRows=profile.bookings.map(booking=>{
+    const status=bookingStatusDisplay(booking);
+    return `<div class="customer-history-row">
+      <strong>${esc(booking.date||"—")}</strong>
+      <span style="color:var(--m)">${esc(booking.startTime||"—")}–${esc(booking.endTime||"—")}</span>
+      <span style="color:var(--m);overflow-wrap:anywhere">${esc(booking.bookingCode||booking.bookingType||"—")}${booking.bookingType?` · ${esc(booking.bookingType)}`:""}</span>
+      <span class="sp s-${esc(status)}">${esc(status)}</span>
+    </div>`;
+  }).join("")||`<div class="customer-state" style="padding:14px">ยังไม่มีประวัติการจอง</div>`;
+  return `<div class="customer-profile-body">
+    <div class="customer-profile-top">
+      <div>
+        <div class="customer-profile-name">${esc(profile.customerName||profile.lineDisplayName||"ไม่ระบุชื่อ")}</div>
+        <div class="customer-profile-meta">📞 ${esc(profile.customerPhone||"ไม่มีเบอร์")}<br>LINE: ${esc(profile.lineDisplayName||"—")} · ${lineLinked?"เชื่อมต่อแล้ว":"ยังไม่เชื่อมต่อ"}</div>
+      </div>
+      <div class="customer-profile-actions">
+        <button class="smbtn smg" data-customer-issue title="${esc(issueTitle)}" ${mayManage&&registered?"":"disabled"}>+ ออก Pass ใหม่</button>
+        ${lineLinked?`<button class="smbtn smgr" data-customer-alert>📢 ส่ง LINE</button>`:""}
+        <button class="smbtn smgr" data-customer-open-passes>ดูระบบ Pass ทั้งหมด</button>
+      </div>
+    </div>
+    <div class="customer-kpis">
+      <div class="customer-kpi"><strong>${profile.playedCount}</strong><span>Played</span></div>
+      <div class="customer-kpi"><strong>${profile.upcomingCount}</strong><span>Upcoming</span></div>
+      <div class="customer-kpi"><strong>${profile.passes.length}</strong><span>Active Pass</span></div>
+      <div class="customer-kpi"><strong>${profile.remainingMinutes}</strong><span>Minutes Left</span></div>
+    </div>
+    <div class="customer-section">
+      <div class="customer-section-title"><span>🎫 Pass ที่ถืออยู่</span><span>${profile.passes.length} รายการ</span></div>
+      ${passRows}
+    </div>
+    <div class="customer-section">
+      <div class="customer-section-title"><span>📅 ประวัติการจองทั้งหมด</span><span>${profile.total} รายการ</span></div>
+      <div style="max-height:420px;overflow-y:auto">${historyRows}</div>
+    </div>
+  </div>`;
+}
 
 function renderCustomerListTab(){
   const el=$("customersList");
-  if(!el) return;
-  if(!allBookings.length){
-    el.innerHTML=`<div class="estate">📭 No booking data loaded.<br>Open <strong>Bookings</strong> tab, click ↻ Refresh, then return here.</div>`;
-    return;
-  }
-  const map=new Map();
-  allBookings.forEach(b=>{
-    const np=b.customerPhoneNormalized||normalizePhone(b.customerPhone);
-    const key=np||b.lineUserId||"unknown";
-    if(!map.has(key)) map.set(key,{
-      customerName:"",lineDisplayName:"",lineUserId:"",customerPhone:"",normalizedPhone:np,
-      total:0,confirmed:0,cancelled:0,pending:0,lastDate:"",_lastTs:-1,visits:[],
-    });
-    const c=map.get(key);
-    c.total++;
-    if(b.bookingStatus==="confirmed") c.confirmed++;
-    if(b.bookingStatus==="cancelled") c.cancelled++;
-    if(b.bookingStatus==="pending_payment") c.pending++;
-    if((b.date||"")>c.lastDate) c.lastDate=b.date||"";
-    c.visits.push({
-      date:b.date||"",startTime:b.startTime||"",endTime:b.endTime||"",
-      bookingType:b.bookingType||"",bookingStatus:b.bookingStatus||"",
-      coachName:b.coachName||"",
-    });
-    const ts=b.createdAt?.seconds||0;
-    if(ts>=c._lastTs){
-      c._lastTs=ts;
-      if(b.customerName) c.customerName=b.customerName;
-      if(b.customerPhone) c.customerPhone=b.customerPhone;
-      if(b.lineDisplayName) c.lineDisplayName=b.lineDisplayName;
-      if(b.lineUserId&&b.lineUserId!=="guest"&&b.lineUserId!=="manual") c.lineUserId=b.lineUserId;
-    }
+  if(!el)return;
+  if(customerProfileState==="idle"){loadCustomerProfileHub();return;}
+  if(customerProfileState==="loading"){el.innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading customer profiles...</p></div>`;return;}
+  if(customerProfileState==="error"){el.innerHTML=`<div class="customer-state">❌ โหลดข้อมูลลูกค้าไม่สำเร็จ<br><button class="smbtn smgr" id="customerProfileRetry" style="margin-top:10px">ลองอีกครั้ง</button></div>`;$("customerProfileRetry")?.addEventListener("click",()=>loadCustomerProfileHub({force:true}));return;}
+  const query=$("customerProfileSearch")?.value||"";
+  const filtered=custListData.filter(profile=>customerProfileMatches(profile,query));
+  if(!selectedCustomerProfileKey&&filtered.length)selectedCustomerProfileKey=filtered[0].key;
+  if(selectedCustomerProfileKey&&!filtered.some(profile=>profile.key===selectedCustomerProfileKey))selectedCustomerProfileKey=filtered[0]?.key||null;
+  const selected=custListData.find(profile=>profile.key===selectedCustomerProfileKey)||null;
+  const results=filtered.map(profile=>`<button class="customer-result${profile.key===selectedCustomerProfileKey?" on":""}" data-customer-key="${esc(profile.key)}">
+    <div class="customer-result-name">${esc(profile.customerName||profile.lineDisplayName||"ไม่ระบุชื่อ")}</div>
+    <div class="customer-result-meta">${esc(profile.customerPhone||"ไม่มีเบอร์")} · ${profile.total} bookings · ${profile.passes.length} active pass</div>
+  </button>`).join("")||`<div class="customer-state">ไม่พบลูกค้าที่ตรงกับ “${esc(query)}”</div>`;
+  el.innerHTML=`<div class="customer-hub-grid">
+    <section class="customer-directory">
+      <div class="customer-panel-hdr"><h2>รายชื่อลูกค้า</h2><span style="font-size:.68rem;color:var(--m)">${filtered.length} / ${custListData.length}</span></div>
+      <div class="customer-result-list">${results}</div>
+    </section>
+    <section class="customer-profile" aria-live="polite">
+      <div class="customer-panel-hdr"><h2>Unified Customer Profile</h2><span style="font-size:.68rem;color:var(--m)">Booking + Pass</span></div>
+      ${renderSelectedCustomerProfile(selected)}
+    </section>
+  </div>`;
+  el.querySelectorAll("[data-customer-key]").forEach(button=>button.addEventListener("click",()=>{selectedCustomerProfileKey=button.dataset.customerKey;renderCustomerListTab();}));
+  el.querySelector("[data-customer-issue]")?.addEventListener("click",()=>{
+    if(!selected?.registeredUser)return;
+    selectRegisteredUser(selected.registeredUser);
+    if(!$("validFromDate").value)$("validFromDate").value=todayLocalISO();
+    activateAdminTab("passes",{subKey:"passes",focusId:"selectedUserPanel"});
   });
-  custListData=[...map.values()]
-    .filter(c=>c.total>0)
-    .sort((a,b)=>b.lastDate.localeCompare(a.lastDate));
+  el.querySelector("[data-customer-open-passes]")?.addEventListener("click",()=>activateAdminTab("passes",{subKey:"passes",focusId:"activePassesList"}));
+  el.querySelector("[data-customer-alert]")?.addEventListener("click",()=>openAlertModal(selected));
+  el.querySelectorAll("[data-customer-adjust]").forEach(button=>button.addEventListener("click",()=>openMinModal(button.dataset.customerAdjust)));
+}
 
-  // Visit history: "played" = confirmed/completed on a date that already passed
-  // (today included) — a confirmed future booking is upcoming, not a visit yet.
-  const todayISO=formatLocalISODate(new Date());
-  custListData.forEach(c=>{
-    c.visits.sort((a,b)=>`${b.date} ${b.startTime}`.localeCompare(`${a.date} ${a.startTime}`));
-    c.playedCount=c.visits.filter(v=>(v.bookingStatus==="confirmed"||v.bookingStatus==="completed")&&v.date&&v.date<=todayISO).length;
-    c.upcomingCount=c.visits.filter(v=>v.bookingStatus==="confirmed"&&v.date>todayISO).length;
-  });
-
-  const VISIT_BADGE={
-    confirmed:["var(--ac)","confirmed"],completed:["var(--ac)","completed"],
-    cancelled:["var(--dan)","cancelled"],pending_payment:["var(--warn)","pending"],
-    rescheduled:["var(--warn)","rescheduled"],expired:["var(--m)","expired"],no_show:["var(--dan)","no show"],
-  };
-
-  el.innerHTML=`<div style="font-size:.72rem;color:var(--m);margin-bottom:10px">${custListData.length} unique customers (all-time)</div>`+
-    custListData.map((c,i)=>{
-      const lineLinked=canNotifyLine(c.lineUserId);
-      const lineTag=lineLinked
-        ?`<span style="color:var(--g);font-size:.72rem">✓ LINE linked</span>`
-        :`<span style="color:var(--m);font-size:.72rem">Not linked</span>`;
-      const histRows=c.visits.map(v=>{
-        const played=(v.bookingStatus==="confirmed"||v.bookingStatus==="completed")&&v.date&&v.date<=todayISO;
-        const upcoming=v.bookingStatus==="confirmed"&&v.date>todayISO;
-        const [bc,bl]=VISIT_BADGE[v.bookingStatus]||["var(--m)",v.bookingStatus||"—"];
-        return `<div style="display:flex;gap:10px;align-items:baseline;padding:4px 0;border-bottom:1px solid var(--bd);font-size:.75rem">
-          <span style="min-width:86px;font-weight:700">${esc(v.date||"—")}</span>
-          <span style="min-width:96px;color:var(--m)">${esc(v.startTime||"—")}–${esc(v.endTime||"—")}</span>
-          <span style="flex:1;color:var(--m)">${esc(v.bookingType||"—")}${v.coachName?` · โค้ช ${esc(v.coachName)}`:""}</span>
-          <span style="color:${bc};font-weight:700">${upcoming?"upcoming":esc(bl)}${played?" ✓":""}</span>
-        </div>`;
-      }).join("");
-      return `<div class="cl-row">
-        <div class="cl-info">
-          <div><div class="fl">Name</div><div class="fv">${esc(c.customerName||"—")}</div></div>
-          <div><div class="fl">Phone</div><div class="fv">${esc(c.customerPhone||"—")}</div></div>
-          <div><div class="fl">LINE</div><div class="fv">${lineTag}</div></div>
-          <div><div class="fl">Visits</div><div class="fv"><span style="color:var(--ac);font-weight:800">${c.playedCount}</span> played${c.upcomingCount?` · <span style="color:var(--warn)">${c.upcomingCount}</span> upcoming`:""}</div></div>
-          <div><div class="fl">Bookings</div><div class="fv">${c.total} total · <span style="color:var(--ac)">${c.confirmed}</span> conf · <span style="color:var(--dan)">${c.cancelled}</span> cancel${c.pending?` · <span style="color:var(--warn)">${c.pending}</span> pending`:""}</div></div>
-          <div><div class="fl">Last Visit</div><div class="fv dim">${esc(c.lastDate||"—")}</div></div>
-          ${c.lineDisplayName?`<div><div class="fl">LINE Name</div><div class="fv dim">${esc(c.lineDisplayName)}</div></div>`:""}
-        </div>
-        <div class="cl-actions">
-          <button class="smbtn" style="font-size:.72rem;padding:5px 10px" data-hist-idx="${i}">📅 History (${c.visits.length})</button>
-          ${lineLinked?`<button class="smbtn smg" style="font-size:.72rem;padding:5px 10px" data-alert-idx="${i}">📢 Alert</button>`:`<span style="font-size:.68rem;color:var(--m)">No LINE</span>`}
-        </div>
-        <div id="clHist${i}" style="display:none;grid-column:1/-1;border-top:1px solid var(--bd);margin-top:4px;padding-top:6px;max-height:260px;overflow-y:auto">${histRows||`<div style="font-size:.75rem;color:var(--m)">No bookings</div>`}</div>
-      </div>`;
-    }).join("");
-
-  el.querySelectorAll("[data-alert-idx]").forEach(btn=>{
-    btn.addEventListener("click",()=>openAlertModal(custListData[Number(btn.dataset.alertIdx)]));
-  });
-  el.querySelectorAll("[data-hist-idx]").forEach(btn=>{
-    btn.addEventListener("click",()=>{
-      const box=$("clHist"+btn.dataset.histIdx);
-      const open=box.style.display!=="none";
-      box.style.display=open?"none":"block";
-      btn.classList.toggle("smg",!open);
-    });
-  });
+async function loadCustomerProfileHub({force=false}={}){
+  if(customerProfileLoadPromise&&!force)return customerProfileLoadPromise;
+  if(customerProfileState==="ready"&&!force){buildCustomerProfiles();renderCustomerListTab();return;}
+  customerProfileState="loading";renderCustomerListTab();
+  customerProfileLoadPromise=(async()=>{
+    try{
+      const [users,packages]=await Promise.all([
+        adminRead("registered_users",{limit:500}),
+        adminRead("packages",{limit:500}),
+      ]);
+      customerRegisteredUsers=users;
+      customerPackageData=packages;
+      activePasses=packages.filter(pass=>pass.status==="active");
+      buildCustomerProfiles();
+      customerProfileState="ready";
+    }catch(error){console.error(error);customerProfileState="error";}
+    finally{customerProfileLoadPromise=null;renderCustomerListTab();}
+  })();
+  return customerProfileLoadPromise;
 }
 
 // ── SLOT MANAGER ─────────────────────────────────────────────────
@@ -3516,6 +3654,11 @@ async function loadActivePasses(){
     const passes=(await adminRead("packages",{limit:500})).filter(p=>p.status==="active")
       .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
     activePasses=passes; // cached for the minute-adjust modal lookup
+    if(customerProfileState==="ready"){
+      customerPackageData=[...customerPackageData.filter(pass=>pass.status!=="active"),...passes];
+      buildCustomerProfiles();
+      renderCustomerListTab();
+    }
 
     if(!passes.length){ $("activePassesList").innerHTML=`<div class="smempty">No active passes.</div>`; return; }
 
@@ -5271,8 +5414,21 @@ $("pendingRefreshBtn").addEventListener("click",async()=>{
 });
 $("custRefreshBtn").addEventListener("click",async()=>{
   $("customersList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Refreshing...</p></div>`;
-  await loadBookings();
+  await Promise.all([loadBookings(),loadCustomerProfileHub({force:true})]);
+  buildCustomerProfiles();
   renderCustomerListTab();
+});
+function applyCustomerProfileSearch(){
+  selectedCustomerProfileKey=null;
+  renderCustomerListTab();
+}
+$("customerProfileSearchBtn").addEventListener("click",applyCustomerProfileSearch);
+$("customerProfileSearch").addEventListener("input",applyCustomerProfileSearch);
+$("customerProfileSearch").addEventListener("keydown",event=>{if(event.key==="Enter")applyCustomerProfileSearch();});
+$("customerProfileClearBtn").addEventListener("click",()=>{
+  $("customerProfileSearch").value="";
+  applyCustomerProfileSearch();
+  $("customerProfileSearch").focus();
 });
 
 // ── VOUCHER MANAGER (Art owner only) ─────────────────────────────
