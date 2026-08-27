@@ -340,6 +340,19 @@
     .customer-history-row{display:grid;grid-template-columns:92px 92px minmax(0,1fr) auto;gap:8px;align-items:center;padding:7px 2px;border-bottom:1px solid var(--bd);font-size:.72rem;}
     .customer-history-row:last-child{border-bottom:0;}
     .customer-state{padding:28px 16px;text-align:center;color:var(--m);font-size:.8rem;line-height:1.55;}
+    .identity-panel{border-color:#7b5b16;background:linear-gradient(135deg,rgba(245,180,34,.09),var(--s));}
+    .identity-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}
+    .identity-panel-copy{font-size:.74rem;color:var(--m);line-height:1.55;margin:0;}
+    .identity-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;}
+    .identity-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;margin:12px 0;}
+    .identity-kpi{background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:8px;min-width:0;}
+    .identity-kpi strong{display:block;font-size:1rem;color:var(--t);overflow-wrap:anywhere;}
+    .identity-kpi span{display:block;font-size:.58rem;color:var(--m);text-transform:uppercase;margin-top:2px;}
+    .identity-review-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
+    .identity-review{background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:10px;min-width:0;}
+    .identity-review h3{font-size:.7rem;color:var(--mid);text-transform:uppercase;letter-spacing:.4px;margin-bottom:7px;}
+    .identity-review-row{padding:7px 0;border-bottom:1px solid var(--bd);font-size:.69rem;line-height:1.5;overflow-wrap:anywhere;}
+    .identity-review-row:last-child{border-bottom:0;}
 
     /* SCREENSHOT BLOCK */
     .bcard-screenshot-block{
@@ -394,6 +407,10 @@
       .customer-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}
       .customer-history-row{grid-template-columns:80px minmax(0,1fr) auto;}
       .customer-history-row>span:nth-child(2){display:none;}
+      .identity-panel-head{display:block;}
+      .identity-actions{justify-content:flex-start;margin-top:10px;}
+      .identity-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}
+      .identity-review-grid{grid-template-columns:1fr;}
       .activity-grid{grid-template-columns:105px 90px minmax(130px,1fr);}
       .activity-grid .activity-head:nth-child(4),.activity-grid .activity-head:nth-child(5),
       .activity-grid .activity-cell:nth-child(5n+4),.activity-grid .activity-cell:nth-child(5n+5){display:none;}
@@ -762,6 +779,19 @@
       <button class="rfbtn" id="custRefreshBtn">↻ Refresh ทั้งหมด</button>
     </div>
     <div class="main">
+      <section class="smcard identity-panel" id="customerIdentityPanel" hidden>
+        <div class="identity-panel-head">
+          <div>
+            <h2>Customer Identity Integrity · Dry-run</h2>
+            <p class="identity-panel-copy">อ่านข้อมูลเพื่อเสนอคู่ที่ควรเชื่อมเท่านั้น · ไม่แก้ Customer, Booking หรือ Pass และไม่มีการ Merge อัตโนมัติ</p>
+          </div>
+          <div class="identity-actions">
+            <button class="smbtn smg" id="identityDryRunBtn" type="button">ตรวจ Identity</button>
+            <button class="smbtn smgr" id="identityDownloadBtn" type="button" disabled>ดาวน์โหลด JSON</button>
+          </div>
+        </div>
+        <div id="identityDryRunOutput" aria-live="polite"><div class="customer-state" style="padding:15px 0 0">พร้อมตรวจแบบ Read-only — ระบบจะโหลดข้อมูลแต่ละชุดเพียงครั้งเดียว</div></div>
+      </section>
       <div id="customersList"><div class="lstate"><div class="spinner"></div><p>Loading customer profiles...</p></div></div>
     </div>
   </div>
@@ -1583,6 +1613,7 @@ function applyAdminViewMode({navigate=true}={}){
   toggle.textContent=ownerView?"👑 Owner View":"🧑‍💼 Staff View";
   toggle.title=ownerView?"Switch to Staff View":"Switch to Owner View";
   toggle.setAttribute("aria-pressed",String(ownerView));
+  updateCustomerIdentityPanelAccess();
   if(navigate&&activeAdminHub==="management"&&!ownerView)activateAdminTab(lastStaffAdminTab||"bookings");
   else syncUnifiedNavigation(document.querySelector(".tab.on")?.dataset.tab||"bookings");
 }
@@ -3065,6 +3096,67 @@ let customerPackageData=[];
 let customerProfileState="idle";
 let customerProfileLoadPromise=null;
 let selectedCustomerProfileKey=null;
+let customerIdentityReport=null;
+
+function canRunCustomerIdentityDryRun(){
+  return currentAdminName==="Art"&&currentAdminRole==="owner"&&adminViewMode==="owner";
+}
+function updateCustomerIdentityPanelAccess(){
+  const panel=$("customerIdentityPanel");
+  if(panel)panel.hidden=!canRunCustomerIdentityDryRun();
+}
+function identityList(items,render,emptyText){
+  if(!items?.length)return `<div class="identity-review-row" style="color:var(--m)">${esc(emptyText)}</div>`;
+  return items.slice(0,20).map(render).join("")+(items.length>20?`<div class="identity-review-row" style="color:var(--m)">และอีก ${items.length-20} รายการ — ดูทั้งหมดใน JSON</div>`:"");
+}
+function renderCustomerIdentityReport(report){
+  const output=$("identityDryRunOutput");if(!output)return;
+  const summary=report.summary||{},counts=report.sourceCounts||{};
+  const proposals=identityList(report.proposedLinks,item=>`<div class="identity-review-row"><strong>${esc(item.aliasCustomerId)}</strong> → ${esc(item.canonicalCustomerId)}<br><span style="color:var(--m)">${item.evidenceCount||0} evidence · ${item.bookingIds?.length||0} booking · ${item.packageIds?.length||0} pass</span></div>`,"ไม่พบคู่ที่เสนอให้เชื่อม");
+  const conflicts=identityList([...(report.conflicts||[]),...(report.packageConflicts||[]),...(report.passReview||[])],item=>`<div class="identity-review-row"><strong>${esc(item.type||"manual_review")}</strong><br><span style="color:var(--m)">${esc(item.reason||"")}</span></div>`,"ไม่พบรายการที่ต้องตรวจมือ");
+  output.innerHTML=`
+    <div class="identity-kpis">
+      <div class="identity-kpi"><strong>${summary.canonicalProfiles||0}</strong><span>Profiles</span></div>
+      <div class="identity-kpi"><strong>${summary.proposedLinks||0}</strong><span>Proposed links</span></div>
+      <div class="identity-kpi"><strong>${summary.identityConflicts||0}</strong><span>Identity conflicts</span></div>
+      <div class="identity-kpi"><strong>${summary.packageConflicts||0}</strong><span>Pass conflicts</span></div>
+      <div class="identity-kpi"><strong>${summary.passReviews||0}</strong><span>Pass reviews</span></div>
+      <div class="identity-kpi"><strong>${summary.unresolvedRecords||0}</strong><span>Unresolved</span></div>
+    </div>
+    <div class="identity-panel-copy" style="margin-bottom:10px">อ่านแล้ว ${counts.bookings||0} bookings · ${counts.registeredUsers||0} registered users · ${counts.packages||0} passes · กฎ ${esc(report.ruleVersion||"—")} · เขียนข้อมูล ${Number(report.writesPerformed)||0} รายการ</div>
+    <div class="identity-review-grid">
+      <div class="identity-review"><h3>คู่ที่ระบบเสนอ — รอ Art ตรวจ</h3>${proposals}</div>
+      <div class="identity-review"><h3>ต้องตรวจด้วยมือ</h3>${conflicts}</div>
+    </div>`;
+}
+
+async function runCustomerIdentityDryRun(){
+  if(!canRunCustomerIdentityDryRun()){showToast("รายงานนี้เปิดได้เฉพาะ Art ใน Owner View",true);return;}
+  const button=$("identityDryRunBtn"),download=$("identityDownloadBtn"),output=$("identityDryRunOutput");
+  button.disabled=true;button.textContent="กำลังตรวจ...";download.disabled=true;
+  output.innerHTML=`<div class="lstate" style="padding:18px 0"><div class="spinner"></div><p>กำลังอ่าน Booking, Customer และ Pass แบบ Read-only...</p></div>`;
+  try{
+    const response=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"identity_dry_run",branchId:DEFAULT_BRANCH_ID})});
+    const report=await response.json().catch(()=>({}));
+    if(!response.ok||!report.ok)throw new Error(report.error||`HTTP ${response.status}`);
+    if(report.dryRun!==true||Number(report.writesPerformed)!==0)throw new Error("Server did not confirm a zero-write dry-run");
+    customerIdentityReport=report;renderCustomerIdentityReport(report);download.disabled=false;
+    showToast(`✓ ตรวจเสร็จ: เสนอ ${report.summary?.proposedLinks||0} คู่ · ต้องตรวจมือ ${(report.summary?.identityConflicts||0)+(report.summary?.packageConflicts||0)+(report.summary?.passReviews||0)}`);
+  }catch(error){
+    console.error(error);customerIdentityReport=null;
+    output.innerHTML=`<div class="customer-state" style="padding:16px 0">❌ ตรวจ Identity ไม่สำเร็จ<br><span style="color:var(--m)">${esc(error.message||"Unknown error")}</span></div>`;
+    showToast("ตรวจ Identity ไม่สำเร็จ",true);
+  }finally{button.disabled=false;button.textContent="ตรวจ Identity";}
+}
+
+$("identityDryRunBtn").addEventListener("click",runCustomerIdentityDryRun);
+$("identityDownloadBtn").addEventListener("click",()=>{
+  if(!customerIdentityReport)return;
+  const blob=new Blob([JSON.stringify(customerIdentityReport,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob),link=document.createElement("a");
+  link.href=url;link.download=`customer_identity_dry_run_${formatLocalISODate(new Date())}.json`;link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),0);
+});
 
 function canManageCustomerPasses(){
   return ["owner","ultra_admin","branch_manager"].includes(currentAdminRole);

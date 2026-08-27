@@ -62,4 +62,16 @@ describe('Admin unified customer profile Hub', () => {
     expect(adminHtml).toContain('.customer-hub-grid{grid-template-columns:1fr;}');
     expect(adminHtml).toContain('.customer-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}');
   });
+
+  test('exposes an Art/Owner-only zero-write identity dry-run without merge controls', () => {
+    for (const id of ['customerIdentityPanel', 'identityDryRunBtn', 'identityDownloadBtn', 'identityDryRunOutput']) {
+      expect(adminHtml).toContain(`id="${id}"`);
+    }
+    expect(adminHtml).toContain('currentAdminName==="Art"&&currentAdminRole==="owner"&&adminViewMode==="owner"');
+    expect(adminHtml).toContain('action:"identity_dry_run"');
+    expect(adminHtml).toContain('report.dryRun!==true||Number(report.writesPerformed)!==0');
+    expect(adminHtml).toContain('ดาวน์โหลด JSON');
+    expect(adminHtml).not.toContain('id="identityMergeBtn"');
+    expect(adminHtml).not.toContain('id="identityApplyBtn"');
+  });
 });

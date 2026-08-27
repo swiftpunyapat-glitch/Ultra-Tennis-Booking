@@ -31,6 +31,7 @@ import {
   BRANCH_STATUSES, statusFlags,
 } from './_lib/firebase-admin.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { buildCustomerIdentityDryRun } from './_lib/customer-identity.js';
 
 // ── Constants ─────────────────────────────────────────────────────
 const VALID_ACTIONS = [
@@ -45,7 +46,7 @@ const VALID_ACTIONS = [
   'coach_whoami', 'coach_update_profile', 'coach_link_line',
   'coach_availability_get', 'coach_availability_set', 'coach_availability_batch_set', 'coach_update_rates',
   'shop_open_days', 'coach_delete',
-  'admin_read',
+  'admin_read', 'identity_dry_run',
 ];
 
 // Coach V2: actions a coach may call with a LINE-derived Firebase ID token
@@ -261,6 +262,7 @@ export default async function handler(req, res) {
     case 'shop_open_days':         return handleShopOpenDays(res, session, body);
     case 'coach_delete':           return handleCoachDelete(res, session, body);
     case 'admin_read':             return handleAdminRead(res, session, body);
+    case 'identity_dry_run':       return handleIdentityDryRun(res, session, body);
     default:
       // Unreachable (VALID_ACTIONS gate above) — defensive.
       return res.status(400).json({ ok: false, error: `Unknown action "${action}"` });
@@ -338,6 +340,38 @@ async function handleAdminRead(res, session, body) {
   } catch (e) {
     console.error('[admin_read]', resource, e.message);
     return res.status(500).json({ ok:false, error:'Failed to read admin data' });
+  }
+}
+
+// Read-only customer identity analysis. This intentionally bypasses the
+// 500-item Admin UI read cap, loads each source collection exactly once, and
+// performs no Firestore writes. Only Art/Owner may view the PII-rich report.
+async function handleIdentityDryRun(res, session, body) {
+  if (session.name !== 'Art' || !requireRole(session, 'owner')) {
+    return res.status(403).json({ ok:false, error:'Access denied: Art owner only.' });
+  }
+  const branchId = typeof body.branchId === 'string' && body.branchId.trim() ? body.branchId.trim() : DEFAULT_BRANCH_ID;
+  if (!BRANCH_ID_RE.test(branchId)) return res.status(400).json({ ok:false, error:'Invalid branchId' });
+  if (!hasBranchAccess(session, branchId)) return res.status(403).json({ ok:false, error:'No access to this branch' });
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    const [bookingSnap, userSnap, packageSnap] = await Promise.all([
+      db.collection('bookings').get(),
+      db.collection('registered_users').get(),
+      db.collection('customer_packages').get(),
+    ]);
+    const inBranch = snap => snap.docs
+      .map(doc => ({ id:doc.id, ...doc.data() }))
+      .filter(item => resolveBranchId(item) === branchId);
+    const report = buildCustomerIdentityDryRun({
+      bookings: inBranch(bookingSnap),
+      users: userSnap.docs.map(doc => ({ id:doc.id, ...doc.data() })),
+      packages: inBranch(packageSnap),
+    });
+    return res.status(200).json({ ...report, branchId });
+  } catch (error) {
+    console.error('[identity_dry_run]', error.message);
+    return res.status(500).json({ ok:false, error:'Failed to build identity dry-run report' });
   }
 }
 
