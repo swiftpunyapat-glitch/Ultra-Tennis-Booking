@@ -3,18 +3,21 @@
 // This module is intentionally pure: it receives already-read documents and
 // returns a proposal/report. It never imports Firestore and never writes data.
 
-export const CUSTOMER_IDENTITY_RULE_VERSION = 'customer-identity-v1';
+export const CUSTOMER_IDENTITY_RULE_VERSION = 'customer-identity-v1-safety-2';
+
+const THAI_MOBILE_RE = /^0[689]\d{8}$/;
+const LINE_USER_ID_RE = /^U[0-9a-f]{32}$/i;
 
 export function normalizeIdentityPhone(value) {
   let digits = String(value || '').replace(/\D/g, '');
   if (digits.startsWith('66') && digits.length === 11) digits = `0${digits.slice(2)}`;
-  if (!/^0\d{8,9}$/.test(digits)) return '';
+  if (!THAI_MOBILE_RE.test(digits)) return '';
   return digits;
 }
 
 export function usableIdentityLineId(value) {
   const id = String(value || '').trim();
-  return id && id !== 'guest' && id !== 'manual' ? id : '';
+  return LINE_USER_ID_RE.test(id) ? id : '';
 }
 
 function sorted(values) {
@@ -25,9 +28,8 @@ function sourceRecord(record, source) {
   const id = String(record?.id || 'unknown');
   const lineUserId = usableIdentityLineId(record?.lineUserId)
     || (source === 'registered_user' ? usableIdentityLineId(id) : '');
-  const phone = normalizeIdentityPhone(
-    record?.phoneNormalized || record?.customerPhoneNormalized || record?.phone || record?.customerPhone,
-  );
+  const phone = [record?.phoneNormalized, record?.customerPhoneNormalized, record?.phone, record?.customerPhone]
+    .map(normalizeIdentityPhone).find(Boolean) || '';
   const name = String(record?.name || record?.customerName || record?.lineDisplayName || '').trim();
   return { id, source, lineUserId, phone, name, raw: record || {} };
 }
@@ -47,6 +49,7 @@ export function buildCustomerIdentityDryRun({ bookings = [], users = [], package
   const userRecords = users.map(item => sourceRecord(item, 'registered_user'));
   const bookingRecords = bookings.map(item => sourceRecord(item, 'booking'));
   const packageRecords = packages.map(item => sourceRecord(item, 'package'));
+  const allRecords = [...userRecords, ...bookingRecords, ...packageRecords];
 
   const usersByLine = new Map();
   const linesByPhone = new Map();
@@ -60,6 +63,31 @@ export function buildCustomerIdentityDryRun({ bookings = [], users = [], package
       linesByPhone.get(user.phone).add(user.lineUserId);
     }
   }
+
+  const recordsByLine = new Map();
+  for (const record of allRecords) {
+    if (!record.lineUserId) continue;
+    if (!recordsByLine.has(record.lineUserId)) recordsByLine.set(record.lineUserId, []);
+    recordsByLine.get(record.lineUserId).push(record);
+  }
+  const suspiciousLineIdentities = [...recordsByLine.entries()].flatMap(([lineUserId, records]) => {
+    const phones = new Set(records.map(record => record.phone).filter(Boolean));
+    if (phones.size < 2) return [];
+    const severity = phones.size >= 3 ? 'hard_block' : 'manual_review';
+    return [{
+      type: 'suspicious_line_identity', lineUserId,
+      phones: sorted(phones),
+      names: sorted(new Set(records.map(record => record.name).filter(Boolean))),
+      bookingIds: sorted(records.filter(record => record.source === 'booking').map(record => record.id)),
+      registeredUserDocumentIds: sorted(records.filter(record => record.source === 'registered_user').map(record => record.id)),
+      packageIds: sorted(records.filter(record => record.source === 'package').map(record => record.id)),
+      severity,
+      reason: severity === 'hard_block'
+        ? 'One LINE identity is attached to three or more distinct valid Thai mobile phones. Auto-linking is hard-blocked.'
+        : 'One LINE identity is attached to two distinct valid Thai mobile phones. Auto-linking requires manual review.',
+    }];
+  }).sort((a, b) => b.phones.length - a.phones.length || a.lineUserId.localeCompare(b.lineUserId));
+  const suspiciousLineIds = new Set(suspiciousLineIdentities.map(item => item.lineUserId));
 
   const conflicts = new Map();
   const addConflict = (key, value) => { if (!conflicts.has(key)) conflicts.set(key, value); };
@@ -99,13 +127,15 @@ export function buildCustomerIdentityDryRun({ bookings = [], users = [], package
     }
     if (record.phone) {
       const owners = linesByPhone.get(record.phone) || new Set();
-      if (owners.size === 1) return `line:${sorted(owners)[0]}`;
+      if (owners.size === 1) {
+        const owner = sorted(owners)[0];
+        if (!suspiciousLineIds.has(owner)) return `line:${owner}`;
+      }
       return `phone:${record.phone}`;
     }
     return `record:${record.source}:${record.id}`;
   };
 
-  const allRecords = [...userRecords, ...bookingRecords, ...packageRecords];
   const canonicalByRecord = new Map();
   for (const record of allRecords) canonicalByRecord.set(`${record.source}:${record.id}`, resolveCanonical(record));
 
@@ -114,7 +144,9 @@ export function buildCustomerIdentityDryRun({ bookings = [], users = [], package
     if (record.lineUserId || !record.phone) continue;
     const owners = linesByPhone.get(record.phone) || new Set();
     if (owners.size !== 1) continue;
-    const canonicalCustomerId = `line:${sorted(owners)[0]}`;
+    const owner = sorted(owners)[0];
+    if (suspiciousLineIds.has(owner)) continue;
+    const canonicalCustomerId = `line:${owner}`;
     const key = `phone:${record.phone}->${canonicalCustomerId}`;
     if (!proposalMap.has(key)) proposalMap.set(key, {
       aliasCustomerId: `phone:${record.phone}`, canonicalCustomerId,
@@ -177,9 +209,8 @@ export function buildCustomerIdentityDryRun({ bookings = [], users = [], package
     }
   }
 
-  const proposedCanonicalIds = new Set(proposedLinks.map(item => item.canonicalCustomerId));
   const passReview = [...profiles.values()]
-    .filter(profile => proposedCanonicalIds.has(profile.canonicalCustomerId) && profile.packageIds.size > 1)
+    .filter(profile => profile.packageIds.size > 1)
     .map(profile => ({
       type: 'multiple_distinct_package_documents', canonicalCustomerId: profile.canonicalCustomerId,
       packageIds: sorted(profile.packageIds), severity: 'manual_review',
@@ -199,6 +230,7 @@ export function buildCustomerIdentityDryRun({ bookings = [], users = [], package
   })).sort((a, b) => (b.lastBookingDate || '').localeCompare(a.lastBookingDate || '') || a.canonicalCustomerId.localeCompare(b.canonicalCustomerId));
 
   const conflictList = [...conflicts.values()];
+  const affectedBookingIds = new Set(suspiciousLineIdentities.flatMap(item => item.bookingIds));
   return {
     ok: true, dryRun: true, writesPerformed: 0,
     ruleVersion: CUSTOMER_IDENTITY_RULE_VERSION,
@@ -208,11 +240,14 @@ export function buildCustomerIdentityDryRun({ bookings = [], users = [], package
       canonicalProfiles: derivedProfiles.length,
       proposedLinks: proposedLinks.length,
       identityConflicts: conflictList.length,
+      suspiciousLineIdentities: suspiciousLineIdentities.length,
+      hardBlockedLineIdentities: suspiciousLineIdentities.filter(item => item.severity === 'hard_block').length,
+      affectedBookings: affectedBookingIds.size,
       packageConflicts: packageConflicts.length,
       passReviews: passReview.length,
       unresolvedRecords: unresolvedRecords.length,
     },
-    proposedLinks, conflicts: conflictList, packageConflicts, passReview, unresolvedRecords,
+    proposedLinks, conflicts: conflictList, suspiciousLineIdentities, packageConflicts, passReview, unresolvedRecords,
     derivedProfiles,
   };
 }

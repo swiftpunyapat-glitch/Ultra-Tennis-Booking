@@ -14,11 +14,12 @@ The first release is a read-only dry-run. It reads `registered_users`, `bookings
 
 ## Identity strength
 
-1. A real LINE user ID is the strongest identity. `guest` and `manual` are placeholders, not identities.
-2. A validated normalized Thai phone is secondary evidence.
+1. A real LINE user ID matching `U` plus 32 hexadecimal characters is the strongest identity. Placeholders and invalid/non-LINE identifiers are not identities.
+2. A validated normalized Thai mobile phone (`06`, `08`, or `09`, ten digits) is secondary evidence. Landlines, foreign/unknown formats, and invalid values are unlinkable.
 3. Names are display evidence only and never trigger an automatic merge.
 4. A phone owned by more than one registered LINE account is always manual review.
 5. A record whose LINE identity disagrees with the registered owner of its phone is always manual review.
+6. A LINE identity found with two distinct valid mobile phones is suspicious/manual review. Three or more is a hard block. Every suspicious LINE is excluded from auto-link proposals while its explicit records remain intact.
 
 ## Canonical IDs
 
@@ -30,15 +31,26 @@ Future soft-links must point directly to one canonical ID. Link chains such as `
 
 ## Dry-run proposals
 
-A phone alias may be proposed for `phone:{phone} → line:{lineUserId}` only when exactly one registered LINE account owns that phone. The proposal includes booking IDs, package IDs, names, rule version, and evidence count for owner review.
+A phone alias may be proposed for `phone:{phone} → line:{lineUserId}` only when exactly one registered LINE account owns that phone and that LINE identity is not suspicious. The proposal includes booking IDs, package IDs, names, rule version, and evidence count for owner review.
 
 The dry-run never approves its own proposals.
+
+## Suspicious LINE safety gate
+
+The report includes `suspiciousLineIdentities` with valid phones, diagnostic names, booking IDs, registered-user document IDs, package IDs, severity, and reason. Names are display-only evidence and never participate in matching.
+
+- Two distinct valid phones: `manual_review`
+- Three or more distinct valid phones: `hard_block`
+
+Both severities block phone aliases from resolving or proposing a link into that LINE identity. Explicit booking/package records carrying the LINE ID remain under the LINE-derived profile, and existing conflicts such as `line_phone_disagreement` continue to be reported independently.
+
+The summary includes `suspiciousLineIdentities`, `hardBlockedLineIdentities`, and the number of explicit `affectedBookings`. The report always returns `dryRun: true` and `writesPerformed: 0`.
 
 ## Pass review
 
 - A booking reference is checked using `packageId` and `usedPackageId` only.
 - Missing package documents and package-owner identity mismatches are manual review.
-- If a proposed canonical customer has multiple distinct package documents, every package remains distinct and the pair is manually reviewed.
+- If any canonical customer has multiple distinct package documents, every package remains distinct and the set is manually reviewed.
 - Similar minutes, names, products, or expiry dates never justify package deduplication.
 
 ## Reversible write phase (not implemented in the dry-run)

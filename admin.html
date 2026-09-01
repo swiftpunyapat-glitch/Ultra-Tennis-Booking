@@ -344,7 +344,7 @@
     .identity-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}
     .identity-panel-copy{font-size:.74rem;color:var(--m);line-height:1.55;margin:0;}
     .identity-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;}
-    .identity-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;margin:12px 0;}
+    .identity-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:7px;margin:12px 0;}
     .identity-kpi{background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:8px;min-width:0;}
     .identity-kpi strong{display:block;font-size:1rem;color:var(--t);overflow-wrap:anywhere;}
     .identity-kpi span{display:block;font-size:.58rem;color:var(--m);text-transform:uppercase;margin-top:2px;}
@@ -3113,17 +3113,22 @@ function renderCustomerIdentityReport(report){
   const output=$("identityDryRunOutput");if(!output)return;
   const summary=report.summary||{},counts=report.sourceCounts||{};
   const proposals=identityList(report.proposedLinks,item=>`<div class="identity-review-row"><strong>${esc(item.aliasCustomerId)}</strong> → ${esc(item.canonicalCustomerId)}<br><span style="color:var(--m)">${item.evidenceCount||0} evidence · ${item.bookingIds?.length||0} booking · ${item.packageIds?.length||0} pass</span></div>`,"ไม่พบคู่ที่เสนอให้เชื่อม");
+  const suspicious=identityList(report.suspiciousLineIdentities,item=>`<div class="identity-review-row"><strong>${esc(item.lineUserId)}</strong> · ${esc(item.severity)}<br><span style="color:var(--m)">Phones: ${esc((item.phones||[]).join(", ")||"—")}<br>Names: ${esc((item.names||[]).join(", ")||"—")}<br>${item.bookingIds?.length||0} booking · ${item.registeredUserDocumentIds?.length||0} registered doc · ${item.packageIds?.length||0} pass</span></div>`,"ไม่พบ LINE identity ที่น่าสงสัย");
   const conflicts=identityList([...(report.conflicts||[]),...(report.packageConflicts||[]),...(report.passReview||[])],item=>`<div class="identity-review-row"><strong>${esc(item.type||"manual_review")}</strong><br><span style="color:var(--m)">${esc(item.reason||"")}</span></div>`,"ไม่พบรายการที่ต้องตรวจมือ");
   output.innerHTML=`
     <div class="identity-kpis">
       <div class="identity-kpi"><strong>${summary.canonicalProfiles||0}</strong><span>Profiles</span></div>
       <div class="identity-kpi"><strong>${summary.proposedLinks||0}</strong><span>Proposed links</span></div>
       <div class="identity-kpi"><strong>${summary.identityConflicts||0}</strong><span>Identity conflicts</span></div>
+      <div class="identity-kpi"><strong>${summary.suspiciousLineIdentities||0}</strong><span>Suspicious LINE</span></div>
+      <div class="identity-kpi"><strong>${summary.hardBlockedLineIdentities||0}</strong><span>Hard blocked</span></div>
+      <div class="identity-kpi"><strong>${summary.affectedBookings||0}</strong><span>Affected bookings</span></div>
       <div class="identity-kpi"><strong>${summary.packageConflicts||0}</strong><span>Pass conflicts</span></div>
       <div class="identity-kpi"><strong>${summary.passReviews||0}</strong><span>Pass reviews</span></div>
       <div class="identity-kpi"><strong>${summary.unresolvedRecords||0}</strong><span>Unresolved</span></div>
     </div>
     <div class="identity-panel-copy" style="margin-bottom:10px">อ่านแล้ว ${counts.bookings||0} bookings · ${counts.registeredUsers||0} registered users · ${counts.packages||0} passes · กฎ ${esc(report.ruleVersion||"—")} · เขียนข้อมูล ${Number(report.writesPerformed)||0} รายการ</div>
+    <div class="identity-review" style="margin-bottom:8px"><h3>Suspicious LINE identities — บล็อก Auto-link แล้ว</h3>${suspicious}</div>
     <div class="identity-review-grid">
       <div class="identity-review"><h3>คู่ที่ระบบเสนอ — รอ Art ตรวจ</h3>${proposals}</div>
       <div class="identity-review"><h3>ต้องตรวจด้วยมือ</h3>${conflicts}</div>
@@ -3141,7 +3146,7 @@ async function runCustomerIdentityDryRun(){
     if(!response.ok||!report.ok)throw new Error(report.error||`HTTP ${response.status}`);
     if(report.dryRun!==true||Number(report.writesPerformed)!==0)throw new Error("Server did not confirm a zero-write dry-run");
     customerIdentityReport=report;renderCustomerIdentityReport(report);download.disabled=false;
-    showToast(`✓ ตรวจเสร็จ: เสนอ ${report.summary?.proposedLinks||0} คู่ · ต้องตรวจมือ ${(report.summary?.identityConflicts||0)+(report.summary?.packageConflicts||0)+(report.summary?.passReviews||0)}`);
+    showToast(`✓ ตรวจเสร็จ: เสนอ ${report.summary?.proposedLinks||0} คู่ · Suspicious LINE ${report.summary?.suspiciousLineIdentities||0} · ต้องตรวจมือ ${(report.summary?.identityConflicts||0)+(report.summary?.packageConflicts||0)+(report.summary?.passReviews||0)}`);
   }catch(error){
     console.error(error);customerIdentityReport=null;
     output.innerHTML=`<div class="customer-state" style="padding:16px 0">❌ ตรวจ Identity ไม่สำเร็จ<br><span style="color:var(--m)">${esc(error.message||"Unknown error")}</span></div>`;

@@ -70,6 +70,10 @@ describe('Admin unified customer profile Hub', () => {
     expect(adminHtml).toContain('currentAdminName==="Art"&&currentAdminRole==="owner"&&adminViewMode==="owner"');
     expect(adminHtml).toContain('action:"identity_dry_run"');
     expect(adminHtml).toContain('report.dryRun!==true||Number(report.writesPerformed)!==0');
+    expect(adminHtml).toContain('summary.suspiciousLineIdentities');
+    expect(adminHtml).toContain('summary.hardBlockedLineIdentities');
+    expect(adminHtml).toContain('summary.affectedBookings');
+    expect(adminHtml).toContain('Suspicious LINE identities — บล็อก Auto-link แล้ว');
     expect(adminHtml).toContain('ดาวน์โหลด JSON');
     expect(adminHtml).not.toContain('id="identityMergeBtn"');
     expect(adminHtml).not.toContain('id="identityApplyBtn"');
