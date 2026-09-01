@@ -4,3 +4,4 @@ firestore.rules.test
 firestore-debug.log
 ui-debug.log
 *.log
+migration-plans/

@@ -1,0 +1,118 @@
+{
+  "migrationVersion": "customer-identity-v1-phase-2a",
+  "branchId": "ladprao1",
+  "sourceEvidence": {
+    "reportGeneratedAt": "2026-09-01T08:27:51.587Z",
+    "reportDigest": "4171be05741febb99daa90c822b28df54dc6b604e269e9b8590b9f1950d2bdb9",
+    "sourceCounts": { "bookings": 913, "registeredUsers": 105, "packages": 28 }
+  },
+  "approvedAutoLinks": [
+    {
+      "phone": "0800508899",
+      "lineUserId": "U192bdc0f5d57d09f4949edda2b96d549",
+      "names": ["Anuphab"],
+      "bookingIds": ["2Z0M5oQ4FX0bFaVyM49f", "3X6ie3mq7IehyjhmM8Eg", "8OBbfisEszkaK2g7OTmM", "baZLQfCHAV3NynMGAnE9", "fBidxIkz642ERWZiZgbd", "hMniSLx08dwLRJXiHhMN", "hxoc1uDrr4hjr9ZKBmKh", "Rf7oFlV60ODYpYusto3L", "uPp7r5exmjsMwp7aNFaH"]
+    },
+    {
+      "phone": "0845511945",
+      "lineUserId": "Ub8c663c496a88900feb31867af95689b",
+      "names": ["bua"],
+      "bookingIds": ["aYdJDgnrbtDKY0Ji9lRv", "NGqNhTIXFudVtxYZLEm8", "U4zO25oDuiIgLidhkP2j"]
+    },
+    {
+      "phone": "0891285259",
+      "lineUserId": "Uddae035fcd10877f8b751d10cd2895ac",
+      "names": ["K.ปริญญา", "Pline"],
+      "bookingIds": ["08qUE8FmEQmb9OM8wewU", "aS09fDwlvYgUHyEg8iV3", "FR4HId774Y0JzHG4EYAz"]
+    },
+    {
+      "phone": "0959599874",
+      "lineUserId": "U74938b7df0b2fc0c850139934c5c370f",
+      "names": ["K.เบญจมาศ"],
+      "bookingIds": ["EdLezExozVxVeyzLyvAn", "IR7Pn616FhPCaL8euXR3", "vlK7saEw0RbPFFRTcWeH"]
+    },
+    {
+      "phone": "0956451687",
+      "lineUserId": "U8db0aab688a3bbbc50b65a3c248b80b6",
+      "names": ["zeazea"],
+      "bookingIds": ["2kKAGJWIFJTiyI0cs8dj", "AS045ffeKisHDVThXJWh"]
+    },
+    {
+      "phone": "0624497829",
+      "lineUserId": "U3419535d275e37fbad7bea4c68e8b300",
+      "names": ["ทรอย"],
+      "bookingIds": ["0QAGCn5V738D6tRIiE08"]
+    },
+    {
+      "phone": "0650498390",
+      "lineUserId": "U584994d8846536a46856e9cb506f855d",
+      "names": ["Karn"],
+      "bookingIds": ["Fv7LYgkH3preRecuGnuM"]
+    },
+    {
+      "phone": "0816020216",
+      "lineUserId": "U39d903c1c954ed65d4dc3fe41117b0df",
+      "names": ["K.NineS"],
+      "bookingIds": ["g8BKamOxq2Z7mv5ZBgHV"]
+    },
+    {
+      "phone": "0846588578",
+      "lineUserId": "Ucb83e1231d8207f7a9b27820cda77c35",
+      "names": ["porilla"],
+      "bookingIds": ["wxcFanOwhJu2EvEn6XFx"]
+    },
+    {
+      "phone": "0890783028",
+      "lineUserId": "U226b1dfdd8c8cc1c773e6a1aa3e10231",
+      "names": ["หนึ่ง"],
+      "bookingIds": ["legacy_c647dced647824769f4b6834"]
+    },
+    {
+      "phone": "0936425492",
+      "lineUserId": "U95bb7f62849192378d01c59bdd5ff6fc",
+      "names": ["K.เตอร์"],
+      "bookingIds": ["q44ZXc9E4GTJcSmkJuzB"]
+    }
+  ],
+  "approvedHumanMappings": {
+    "art": {
+      "lineUserId": "U8ef026374d200e21bcf615a3bbc6bb2d",
+      "correctPhone": "0962825392",
+      "typoPhone": "0962828392",
+      "names": ["Art"],
+      "bookingIds": ["5M0JTTkC3bEceKj5mSAt", "5PGj9A7jXfBSoUnobNB8", "7SxQ93zIVcKkQSxw16Kn", "8GzwSAIj8haDer7BgZ3e", "aFBrRgx3BNDDGzWId0qC", "Aly6oMeyrgC4e2tCUOGi", "AoqTMZ7J2AZIsX6gadEN", "BqG6fmBWYmScIdly3Mc1", "BT3Q2gbfppXS2BJjsT7R", "cDtzGXS9Qjdpb8PqfKT0", "CmlRfLEtUdPBcF9wTP5O", "D9TyCZAAHLduC4Prc53B", "fhopdYCTOWbrdQmqtzf0", "FRi78XEDWK17EKdATwhq", "H6ZxK18w887vEqvqRejN", "j2iBlutrdUmyEngPqdMK", "jtmVRsJqFuDIcjUejUhH", "SEeLUW69JDG0SXQLiSta", "tkJFBifMlCDQYE6Lbgtp", "tZ5ic0XVF1JNjMOSl2Eg", "uguapdyoM24ZioeQ6Fpi", "v6rhi8JFoPxLKOS6rLfn", "VpVRkQ6WpqDHa2xmlxiy", "WJJudAoP95dmSl9pwYhk", "ZLkH6L9lpDeQEuTH6OQ5"],
+      "packageIds": ["52xUryc8GLI03h2GtcGJ", "9APfMDonIphsyJxA8Ido", "KnmsnxTd1mqsNM8BITTM", "ngkWo0Hivqbqcqtqcb6Y", "rHGDPPFOqfvEqYGpTTIf", "VCmTTHFi4UYnXkxU8jOa", "vJkeIyJ97YxHSnMCMXfK", "VZjB4AbrWkehMtOwcG96"]
+    },
+    "noppon": {
+      "lineUserId": "U6741a143a06b5a63cab0a840d9bb8197",
+      "phones": ["0809660850", "0923924850"],
+      "names": ["Noppon ✅", "นพพล"],
+      "bookingIds": ["1cIZ3UJ9eumkdIQvBf6A", "4HPVjAidN8IiQ917vx75", "6mwNJ8GzkpqYVYjoMCQI", "8ZvmVos8a4EVioVFIgIb", "Kte0SWArplWpK8ZKwdmJ"],
+      "packageIds": ["012wTxR3Fs5Z9CSxIKWz"]
+    },
+    "paksada": {
+      "lineUserId": "U283f715a63f878c05fb3902a4cbef2c0",
+      "phones": ["0837824549"],
+      "names": ["PAKSADA4224🔴🟢"],
+      "packageIds": ["92VbfHY1lQW6ea9cYsre", "V86MDTdq9rnXbUsRC6Yd"]
+    }
+  },
+  "manualReviewPreserved": {
+    "anuthat": {
+      "lineUserId": "U1652aadd4d9e2c5da0ae93f0d8af0fb6",
+      "phones": ["0935822219", "0935822249"],
+      "names": ["ร.อ.อนุทัต ส."],
+      "bookingIds": ["4g1RoMN1v9Io9Bm2vTdn"],
+      "decision": "do_not_merge"
+    }
+  },
+  "contaminatedLegacyLine": {
+    "lineUserId": "U60929ad30400dcb9b8ab70527f104c3f",
+    "adminPhone": "0649649222",
+    "isolatedPhones": ["0829646369", "0830177815", "0890177815", "0993248353"],
+    "names": ["BaiMon", "K.ปิ่น", "K.ภัทร", "ก้องภพ"],
+    "bookingIds": ["cljOWD6JPhM6T0xlS7Iy", "f2nJjwbhVBIq4rk0tcp0", "GeFAcMA77gqnQSxhg4Ud", "LLwF8XzanfLQUdiclTyY", "MJSzbOm15V9Q4qBoDZzb"],
+    "packageIds": ["Sh2gs3MkrhnW8xdv9UIZ"],
+    "registeredOwnerLinkDeniedPhones": ["0993248353"]
+  }
+}
