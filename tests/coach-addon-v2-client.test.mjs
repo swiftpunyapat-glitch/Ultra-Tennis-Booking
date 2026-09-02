@@ -16,8 +16,15 @@ describe('Coach Add-on v2 customer cutover', () => {
     expect(html).toContain('action:"expire_coach_addon_v2"');
   });
 
-  test('coach card explains that the lesson price already includes court', () => {
-    expect(html).toContain('(รวมค่าคอร์ทแล้ว)');
+  test('available coaches render as accessible profile cards with existing profile fields', () => {
+    expect(html).toContain('class="coach-profile-list"');
+    expect(html).toContain('coach-profile-card');
+    expect(html).toContain('btn.setAttribute("aria-pressed"');
+    expect(html).toContain('coach-profile-photo');
+    expect(html).toContain('coach-profile-bio');
+    expect(html).toContain('ว่างช่วงนี้');
+    expect(html).toContain('พร้อมสอนครบ ${need} นาที');
+    expect(html).toContain('<span class="coach-profile-price-label">ราคาคาบต่อชั่วโมง<br>รวมค่าคอร์ทแล้ว</span>');
   });
 
   test('only Beginner Coaching is exposed as a coaching package', () => {
