@@ -48,6 +48,8 @@ import {
 } from './_lib/firebase-admin.js';
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
 import { FieldValue } from 'firebase-admin/firestore';
+import { isCoachAddonV2Booking } from './_lib/coach-addon-v2.js';
+import { releaseCoachAddonV2Hold } from './_lib/coach-addon-v2-store.js';
 
 const MAX_SLIP_BYTES   = 6 * 1024 * 1024;             // client caps at 5MB; headroom
 const ALLOWED_BUCKETS  = [
@@ -318,6 +320,14 @@ async function handleSubmitBookingSlip(req, res, body, db) {
       if (b.paymentStatus === 'paid' || b.paymentStatus === 'package') throw new Error('ALREADY_SETTLED');
       if (b.bookingStatus === 'cancelled') throw new Error('CANCELLED');
       if (b.paymentStatus !== 'unpaid' && b.paymentStatus !== 'pending_review') throw new Error('BAD_STATE');
+      const isCoachV2 = isCoachAddonV2Booking(b);
+      if (isCoachV2) {
+        if (b.bookingState !== 'held' || !['unpaid', 'pending_review'].includes(b.cashState)) throw new Error('BAD_STATE');
+        const expiry = b.paymentExpiresAt?.toMillis?.() ?? null;
+        // A replay of an already-submitted slip remains idempotent.  A first
+        // submission after the deadline is rejected and released below.
+        if (b.cashState === 'unpaid' && expiry !== null && expiry <= Date.now()) throw new Error('HOLD_EXPIRED');
+      }
 
       // 3. Every private slot claim must belong to this booking (RB-08).
       // The public document no longer carries an owner, so this is the only
@@ -327,6 +337,8 @@ async function handleSubmitBookingSlip(req, res, body, db) {
       if (!slotIds.length) throw new Error('SLOT_OWNERSHIP_MISMATCH');
       const claimSnaps = await Promise.all(slotIds.map(id => t.get(db.collection('booking_slot_claims').doc(id))));
       const slotSnaps  = await Promise.all(slotIds.map(id => t.get(db.collection('booking_slots').doc(id))));
+      const coachClaimIds = isCoachV2 && Array.isArray(b.coachClaimIds) ? b.coachClaimIds : [];
+      const coachClaimSnaps = await Promise.all(coachClaimIds.map(id => t.get(db.collection('coach_slot_claims').doc(id))));
 
       claimSnaps.forEach((cs, i) => {
         const ss = slotSnaps[i];
@@ -341,12 +353,16 @@ async function handleSubmitBookingSlip(req, res, body, db) {
         }
         if (cs.data().bookingId !== bookingId) throw new Error('SLOT_OWNERSHIP_MISMATCH');
       });
+      coachClaimSnaps.forEach(cs => {
+        if (!cs.exists || cs.data().bookingId !== bookingId) throw new Error('COACH_CLAIM_CONFLICT');
+      });
 
       // 4. pending_review is an occupied pre-confirmation state. Only admin
       // approval promotes it to confirmed.
       t.update(bookingRef, {
         bookingStatus:  'pending_review',
         paymentStatus:  'pending_review',
+        ...(isCoachV2 ? { cashState: 'pending_review' } : {}),
         slipUrl,
         slipUploadedAt: FieldValue.serverTimestamp(),
         slipSubmittedVia: 'server',
@@ -367,10 +383,22 @@ async function handleSubmitBookingSlip(req, res, body, db) {
           });
         }
       });
+      coachClaimSnaps.forEach((cs, i) => {
+        if (!cs.exists || cs.data().status === 'confirmed') return;
+        t.update(db.collection('coach_slot_claims').doc(coachClaimIds[i]), {
+          status: 'pending_review', updatedAt: FieldValue.serverTimestamp(),
+        });
+      });
 
       writeIdempotencyInTx(t, idemRef, { scope: idemScope, fingerprint: idemFp, response });
     });
   } catch (e) {
+    if (e.message === 'HOLD_EXPIRED') {
+      await releaseCoachAddonV2Hold(db, bookingId, {
+        reason: 'slip_submitted_after_expiry', actor: auth.actor, requireExpired: true,
+      }).catch(error => console.error('[submit_slip] expired release:', error.message));
+      return res.status(409).json({ ok: false, code: 'HOLD_EXPIRED', error: 'หมดเวลาชำระเงินแล้ว กรุณาจองใหม่' });
+    }
     if (e.message === 'IDEMPOTENCY_CONFLICT') {
       return res.status(409).json({ ok: false, code: 'IDEMPOTENCY_CONFLICT', error: 'idempotencyKey ถูกใช้กับคำขออื่นแล้ว' });
     }
@@ -379,6 +407,9 @@ async function handleSubmitBookingSlip(req, res, body, db) {
         ok: false, code: 'SLOT_OWNERSHIP_MISMATCH',
         error: 'ช่องเวลาของการจองนี้ถูกเปลี่ยนไปแล้ว กรุณาติดต่อแอดมิน',
       });
+    }
+    if (e.message === 'COACH_CLAIM_CONFLICT') {
+      return res.status(409).json({ ok: false, code: 'COACH_CLAIM_CONFLICT', error: 'เวลาของโค้ชถูกเปลี่ยนไปแล้ว กรุณาติดต่อแอดมิน' });
     }
     const map = {
       GONE:            [404, 'Booking not found'],

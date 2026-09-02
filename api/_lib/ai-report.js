@@ -91,6 +91,11 @@ function increment(target, key, amount = 1) {
 }
 
 function bookingCategory(booking) {
+  // V2 separates what was booked from how it was funded.  Never infer a v2
+  // service from price/payment/package fields.
+  if (Number(booking.coachAddonSchemaVersion) === 2 && booking.serviceCategory) {
+    return String(booking.serviceCategory);
+  }
   const type = String(booking.packageType || booking.usedPackageType || '');
   if (booking.isEventBooking === true || type === 'monstr_event_pass') return 'event_pass';
   if (booking.voucherCode) return 'voucher';
@@ -108,6 +113,8 @@ export function sanitizeAiBooking(id, booking = {}) {
     endTime: booking.endTime || null,
     durationMinutes: minutesOfBooking(booking),
     category: bookingCategory(booking),
+    serviceCategory: booking.serviceCategory || null,
+    fundingSource: booking.fundingSource || null,
     bookingType: booking.bookingType || null,
     serviceType: booking.serviceType || null,
     bookingStatus: booking.bookingStatus || booking.status || null,
@@ -117,6 +124,12 @@ export function sanitizeAiBooking(id, booking = {}) {
     promoCode: booking.promoCode || null,
     voucherCode: booking.voucherCode || null,
     packageType: booking.packageType || booking.usedPackageType || null,
+    courtCashAmount: Number(booking.courtCashAmount) || 0,
+    courtPackageMinutes: Number(booking.courtPackageMinutes) || 0,
+    coachChargeAmount: Number(booking.coachChargeAmount) || 0,
+    extraPersonFee: Number(booking.extraPersonFee) || 0,
+    coachPayoutAmount: Number(booking.coachPayoutAmount) || 0,
+    cashPaidAmount: Number(booking.cashPaidAmount) || 0,
     isEventBooking: booking.isEventBooking === true,
     source: booking.source || booking.createdVia || null,
   };
@@ -145,7 +158,7 @@ export function buildAiBookingReport(records = [], range, { details = false, pag
   };
   const breakdown = {
     byMonth: {}, byDay: {}, byCategory: {}, byBookingStatus: {},
-    byPaymentStatus: {}, byStartHour: {}, bySource: {},
+    byPaymentStatus: {}, byStartHour: {}, bySource: {}, byFundingSource: {},
   };
 
   for (const booking of bookings) {
@@ -159,6 +172,8 @@ export function buildAiBookingReport(records = [], range, { details = false, pag
     increment(breakdown.byCategory, bookingCategory(booking));
     increment(breakdown.byStartHour, String(booking.startTime || 'unknown').slice(0, 2));
     increment(breakdown.bySource, booking.source || booking.createdVia || 'unknown');
+    increment(breakdown.byFundingSource, booking.fundingSource ||
+      (booking.paymentStatus === 'package' ? 'package' : booking.paymentStatus === 'paid' ? 'cash' : 'unknown'));
     if (cancelled) { metrics.cancelledCount++; continue; }
 
     metrics.bookingsTotal++;
@@ -168,13 +183,18 @@ export function buildAiBookingReport(records = [], range, { details = false, pag
     if (status === 'pending_payment') metrics.pendingPaymentCount++;
     if (payment === 'pending_review') metrics.pendingReviewCount++;
     if (status === 'pending_reschedule' || booking.pendingReschedule === true) metrics.pendingRescheduleCount++;
-    if (payment === 'paid') {
+    const isCoachV2 = Number(booking.coachAddonSchemaVersion) === 2;
+    if (isCoachV2 ? booking.cashState === 'paid' : payment === 'paid') {
       metrics.paidBookingCount++;
-      metrics.paidRevenue += Number(booking.price ?? booking.amount) || 0;
+      metrics.paidRevenue += isCoachV2
+        ? Number(booking.cashPaidAmount) || 0
+        : Number(booking.price ?? booking.amount) || 0;
     }
-    if (payment === 'package') {
+    if (isCoachV2 ? booking.packageUsageState === 'consumed' : payment === 'package') {
       metrics.packageBookingCount++;
-      metrics.packageUsageValue += Number(booking.packageUsageValueTotal) || 0;
+      metrics.packageUsageValue += isCoachV2
+        ? Number(booking.packageUsageValueAmount) || 0
+        : Number(booking.packageUsageValueTotal) || 0;
     }
   }
   metrics.paidRevenue = Math.round(metrics.paidRevenue * 100) / 100;

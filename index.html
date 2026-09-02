@@ -615,6 +615,37 @@
         </div>
       </div>
 
+      <!-- Coach Add-on v2 is opt-in and remains hidden unless the server flag
+           is explicitly enabled.  The ordinary court/payment controls above
+           remain the source of truth whenever the add-on is not selected. -->
+      <div class="card" id="coachAddonV2Card" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div>
+            <div class="slabel" style="margin:0">Coach Add-on</div>
+            <div style="font-size:.72rem;color:var(--muted);margin-top:4px">เพิ่มโค้ชครบทั้งช่วงเวลาที่จอง</div>
+          </div>
+          <button type="button" class="ptbtn" id="coachAddonV2Toggle" style="width:auto;padding:10px 14px">เพิ่ม Coach</button>
+        </div>
+        <div id="coachAddonV2Body" style="display:none;margin-top:14px">
+          <div id="coachAddonV2Status" style="font-size:.76rem;color:var(--muted);margin-bottom:10px">เลือกเวลาอย่างน้อย 60 นาทีเพื่อดูโค้ชที่ว่าง</div>
+          <div id="coachAddonV2List" style="display:flex;flex-direction:column;gap:8px"></div>
+          <div id="coachAddonV2Funding" style="display:none;margin-top:14px">
+            <div class="slabel">วิธีใช้สิทธิ์</div>
+            <div class="ptgrid">
+              <button type="button" class="ptbtn on" id="coachAddonV2Cash"><span class="pt-name">จ่ายทั้งหมด</span><small class="pt-sub">ค่าคอร์ท + ค่าโค้ช</small></button>
+              <button type="button" class="ptbtn" id="coachAddonV2Ultra"><span class="pt-name">ใช้ Ultra Pass</span><small class="pt-sub" id="coachAddonV2UltraSub">หักคอร์ท · จ่ายค่าโค้ช</small></button>
+              <button type="button" class="ptbtn" id="coachAddonV2Beginner"><span class="pt-name">Beginner Coaching</span><small class="pt-sub" id="coachAddonV2BeginnerSub">รวม Court + Coach</small></button>
+            </div>
+            <div class="slabel" style="margin-top:14px">จำนวนผู้เรียน</div>
+            <div class="ptgrid">
+              <button type="button" class="ptbtn on" id="coachAddonV2Student1"><span class="pt-name">1 คน</span></button>
+              <button type="button" class="ptbtn" id="coachAddonV2Student2"><span class="pt-name">2 คน</span><small class="pt-sub">+฿100 จ่ายให้โค้ช</small></button>
+            </div>
+          </div>
+          <div id="coachAddonV2Breakdown" style="display:none;margin-top:14px;padding:12px;border-radius:10px;background:var(--surface-soft,#f7f8fa);font-size:.76rem;line-height:1.7"></div>
+        </div>
+      </div>
+
       <div class="rcard" style="margin-bottom:12px">
         <div class="rimg"></div>
         <div class="rinfo">
@@ -631,7 +662,7 @@
           <label><span data-i18n="name">Name</span><input type="text" id="bkName" autocomplete="name" placeholder="Full name"/></label>
           <label><span data-i18n="phone">Phone</span><input type="tel" id="bkPhone" autocomplete="tel" placeholder="Phone number"/></label>
           <label class="full"><span data-i18n="noteOptional">Note (optional)</span><textarea id="bkNote" rows="2" placeholder="Special requests..."></textarea></label>
-          <label class="full"><span>โค้ดส่วนลด (ถ้ามี)</span><input type="text" id="bkVoucher" autocomplete="off" placeholder="Voucher code" style="text-transform:uppercase"/></label>
+          <label class="full" id="bkVoucherLabel"><span>โค้ดส่วนลด (ถ้ามี)</span><input type="text" id="bkVoucher" autocomplete="off" placeholder="Voucher code" style="text-transform:uppercase"/></label>
         </div>
       </div>
 
@@ -1118,8 +1149,13 @@ const state = {
   availabilityStale: false,
   availabilityLoadedAt: 0,
   bookingPaymentType: "single",
+  coachAddonV2: {
+    enabled:false, active:false, coaches:[], selectedCoach:null,
+    fundingMode:"cash", studentCount:1, quote:null,
+    optionsKey:"", quoteKey:"", loading:false,
+  },
   // Eligibility
-  eligibility: { hasUltra:false, ultraPkg:null, hasOffpeak:false, offpeakPkg:null, hasEvent:false, eventPkg:null },
+  eligibility: { hasUltra:false, ultraPkg:null, hasOffpeak:false, offpeakPkg:null, hasEvent:false, eventPkg:null, hasBeginnerCoaching:false, beginnerCoachingPkg:null },
   // Current booking/purchase (for payment panel)
   paymentMode: null, // "booking" | "pass"
   currentBookingCode: null,
@@ -1702,9 +1738,12 @@ async function initLiff() {
               pending.price,
               dbExpiresAt || new Date(pending.expiresAt),
               pending.date,
-              `${pending.startTime} – ${pending.endTime}`,
+              `${pending.startTime} – ${pending.endTime}${bData.coachName?` · โค้ช ${bData.coachName}`:""}`,
               pending.isLN
             );
+            if(pending.coachAddonV2||bData.coachAddonSchemaVersion===2){
+              scheduleCoachAddonV2Expiry(pending.docId,dbExpiresAt||new Date(pending.expiresAt),pending.guestToken||null);
+            }
             showView("viewPayment");
             restored = true;
           } else {
@@ -1717,6 +1756,9 @@ async function initLiff() {
         }
       } else {
         console.log("[perf] Cached pending booking has expired. Clearing cache.");
+        if(pending?.coachAddonV2&&pending.docId){
+          scheduleCoachAddonV2Expiry(pending.docId,new Date(pending.expiresAt),pending.guestToken||null);
+        }
         localStorage.removeItem("ut_pending_booking");
       }
     } catch (e) {
@@ -1738,7 +1780,7 @@ const ROOM_PASS_TYPES = ["ultra_starter_3", "ultra_pass_10", "ultra_pass_20", "u
 const EVENT_PASS_TYPES = ["monstr_event_pass"];
 
 async function checkEligibility() {
-  state.eligibility = { hasUltra: false, ultraPkg: null, hasOffpeak: false, offpeakPkg: null, hasEvent: false, eventPkg: null };
+  state.eligibility = { hasUltra: false, ultraPkg: null, hasOffpeak: false, offpeakPkg: null, hasEvent: false, eventPkg: null, hasBeginnerCoaching:false, beginnerCoachingPkg:null };
   if(state.lineProfile.userId === "guest") return;
   await protectedIdToken();
   try {
@@ -1751,6 +1793,7 @@ async function checkEligibility() {
     const roomPkgs = [];
     const offpeakPkgs = [];
     const eventPkgs = [];
+    const beginnerCoachingPkgs = [];
 
     snap.forEach(d => {
       const p = { id:d.id, ...d.data() };
@@ -1771,6 +1814,11 @@ async function checkEligibility() {
           eventPkgs.push({ ...p, validUntilDate: validUntil });
         }
       }
+      // coach_at_ultra_10 is intentionally excluded until its product
+      // semantics are explicitly defined.
+      if(p.packageType === "beginner_coaching_5" && (p.remainingMinutes||0) >= 60) {
+        beginnerCoachingPkgs.push({ ...p, validUntilDate: validUntil });
+      }
     });
 
     if (roomPkgs.length > 0) {
@@ -1787,6 +1835,11 @@ async function checkEligibility() {
       eventPkgs.sort((a, b) => a.validUntilDate - b.validUntilDate);
       state.eligibility.hasEvent = true;
       state.eligibility.eventPkg = eventPkgs[0];
+    }
+    if (beginnerCoachingPkgs.length > 0) {
+      beginnerCoachingPkgs.sort((a, b) => a.validUntilDate - b.validUntilDate);
+      state.eligibility.hasBeginnerCoaching = true;
+      state.eligibility.beginnerCoachingPkg = beginnerCoachingPkgs[0];
     }
   } catch(e) { console.error("Eligibility check failed:",e); }
 }
@@ -1868,6 +1921,8 @@ function setupNav() {
       const n=parseInt(btn.dataset.durmin,10);
       if(state.bookingPaymentType!=="single" && n!==60){ showToast(t("durPassOnly"),true); return; }
       state.durationMinutes=n;
+      if(n<60&&state.coachAddonV2?.active) resetCoachAddonV2Selection();
+      else if(state.coachAddonV2?.active){state.coachAddonV2.optionsKey="";state.coachAddonV2.selectedCoach=null;state.coachAddonV2.quote=null;}
       updateDebugTelemetry({event:"duration_change"});
       syncDurButtons();
       if(state.time && getDisabledReasonRange(toMinB(state.time))) state.time=null;
@@ -1907,11 +1962,13 @@ async function fetchBookingFeatures(){
     const d=await r.json().catch(()=>null);
     if(r.ok&&d&&d.ok){
       state.halfHourEnabled=d.enableHalfHourBooking!==false;
+      state.coachAddonV2.enabled=d.enableCoachAddonV2===true;
       if(Number.isInteger(Number(d.halfHourPrice))&&Number(d.halfHourPrice)>0) state.halfHourPrice=Number(d.halfHourPrice);
       _featuresFetched=true;
     }
   }catch(e){ console.warn("[features] fetch failed (using live half-hour default):",e); }
   syncDurButtons();
+  renderCoachAddonV2();
 }
 
 let isAlreadyRegistered = false;
@@ -2224,6 +2281,7 @@ async function openBookingView() {
   state.time=null;
   state.bookingPaymentType="single";
   state.durationMinutes=60;
+  resetCoachAddonV2Selection();
   syncDurButtons();
   fetchBookingFeatures();   // async; re-syncs chips when the flag arrives
   state.dateOffset=0;
@@ -2261,6 +2319,7 @@ async function openBookingView() {
   console.log(`[perf] Slots & eligibility loaded in ${(performance.now() - t0).toFixed(1)}ms`);
 
   updatePaymentTypeButtons();
+  renderCoachAddonV2();
   updateBookingConfirmBtn();
 }
 
@@ -2718,6 +2777,137 @@ function updatePaymentTypeButtons() {
   updateBookingPriceNote();
 }
 
+// ── Coach Add-on / Mixed Payment v2 (feature-flagged, additive) ──
+function resetCoachAddonV2Selection(){
+  const enabled=state.coachAddonV2?.enabled===true;
+  state.coachAddonV2={ enabled,active:false,coaches:[],selectedCoach:null,fundingMode:"cash",studentCount:1,quote:null,optionsKey:"",quoteKey:"",loading:false };
+  renderCoachAddonV2();
+}
+
+function coachAddonV2Package(mode){
+  if(mode==="ultra_pass") return state.eligibility.ultraPkg;
+  if(mode==="coaching_package") return state.eligibility.beginnerCoachingPkg;
+  return null;
+}
+
+function renderCoachAddonV2(){
+  const card=$("coachAddonV2Card");
+  if(!card||!state.coachAddonV2) return;
+  const ca=state.coachAddonV2;
+  card.style.display=ca.enabled?"block":"none";
+  if(!ca.enabled) return;
+  const eligibleDuration=(state.durationMinutes||0)>=60;
+  const toggle=$("coachAddonV2Toggle");
+  toggle.disabled=!eligibleDuration;
+  toggle.classList.toggle("on",ca.active);
+  toggle.textContent=!eligibleDuration?"30 นาทีเพิ่ม Coach ไม่ได้":(ca.active?"เอา Coach ออก":"เพิ่ม Coach");
+  $("coachAddonV2Body").style.display=ca.active?"block":"none";
+  $("ptCard").style.display=ca.active?"none":"block";
+  $("bkVoucherLabel").style.display=ca.active?"none":"block";
+  if(!ca.active) return;
+
+  const need=state.durationMinutes||60;
+  const ultra=state.eligibility.ultraPkg;
+  const beginner=state.eligibility.beginnerCoachingPkg;
+  const ultraReady=!!ultra&&(Number(ultra.remainingMinutes)||0)>=need;
+  const beginnerReady=!!beginner&&(Number(beginner.remainingMinutes)||0)>=need;
+  $("coachAddonV2Ultra").disabled=!ultraReady||state.lineProfile.userId==="guest";
+  $("coachAddonV2Beginner").disabled=!beginnerReady||state.lineProfile.userId==="guest";
+  $("coachAddonV2UltraSub").textContent=ultraReady?`${ultra.packageName||"Ultra Pass"} · เหลือ ${ultra.remainingMinutes} นาที`:"ไม่มีสิทธิ์เพียงพอ";
+  $("coachAddonV2BeginnerSub").textContent=beginnerReady?`${beginner.packageName||"Beginner Coaching"} · เหลือ ${beginner.remainingMinutes} นาที`:"ไม่มีสิทธิ์เพียงพอ";
+  if(ca.fundingMode==="ultra_pass"&&!ultraReady) ca.fundingMode="cash";
+  if(ca.fundingMode==="coaching_package"&&!beginnerReady) ca.fundingMode="cash";
+  $("coachAddonV2Cash").classList.toggle("on",ca.fundingMode==="cash");
+  $("coachAddonV2Ultra").classList.toggle("on",ca.fundingMode==="ultra_pass");
+  $("coachAddonV2Beginner").classList.toggle("on",ca.fundingMode==="coaching_package");
+  $("coachAddonV2Student1").classList.toggle("on",ca.studentCount===1);
+  $("coachAddonV2Student2").classList.toggle("on",ca.studentCount===2);
+
+  const list=$("coachAddonV2List");
+  list.innerHTML="";
+  ca.coaches.forEach(coach=>{
+    const btn=document.createElement("button");
+    btn.type="button"; btn.className="hcard";
+    btn.style.cssText="flex-direction:row;align-items:center;gap:12px;padding:12px 14px;text-align:left"+(ca.selectedCoach?.id===coach.id?";border-color:var(--brand);box-shadow:0 0 0 1px var(--brand)":"");
+    const image=coach.photoUrl?`<img src="${esc(coach.photoUrl)}" alt="" style="width:48px;height:48px;border-radius:50%;object-fit:cover">`:`<div style="font-size:1.7rem">👨‍🏫</div>`;
+    btn.innerHTML=`${image}<div style="min-width:0"><div style="font-weight:800">${esc(coach.displayName)}</div><div style="font-size:.72rem;color:var(--muted)">฿${Number(coach.lessonPrice).toLocaleString("en-US")} / ชั่วโมง${coach.bio?` · ${esc(coach.bio)}`:""}</div></div>`;
+    btn.addEventListener("click",()=>{ ca.selectedCoach=coach; ca.quote=null; renderCoachAddonV2(); refreshCoachAddonV2Quote(); });
+    list.appendChild(btn);
+  });
+  $("coachAddonV2Funding").style.display=ca.selectedCoach?"block":"none";
+  const status=$("coachAddonV2Status");
+  if(ca.loading) status.textContent="กำลังตรวจโค้ชที่ว่าง...";
+  else if(!state.time) status.textContent="เลือกเวลาก่อน แล้วระบบจะแสดงโค้ชที่ว่างครบทั้งช่วง";
+  else if(!ca.coaches.length) status.textContent="ไม่มีโค้ชที่ว่างครบทั้งช่วงเวลานี้";
+  else status.textContent=`มีโค้ชว่าง ${ca.coaches.length} คน · เลือกเพื่อดูราคาสรุป`;
+
+  const breakdown=$("coachAddonV2Breakdown");
+  if(ca.quote){
+    const q=ca.quote;
+    const court=q.courtPackageMinutes?`ใช้ Package ${q.courtPackageMinutes} นาที`:`฿${Number(q.courtCashAmount).toLocaleString("en-US")}`;
+    const coach=q.coachChargeAmount?`฿${Number(q.coachChargeAmount).toLocaleString("en-US")}`:"รวมใน Beginner Coaching";
+    breakdown.style.display="block";
+    breakdown.innerHTML=`<div style="display:flex;justify-content:space-between"><span>คอร์ท</span><strong>${court}</strong></div><div style="display:flex;justify-content:space-between"><span>โค้ช ${need} นาที</span><strong>${coach}</strong></div>${q.extraPersonFee?`<div style="display:flex;justify-content:space-between"><span>ผู้เรียนคนที่ 2 (ให้โค้ช)</span><strong>฿${Number(q.extraPersonFee).toLocaleString("en-US")}</strong></div>`:""}<div style="display:flex;justify-content:space-between;border-top:1px solid rgba(128,128,128,.25);margin-top:6px;padding-top:6px"><span>ยอดชำระตอนนี้</span><strong>฿${Number(q.cashDueAmount).toLocaleString("en-US")}</strong></div>`;
+  }else{
+    breakdown.style.display="none";
+  }
+}
+
+async function refreshCoachAddonV2Options(){
+  const ca=state.coachAddonV2;
+  if(!ca.enabled||!ca.active) return;
+  const date=getSelectedDateISO(),startTime=state.time||"",durationMinutes=state.durationMinutes||60;
+  const key=`${date}|${startTime}|${durationMinutes}`;
+  if(!startTime||durationMinutes<60){ ca.coaches=[];ca.selectedCoach=null;ca.quote=null;ca.optionsKey=key;renderCoachAddonV2();return; }
+  if(ca.optionsKey===key&&(ca.loading||ca.coaches.length)) return;
+  ca.optionsKey=key;ca.loading=true;ca.coaches=[];ca.selectedCoach=null;ca.quote=null;renderCoachAddonV2();updateBookingConfirmBtn();
+  try{
+    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_addon_v2_options",date,startTime,durationMinutes})});
+    const d=await r.json().catch(()=>null);
+    if(ca.optionsKey!==key) return;
+    ca.coaches=(r.ok&&d?.ok&&d.enabled===true&&Array.isArray(d.coaches))?d.coaches:[];
+  }catch(e){ if(ca.optionsKey===key) ca.coaches=[]; }
+  finally{ if(ca.optionsKey===key){ca.loading=false;renderCoachAddonV2();updateBookingConfirmBtn();} }
+}
+
+async function coachAddonV2AuthFields(mode){
+  const pkg=coachAddonV2Package(mode);
+  if(mode==="cash") return {};
+  const idToken=await protectedIdToken();
+  if(!idToken||!pkg) throw new Error("Package is not available");
+  return {idToken,packageId:pkg.id};
+}
+
+async function refreshCoachAddonV2Quote(){
+  const ca=state.coachAddonV2;
+  if(!ca.enabled||!ca.active||!ca.selectedCoach||!state.time) { ca.quote=null;renderCoachAddonV2();updateBookingConfirmBtn();return; }
+  const key=`${getSelectedDateISO()}|${state.time}|${state.durationMinutes}|${ca.selectedCoach.id}|${ca.fundingMode}|${ca.studentCount}`;
+  ca.quoteKey=key;ca.quote=null;renderCoachAddonV2();updateBookingConfirmBtn();
+  try{
+    const auth=await coachAddonV2AuthFields(ca.fundingMode);
+    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_addon_v2_quote",date:getSelectedDateISO(),startTime:state.time,durationMinutes:state.durationMinutes,coachId:ca.selectedCoach.id,studentCount:ca.studentCount,fundingMode:ca.fundingMode,...auth})});
+    const d=await r.json().catch(()=>null);
+    if(ca.quoteKey!==key) return;
+    if(!r.ok||!d?.ok||!d.quote) throw new Error(d?.error||"คำนวณราคาไม่สำเร็จ");
+    ca.quote=d.quote;
+  }catch(e){ if(ca.quoteKey===key){ca.quote=null;showToast(e.message||"คำนวณราคาไม่สำเร็จ",true);} }
+  finally{ if(ca.quoteKey===key){renderCoachAddonV2();updateBookingPriceNote();updateBookingConfirmBtn();} }
+}
+
+$("coachAddonV2Toggle")?.addEventListener("click",()=>{
+  const ca=state.coachAddonV2;
+  if((state.durationMinutes||0)<60){showToast("Court 30 นาทีไม่สามารถเพิ่ม Coach",true);return;}
+  ca.active=!ca.active;ca.coaches=[];ca.selectedCoach=null;ca.quote=null;ca.optionsKey="";ca.fundingMode="cash";ca.studentCount=1;
+  state.bookingPaymentType="single";
+  renderCoachAddonV2();updateBookingPriceNote();updateBookingConfirmBtn();
+  if(ca.active) refreshCoachAddonV2Options(); else refreshQuote();
+});
+for(const [id,mode] of [["coachAddonV2Cash","cash"],["coachAddonV2Ultra","ultra_pass"],["coachAddonV2Beginner","coaching_package"]]){
+  $(id)?.addEventListener("click",()=>{if($(id).disabled)return;state.coachAddonV2.fundingMode=mode;state.coachAddonV2.quote=null;renderCoachAddonV2();refreshCoachAddonV2Quote();});
+}
+$("coachAddonV2Student1")?.addEventListener("click",()=>{state.coachAddonV2.studentCount=1;state.coachAddonV2.quote=null;renderCoachAddonV2();refreshCoachAddonV2Quote();});
+$("coachAddonV2Student2")?.addEventListener("click",()=>{state.coachAddonV2.studentCount=2;state.coachAddonV2.quote=null;renderCoachAddonV2();refreshCoachAddonV2Quote();});
+
 // ── Server price quote (Pricing v2) — dynamic price on confirm button / note ──
 // The frontend NEVER decides the charged price (server booking_create recalcs);
 // this quote is DISPLAY-ONLY. latestQuote is kept only while it matches the
@@ -2735,6 +2925,11 @@ function currentQuoteKey(){
 }
 
 async function refreshQuote(){
+  if(state.coachAddonV2?.enabled&&state.coachAddonV2.active){
+    await refreshCoachAddonV2Options();
+    if(state.coachAddonV2.selectedCoach) await refreshCoachAddonV2Quote();
+    return;
+  }
   const ctx = currentQuoteKey();
   // Only single-use gets a server quote (passes are ฿0 / no QR).
   if (ctx.payType !== "single" || !ctx.date || !ctx.startTime){
@@ -2761,6 +2956,14 @@ async function refreshQuote(){
 
 function updateBookingPriceNote(){
   if(!$("bkPrice")||!$("bkNote2")) return;
+  if(state.coachAddonV2?.enabled&&state.coachAddonV2.active){
+    const q=state.coachAddonV2.quote;
+    $("bkPrice").textContent=q?`฿${Number(q.cashDueAmount).toLocaleString("en-US")}`:"฿—";
+    $("bkNote2").textContent=q
+      ? `${q.courtPackageMinutes?`ใช้สิทธิ์คอร์ท ${q.courtPackageMinutes} นาที · `:""}ค่าโค้ช ฿${Number(q.coachChargeAmount).toLocaleString("en-US")}${q.extraPersonFee?` · คนที่ 2 ฿${Number(q.extraPersonFee).toLocaleString("en-US")}`:""}`
+      : "เลือกโค้ชและวิธีใช้สิทธิ์เพื่อดูยอดชำระ";
+    return;
+  }
   if(state.bookingPaymentType==="single"){
     const ctx = currentQuoteKey();
     if (quoteInFlight === ctx.key){
@@ -2790,6 +2993,12 @@ function updateBookingPriceNote(){
 function updateBookingConfirmBtn() {
   const btn = $("confirmBkBtn");
   if(!btn) return;
+  if(state.coachAddonV2?.enabled&&state.coachAddonV2.active){
+    const ca=state.coachAddonV2;
+    btn.disabled=!state.time||ca.loading||!ca.selectedCoach||!ca.quote;
+    btn.textContent=ca.quote?`ยืนยันจองพร้อมโค้ช · ฿${Number(ca.quote.cashDueAmount).toLocaleString("en-US")}`:"เลือกโค้ชเพื่อดำเนินการ";
+    return;
+  }
   btn.disabled = !state.time;
   const payType = state.bookingPaymentType;
   if (payType !== "single"){
@@ -2920,7 +3129,7 @@ async function tryServerPassCreate({dateISO,name,phone,note,payType}){
     state.currentBookingCode=b.bookingCode;
     state.currentBookingDocId=b.id;
     state.currentBookingData={...b,customerName:name,customerPhone:phone,customerNote:note};
-    state.eligibility={hasUltra:false,ultraPkg:null,hasOffpeak:false,offpeakPkg:null,hasEvent:false,eventPkg:null};
+    state.eligibility={hasUltra:false,ultraPkg:null,hasOffpeak:false,offpeakPkg:null,hasEvent:false,eventPkg:null,hasBeginnerCoaching:false,beginnerCoachingPkg:null};
     if(window.notifyAdmins){
       window.notifyAdmins({type:"new_booking_admin",bookingCode:b.bookingCode,customerName:name,customerPhone:phone,date:dateISO,startTime:state.time,endTime:b.endTime});
     }
@@ -2932,6 +3141,47 @@ async function tryServerPassCreate({dateISO,name,phone,note,payType}){
     showToast(e.message||t("bookingFailed"),true);
     return "handled";
   }
+}
+
+async function tryCoachAddonV2Create({dateISO,name,phone,note}){
+  const ca=state.coachAddonV2;
+  if(!ca?.active||!ca.selectedCoach||!ca.quote) return "handled";
+  try{
+    const auth=await coachAddonV2AuthFields(ca.fundingMode);
+    const idToken=auth.idToken||(state.lineProfile.userId==="guest"?null:await protectedIdToken());
+    const res=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      action:"create_coach_addon_v2",idempotencyKey:`coach-addon-v2-${crypto.randomUUID()}`,
+      date:dateISO,startTime:state.time,durationMinutes:state.durationMinutes,
+      coachId:ca.selectedCoach.id,studentCount:ca.studentCount,fundingMode:ca.fundingMode,
+      packageId:auth.packageId||undefined,idToken:idToken||undefined,
+      lineUserId:state.lineProfile.userId,lineDisplayName:state.lineProfile.displayName,
+      customerName:name,customerPhone:phone,customerNote:note,
+    })});
+    const d=await res.json().catch(()=>null);
+    if(!res.ok||!d?.ok){
+      showToast(d?.error||t("bookingFailed"),true);
+      if(d?.code==="SLOT"||d?.code==="COACH_SLOT"){ca.optionsKey="";refreshCoachAddonV2Options();}
+      return "handled";
+    }
+    const b=d.booking;
+    state.currentBookingCode=b.bookingCode;state.currentBookingDocId=b.id;
+    state.currentGuestToken=d.guestAccessToken||null;
+    state.currentBookingData={...b,coachAddonSchemaVersion:2,customerName:name,customerPhone:phone,paymentQrType:b.qrType,pricingMode:"coach_addon_v2",price:b.finalPrice,qrAmount:b.qrAmount,bookingStatus:b.bookingStatus,paymentStatus:b.paymentStatus};
+    if(window.notifyAdmins){window.notifyAdmins({type:"new_booking_admin",bookingCode:b.bookingCode,customerName:name,customerPhone:phone,date:dateISO,startTime:state.time,endTime:b.endTime,coachName:b.coachName,bookingType:"Coach Add-on v2"});}
+    if(d.requiresPayment===false){
+      try{localStorage.removeItem("ut_pending_booking");}catch(_){}
+      showSuccess("✅","จองคาบเรียนสำเร็จ",b.bookingCode,`${name} · ${dateISO} · ${state.time}–${b.endTime} · โค้ช ${b.coachName}\nใช้ Beginner Coaching ${b.durationMinutes} นาที · ไม่ต้องชำระเพิ่ม`);
+      checkEligibility();
+      return true;
+    }
+    const expiresAt=new Date(d.paymentExpiresAt);
+    state.paymentMode="booking";state.currentBookingData.expiresAt=expiresAt;
+    try{localStorage.setItem("ut_pending_booking",JSON.stringify({code:b.bookingCode,docId:b.id,guestToken:d.guestAccessToken||null,expiresAt:expiresAt.getTime(),date:dateISO,startTime:state.time,endTime:b.endTime,durationMinutes:b.durationMinutes,price:b.finalPrice,isLN:false,coachAddonV2:true}));}catch(_){}
+    showPaymentPanel(b.bookingCode,b.finalPrice,expiresAt,dateISO,`${state.time} – ${b.endTime} · โค้ช ${b.coachName}`,false);
+    scheduleCoachAddonV2Expiry(b.id,expiresAt,d.guestAccessToken||null);
+    showView("viewPayment");
+    return true;
+  }catch(e){showToast(e.message||t("bookingFailed"),true);return "handled";}
 }
 
 // ── CONFIRM BOOKING ─────────────────────────────────────────────
@@ -2959,6 +3209,10 @@ $("confirmBkBtn").addEventListener("click", async()=>{
 
   const btn=$("confirmBkBtn"); btn.disabled=true; btn.textContent=t("saving");
   try {
+    if(state.coachAddonV2?.enabled&&state.coachAddonV2.active){
+      await tryCoachAddonV2Create({dateISO:getSelectedDateISO(),name,phone,note:$("bkNote").value.trim()});
+      return;
+    }
     if(payType!=="single"){
       await tryServerPassCreate({dateISO:getSelectedDateISO(),name,phone,note:$("bkNote").value.trim(),payType});
       return;
@@ -2979,6 +3233,18 @@ $("confirmBkBtn").addEventListener("click", async()=>{
 });
 
 // ── PAYMENT PANEL ───────────────────────────────────────────────
+let coachAddonV2ExpiryTimer=null;
+function scheduleCoachAddonV2Expiry(bookingId,expiresAt,guestToken){
+  clearTimeout(coachAddonV2ExpiryTimer);
+  const delay=Math.max(0,expiresAt.getTime()-Date.now()+250);
+  coachAddonV2ExpiryTimer=setTimeout(async()=>{
+    try{
+      const idToken=state.lineProfile.userId==="guest"?null:await protectedIdToken().catch(()=>null);
+      await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"expire_coach_addon_v2",bookingId,idToken:idToken||undefined,guestToken:guestToken||undefined})});
+    }catch(e){console.warn("[coach addon v2] expiry release will retry on next server access",e);}
+  },Math.min(delay,2_147_000_000));
+}
+
 function showPaymentPanel(code, amount, expiresAt, dateLabel, detailsLabel, isLateNight=false) {
   $("payCode").textContent   = code;
   $("payAmt").textContent    = `฿${amount.toLocaleString("en-US")}`;
@@ -3290,6 +3556,7 @@ $("submitSlipBtn").addEventListener("click", async()=>{
     } else {
       const bd=state.currentBookingData;
       state.currentBookingData={...bd,bookingStatus:"pending_review",paymentStatus:"pending_review",slipUrl:url};
+      if(bd?.coachAddonSchemaVersion===2) clearTimeout(coachAddonV2ExpiryTimer);
       console.log("Booking + slots updated by server");
       clearTimeout(warningTimer);
       
@@ -3348,6 +3615,7 @@ $("cancelBookingBtn").addEventListener("click", async()=>{
     if(!res.ok || !d.ok){ showToast(d.error||t("cancelFailed"),true); btn.disabled=false; btn.textContent=t("cancelBooking"); return; }
 
     localStorage.removeItem("ut_pending_booking");
+    clearTimeout(coachAddonV2ExpiryTimer);
     state.currentBookingCode=null;
     state.currentBookingDocId=null;
     state.currentBookingData=null;
@@ -3532,6 +3800,8 @@ function renderMyBookings(bookings, packages, purchases) {
       const isPendPay=b.bookingStatus==="pending_payment";
       const isPendRev=b.paymentStatus==="pending_review";
       const isPaid   =b.paymentStatus==="paid"||b.paymentStatus==="package";
+      const isCoachAddonV2=b.coachAddonSchemaVersion===2;
+      const fundingLabel=({cash:"เงินสด/โอน",ultra_pass:"Ultra Pass",coaching_package:"Beginner Coaching",mixed:"Pass + เงินสด"})[b.fundingSource]||b.fundingSource||"";
       html+=`<div class="bitem">
         <div class="bitem-top"><span class="bitem-code">${esc(b.bookingCode)}</span><span class="bitem-type">${esc(displayBookingType(b.bookingType)||"—")}</span></div>
         <div class="bitem-details">
@@ -3539,6 +3809,7 @@ function renderMyBookings(bookings, packages, purchases) {
           <div class="bf-field"><div class="bf-lbl">${t("time")}</div><div class="bf-val">${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</div></div>
           <div class="bf-field"><div class="bf-lbl">${t("name")}</div><div class="bf-val">${esc(b.customerName||"—")}</div></div>
           <div class="bf-field"><div class="bf-lbl">${t("price")}</div><div class="bf-val">฿${Number(b.price)||0}</div></div>
+          ${isCoachAddonV2?`<div class="bf-field"><div class="bf-lbl">Coach</div><div class="bf-val">${esc(b.coachName||"—")} · ${Number(b.studentCount)||1} คน</div></div><div class="bf-field"><div class="bf-lbl">ที่มาของเงิน</div><div class="bf-val">${esc(fundingLabel)}</div></div>`:""}
         </div>
         <div class="bitem-footer">
           <span class="sp s-${esc(b.bookingStatus)}">${esc(displayStatus(b.bookingStatus))}</span>
@@ -3597,14 +3868,16 @@ window.resumeBookingPayment = async(docId)=>{
         startTime: b.startTime,
         endTime: b.endTime,
         price: b.price || 350,
-        isLN: b.pricingMode === "late_night" || b.paymentQrType === "late_night"
+        isLN: b.pricingMode === "late_night" || b.paymentQrType === "late_night",
+        coachAddonV2: b.coachAddonSchemaVersion===2
       }));
       console.log("[perf] Stored resumed pending booking in localStorage:", b.bookingCode);
     } catch (err) {
       console.warn("Failed to store pending booking in localStorage:", err);
     }
 
-    showPaymentPanel(b.bookingCode,b.price||350,exp,b.date||"—",`${b.startTime||"—"}–${b.endTime||"—"}`);
+    showPaymentPanel(b.bookingCode,b.price||350,exp,b.date||"—",`${b.startTime||"—"}–${b.endTime||"—"}${b.coachName?` · โค้ช ${b.coachName}`:""}`);
+    if(b.coachAddonSchemaVersion===2) scheduleCoachAddonV2Expiry(b.id,exp,null);
     showView("viewPayment");
   } catch(e){ showToast(t("couldNotLoadBooking"),true); }
 };

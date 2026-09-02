@@ -62,6 +62,8 @@ import { getAdminDb, getAdminAuth, writeAuditLog, revokeGuestAccess } from './_l
 import { FieldValue }          from 'firebase-admin/firestore';
 import { computeQuote }        from './_lib/pricing.js';
 import { redeemVoucherUpdate, releaseVoucherUpdate } from './_lib/voucher-engine.js';
+import { isCoachAddonV2Booking } from './_lib/coach-addon-v2.js';
+import { confirmCoachAddonV2Payment, releaseCoachAddonV2Hold } from './_lib/coach-addon-v2-store.js';
 
 // ── Shared constants ──────────────────────────────────────────────
 const RESOURCE_ID = 'room1';
@@ -752,6 +754,9 @@ async function handleCalendarSyncFields({ res, adminName, session, db, booking, 
 // handleAccountingEdit — Art-only accounting correction
 // ════════════════════════════════════════════════════════════════════
 async function handleAccountingEdit({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+  if (isCoachAddonV2Booking(booking)) {
+    return res.status(409).json({ ok: false, code: 'COACH_ADDON_V2_FROZEN', error: 'Coach Add-on v2 price and accounting fields are frozen; use its state transition actions' });
+  }
   const {
     accountingType,
     bookingStatus:           requestedBookingStatus,
@@ -992,6 +997,13 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
 // handleRefund — any valid admin
 // ════════════════════════════════════════════════════════════════════
 async function handleRefund({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+  // Mixed confirmed cancellations need an explicit policy for restoring a
+  // consumed package and reversing coach payable.  Until that rule is supplied,
+  // fail closed instead of sending a v2 booking through the legacy cash-only
+  // refund path and leaving coach claims/accounting inconsistent.
+  if (isCoachAddonV2Booking(booking)) {
+    return res.status(409).json({ ok: false, code: 'COACH_ADDON_V2_REFUND_POLICY_REQUIRED', error: 'Coach Add-on v2 refund policy is not configured' });
+  }
   const {
     refundAmount:  rawAmount,
     refundMode,
@@ -1266,6 +1278,37 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
   if (!hasBranchAccess(session, resolveBranchId(booking))) {
     return res.status(403).json({ ok: false, error: 'No access to this branch' });
   }
+  if (isCoachAddonV2Booking(booking)) {
+    try {
+      const result = await confirmCoachAddonV2Payment(db, bookingId, { actor: adminName, withoutSlip });
+      if (!result.ok && result.code === 'HOLD_EXPIRED') {
+        return res.status(409).json({ ok: false, code: 'HOLD_EXPIRED', error: 'Hold หมดอายุก่อนส่งสลิป ระบบคืนคอร์ท โค้ช และแพ็คเกจแล้ว' });
+      }
+      await writeAuditLog(db, {
+        actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
+        action: 'coach_addon_v2_payment_confirmed', targetId: bookingId,
+        before: { bookingState: booking.bookingState, cashState: booking.cashState, packageUsageState: booking.packageUsageState },
+        after: { bookingState: 'confirmed', cashState: 'paid', packageUsageState: booking.packageUsageState === 'reserved' ? 'consumed' : booking.packageUsageState },
+      });
+      return res.status(200).json({ ok: true, replayed: result.replayed === true, booking: {
+        id: bookingId, bookingCode: booking.bookingCode, lineUserId: booking.lineUserId ?? null,
+        date: booking.date, startTime: booking.startTime, endTime: booking.endTime,
+        googleCalendarEventId: booking.googleCalendarEventId ?? null,
+      } });
+    } catch (e) {
+      const map = {
+        BAD_STATE: [409, 'Booking is not awaiting Coach Add-on payment'],
+        CLAIM_MISSING: [409, 'Coach Add-on resource claim is missing'],
+        CLAIM_CONFLICT: [409, 'Coach Add-on resource claim belongs to another booking'],
+        SLOT_MISSING: [409, 'Court slot is missing'],
+        PACKAGE_MISSING: [409, 'Reserved package is missing'],
+        PACKAGE_BALANCE_INVALID: [409, 'Reserved package balance is invalid'],
+      };
+      const [status, message] = map[e.message] || [500, 'Failed to approve Coach Add-on booking'];
+      if (status === 500) console.error('[approve coach addon v2]', e.message);
+      return res.status(status).json({ ok: false, error: message });
+    }
+  }
   // Pre-transaction guards (Admin SDK bypasses rules → validate transition here).
   if (booking.bookingStatus === 'cancelled') {
     return res.status(409).json({ ok: false, error: 'Cannot approve a cancelled booking' });
@@ -1509,6 +1552,22 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
   if (!hasBranchAccess(session, resolveBranchId(booking))) {
     return res.status(403).json({ ok: false, error: 'No access to this branch' });
   }
+  if (isCoachAddonV2Booking(booking)) {
+    try {
+      const result = await releaseCoachAddonV2Hold(db, bookingId, {
+        reason: (typeof body.reason === 'string' && body.reason.trim()) ? body.reason.trim().slice(0, 400) : 'Coach Add-on booking cancelled by admin',
+        actor: adminName, requireExpired: false, terminalState: 'cancelled',
+      });
+      return res.status(200).json({ ok: true, replayed: result.replayed === true, booking: {
+        id: bookingId, bookingCode: booking.bookingCode, date: booking.date,
+        startTime: booking.startTime, endTime: booking.endTime,
+      } });
+    } catch (e) {
+      if (e.message === 'NOT_HELD') return res.status(409).json({ ok: false, error: 'Confirmed Coach Add-on requires the refund flow' });
+      console.error('[cancel coach addon v2]', e.message);
+      return res.status(500).json({ ok: false, error: 'Failed to cancel Coach Add-on booking' });
+    }
+  }
   if (booking.bookingStatus === 'cancelled') {
     return res.status(409).json({ ok: false, error: 'Booking is already cancelled' });
   }
@@ -1631,6 +1690,9 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
 // notification_logs, unrelated bookings/slots, available_slots.
 // Use case: test data cleanup / mistaken booking records.
 async function handleDeleteBooking({ res, adminName, session, db, booking, bookingRef, bookingId }) {
+  if (isCoachAddonV2Booking(booking) && !['cancelled', 'expired'].includes(booking.bookingState)) {
+    return res.status(409).json({ ok: false, code: 'COACH_ADDON_V2_ACTIVE', error: 'Cancel the Coach Add-on v2 booking before deleting it' });
+  }
   const { date, startTime, bookingCode, googleCalendarEventId } = booking;
   console.log(`[delete-booking] START atomic admin:${adminName} id:${bookingId} code:${bookingCode}`);
 
@@ -1732,6 +1794,9 @@ async function handleDeleteBooking({ res, adminName, session, db, booking, booki
 // admin notification stay client-side (fire-and-forget after ok).
 // ════════════════════════════════════════════════════════════════════
 async function handleReschedulePark({ res, adminName, session, db, booking, bookingRef, bookingId }) {
+  if (isCoachAddonV2Booking(booking)) {
+    return res.status(409).json({ ok: false, code: 'COACH_ADDON_V2_RESCHEDULE_UNSUPPORTED', error: 'Coach Add-on v2 reschedule requires a coach-aware claim transition' });
+  }
   if (!hasBranchAccess(session, resolveBranchId(booking))) {
     return res.status(403).json({ ok: false, error: 'No access to this branch' });
   }
@@ -1833,6 +1898,9 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
 // Customer + admin notifications and Calendar sync stay client-side.
 // ════════════════════════════════════════════════════════════════════
 async function handleRescheduleAssign({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+  if (isCoachAddonV2Booking(booking)) {
+    return res.status(409).json({ ok: false, code: 'COACH_ADDON_V2_RESCHEDULE_UNSUPPORTED', error: 'Coach Add-on v2 reschedule requires a coach-aware claim transition' });
+  }
   if (!hasBranchAccess(session, resolveBranchId(booking))) {
     return res.status(403).json({ ok: false, error: 'No access to this branch' });
   }
@@ -2100,6 +2168,9 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
 // so the restore attempt is always traceable.
 // ════════════════════════════════════════════════════════════════════
 async function handleRescheduleCancel({ res, adminName, session, db, booking, bookingRef, bookingId }) {
+  if (isCoachAddonV2Booking(booking)) {
+    return res.status(409).json({ ok: false, code: 'COACH_ADDON_V2_RESCHEDULE_UNSUPPORTED', error: 'Coach Add-on v2 reschedule requires a coach-aware claim transition' });
+  }
   if (!hasBranchAccess(session, resolveBranchId(booking))) {
     return res.status(403).json({ ok: false, error: 'No access to this branch' });
   }
@@ -2364,6 +2435,9 @@ async function handleCoachLessonUpdate({ res, session, db, booking, bookingRef, 
         booking.coachPayoutStatus !== 'paid') {
       update.coachPayoutStatus = 'payable';
       update.coachPayoutPayableAt = FieldValue.serverTimestamp();
+    }
+    if (lessonAction === 'complete' && isCoachAddonV2Booking(booking)) {
+      update.bookingState = 'completed';
     }
   }
 

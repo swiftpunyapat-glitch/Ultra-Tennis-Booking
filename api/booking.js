@@ -28,6 +28,17 @@ import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/noti
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { normalizeCustomVoucherCode } from './_lib/voucher-admin.js';
 import { eventPassBookingError } from './_lib/event-pass-policy.js';
+import {
+  COACH_ADDON_V2_FLAG,
+  calculateCoachAddonV2Price,
+  coachAddonV2PackageKind,
+  coachClaimCellStarts,
+  coachClaimId,
+  initialCoachAddonV2States,
+  isCoachAddonV2Booking,
+  isCoachAddonV2Duration,
+} from './_lib/coach-addon-v2.js';
+import { isActiveCoachClaim, releaseCoachAddonV2Hold } from './_lib/coach-addon-v2-store.js';
 
 const RESOURCE_ID       = 'room1';
 const DEFAULT_BRANCH_ID = 'ladprao1';
@@ -487,6 +498,12 @@ export default async function handler(req, res) {
   if (body.action === 'coach_options')       return handleCoachOptions(res);
   if (body.action === 'coach_slots')         return handleCoachSlots(res, body);
   if (body.action === 'create_coach_lesson') return handleCreateCoachLesson(res, body);
+  // Coach Add-on v2 is an additive path.  Every action independently checks
+  // enableCoachAddonV2; the legacy court and coach actions above are untouched.
+  if (body.action === 'coach_addon_v2_options') return handleCoachAddonV2Options(res, body);
+  if (body.action === 'coach_addon_v2_quote')   return handleCoachAddonV2Quote(res, body);
+  if (body.action === 'create_coach_addon_v2') return handleCreateCoachAddonV2(req, res, body);
+  if (body.action === 'expire_coach_addon_v2') return handleExpireCoachAddonV2(req, res, body);
   // Pass self-purchase (Stage D) — LIVE (on by default); kill-switch:
   // system_settings/features.enablePassSelfPurchase = false.
   if (body.action === 'pass_catalog')         return handlePassCatalog(res);
@@ -729,6 +746,15 @@ async function coachBookingEnabled(db) {
     return false;
   }
 }
+async function coachAddonV2Enabled(db) {
+  try {
+    const snap = await db.collection('system_settings').doc('features').get();
+    return snap.exists && snap.data()[COACH_ADDON_V2_FLAG] === true;
+  } catch (e) {
+    console.warn('[coach addon v2 flag] read failed → OFF:', e.message);
+    return false;
+  }
+}
 const coachAvailDocId = (coachId, date, hour) => `${coachId}_${date}_${String(hour).replace(':', '')}`;
 
 // ── price_quote — READ-ONLY. No writes anywhere. ────────────────────
@@ -744,7 +770,11 @@ async function handleFeatures(res) {
     const p = await db.collection('system_settings').doc('pricing').get();
     halfHourPrice = halfPriceFrom(p.exists ? p.data() : null);
   } catch (e) { console.warn('[features] pricing read failed → default half price:', e.message); }
-  return res.status(200).json({ ok: true, buildVersion: BUILD_VERSION, enableHalfHourBooking: await halfHourEnabled(db), halfHourPrice });
+  return res.status(200).json({
+    ok: true, buildVersion: BUILD_VERSION,
+    enableHalfHourBooking: await halfHourEnabled(db), halfHourPrice,
+    enableCoachAddonV2: await coachAddonV2Enabled(db),
+  });
 }
 
 async function handlePriceQuote(res, body) {
@@ -1211,6 +1241,24 @@ async function handleCancelPending(req, res, body) {
   // bookingCode is a client assertion, checked only after authentication.
   if (bookingCode !== booking.bookingCode) {
     return res.status(403).json({ ok: false, error: 'ยกเลิกไม่ได้ (ไม่ใช่การจองของคุณ)' });
+  }
+
+  if (isCoachAddonV2Booking(booking)) {
+    if (booking.cashState !== 'unpaid') {
+      return res.status(409).json({ ok: false, error: 'อัปโหลดสลิป/ชำระแล้ว ยกเลิกเองไม่ได้ กรุณาติดต่อแอดมิน' });
+    }
+    try {
+      const result = await releaseCoachAddonV2Hold(db, bookingId, {
+        reason: 'customer_cancel_coach_addon_v2', actor: lineUserId || 'guest',
+        requireExpired: false, terminalState: 'cancelled',
+      });
+      if (guestAuthorized) await revokeGuestAccess(db, bookingId, 'booking_cancelled').catch(() => null);
+      return res.status(200).json({ ok: true, replayed: result.replayed === true, bookingStatus: 'cancelled', paymentStatus: 'rejected' });
+    } catch (e) {
+      if (e.message === 'NOT_HELD') return res.status(409).json({ ok: false, error: 'สถานะการจองเปลี่ยนไปแล้ว กรุณารีเฟรช' });
+      console.error('[cancel_pending coach addon v2]', e.message);
+      return res.status(500).json({ ok: false, error: 'ยกเลิก Coach Add-on ไม่สำเร็จ' });
+    }
   }
 
   // ── Preconditions (customer may only cancel an unpaid, not-yet-expired hold) ──
@@ -2201,4 +2249,472 @@ async function handleCreateCoachLesson(res, body) {
       ...(usePackage ? { packageName: pkg.packageName || pkg.packageType } : {}),
     },
   });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Coach Add-on / Mixed Payment v2 (explicit flag, OFF by default)
+// ════════════════════════════════════════════════════════════════════
+
+const v2TouchedHours = cells => [...new Set(cells.map(cell => `${cell.slice(0, 2)}:00`))];
+const v2BookingIsLive = (booking, nowMs = Date.now()) => {
+  if (!booking || ['cancelled', 'expired', 'completed', 'no_show', 'rescheduled'].includes(booking.bookingState || booking.bookingStatus)) return false;
+  if ((booking.bookingState || booking.bookingStatus) === 'held' || booking.bookingStatus === 'pending_payment') {
+    const exp = booking.paymentExpiresAt?.toMillis?.() ?? 0;
+    return !exp || exp > nowMs;
+  }
+  return ['confirmed', 'pending_review'].includes(booking.bookingState || booking.bookingStatus) ||
+    ['paid', 'package', 'pending_review'].includes(booking.paymentStatus);
+};
+const v2RangesOverlap = (aStart, aDuration, bStart, bDuration) => {
+  const a = toMin(aStart), b = toMin(bStart);
+  return a < b + bDuration && b < a + aDuration;
+};
+
+function v2CourtQuoteFromSnapshots({ date, startTime, durationMinutes, lineUserId, pricing, isHoliday }) {
+  const segs = segmentsOf(startTime, durationMinutes);
+  if (!segs) throw new Error('INVALID_DURATION');
+  const hasHalf = segs.some(segment => segment.span === 30);
+  const promoConfig = (!hasHalf && pricing) ? pricing : null;
+  const halfPrice = halfPriceFrom(pricing);
+  const segQuotes = segs.map(segment => segment.span === 30
+    ? halfSegQuote(segment.start, halfPrice, flatHalfMetadata(date, segment.start, isHoliday))
+    : {
+        ...computeQuote({
+          date, startTime: segment.start, nowMs: Date.now(), isHoliday,
+          promoConfig, payType: 'single', voucherCode: null, voucher: null, lineUserId,
+        }),
+        startTime: segment.start, span: 60,
+      });
+  return {
+    segs,
+    segQuotes,
+    quote: durationMinutes === 60
+      ? segQuotes[0]
+      : { ...segQuotes.find(q => q.span === 60) || segQuotes[0], ...combineQuotes(segQuotes) },
+  };
+}
+
+async function v2VerifiedUid(body) {
+  const idToken = typeof body.idToken === 'string' ? body.idToken.trim() : '';
+  if (!idToken) return null;
+  try { return (await getAdminAuth().verifyIdToken(idToken)).uid || null; }
+  catch { return null; }
+}
+
+async function v2LoadPackage(db, body, uid, durationMinutes) {
+  const fundingMode = String(body.fundingMode || 'cash');
+  if (fundingMode === 'cash') return { fundingMode, packageId: '', pkg: null, kind: null };
+  if (!uid) throw new Error('AUTH_REQUIRED');
+  const packageId = typeof body.packageId === 'string' ? body.packageId.trim() : '';
+  if (!packageId) throw new Error('PACKAGE_REQUIRED');
+  const snap = await db.collection('customer_packages').doc(packageId).get();
+  if (!snap.exists) throw new Error('PACKAGE_MISSING');
+  const pkg = snap.data();
+  const kind = coachAddonV2PackageKind(pkg.packageType);
+  if (!kind) throw new Error('PACKAGE_TYPE_UNSUPPORTED');
+  if (kind !== fundingMode) throw new Error('PACKAGE_TYPE_MISMATCH');
+  if (pkg.lineUserId !== uid) throw new Error('PACKAGE_NOT_OWNED');
+  if (pkg.status !== 'active') throw new Error('PACKAGE_INACTIVE');
+  const validUntil = pkg.validUntil?.toMillis?.() ?? null;
+  if (!validUntil || validUntil < Date.now()) throw new Error('PACKAGE_EXPIRED');
+  if (!Number.isFinite(Number(pkg.remainingMinutes)) || Number(pkg.remainingMinutes) < durationMinutes) throw new Error('PACKAGE_INSUFFICIENT');
+  return { fundingMode, packageId, pkg, kind };
+}
+
+const V2_ERROR_TEXT = {
+  AUTH_REQUIRED: 'กรุณาเข้าสู่ระบบผ่าน LINE เพื่อใช้แพ็คเกจ',
+  PACKAGE_REQUIRED: 'กรุณาเลือกแพ็คเกจ',
+  PACKAGE_MISSING: 'ไม่พบแพ็คเกจ',
+  PACKAGE_TYPE_UNSUPPORTED: 'แพ็คเกจนี้ยังไม่รองรับ Coach Add-on v2',
+  PACKAGE_TYPE_MISMATCH: 'ประเภทแพ็คเกจไม่ตรงกับวิธีชำระ',
+  PACKAGE_NOT_OWNED: 'แพ็คเกจนี้ไม่ใช่ของบัญชีนี้',
+  PACKAGE_INACTIVE: 'แพ็คเกจไม่พร้อมใช้งาน',
+  PACKAGE_EXPIRED: 'แพ็คเกจหมดอายุแล้ว',
+  PACKAGE_INSUFFICIENT: 'เวลาในแพ็คเกจไม่เพียงพอ',
+};
+
+async function handleCoachAddonV2Options(res, body) {
+  const date = typeof body.date === 'string' ? body.date.trim() : '';
+  const startTime = typeof body.startTime === 'string' ? body.startTime.trim() : '';
+  const durationMinutes = Number(body.durationMinutes);
+  if (!DATE_RE.test(date) || !TIME_RE.test(startTime) || !isCoachAddonV2Duration(durationMinutes)) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Coach Add-on requires 60-180 minutes in 30-minute steps' });
+  }
+  const cells = coachClaimCellStarts(startTime, durationMinutes);
+  if (!cells) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Invalid coach time range' });
+  let db;
+  try { db = getAdminDb(); }
+  catch { return res.status(500).json({ ok: false, error: 'Server error' }); }
+  if (!(await coachAddonV2Enabled(db))) return res.status(200).json({ ok: true, enabled: false, coaches: [] });
+
+  try {
+    const [coachSnap, legacyBookingsSnap] = await Promise.all([
+      db.collection('coaches').get(),
+      db.collection('bookings').where('date', '==', date).get(),
+    ]);
+    const nowMs = Date.now();
+    const legacyLive = legacyBookingsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter(booking => booking.coachId && v2BookingIsLive(booking, nowMs));
+    const coaches = [];
+    for (const doc of coachSnap.docs) {
+      const coach = doc.data();
+      if (coach.active === false || !Number.isFinite(Number(coach.lessonPrice)) || Number(coach.lessonPrice) <= 0) continue;
+      const hours = v2TouchedHours(cells);
+      const scheduleRefs = hours.map(hour => db.collection('coach_availability').doc(coachAvailDocId(doc.id, date, hour)));
+      const claimRefs = cells.map(cell => db.collection('coach_slot_claims').doc(coachClaimId(doc.id, date, cell)));
+      const [scheduleSnaps, claimSnaps] = await Promise.all([db.getAll(...scheduleRefs), db.getAll(...claimRefs)]);
+      if (scheduleSnaps.some(snap => !snap.exists || snap.data().status !== 'open')) continue;
+      if (claimSnaps.some(snap => snap.exists && isActiveCoachClaim(snap.data(), nowMs))) continue;
+      if (legacyLive.some(booking => booking.coachId === doc.id &&
+          v2RangesOverlap(startTime, durationMinutes, booking.startTime, Number(booking.durationMinutes) || 60))) continue;
+      coaches.push({
+        id: doc.id,
+        displayName: coach.displayName || doc.id,
+        bio: typeof coach.bio === 'string' ? coach.bio : '',
+        photoUrl: typeof coach.photoUrl === 'string' ? coach.photoUrl : null,
+        lessonPrice: Number(coach.lessonPrice),
+      });
+    }
+    coaches.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    return res.status(200).json({ ok: true, enabled: true, date, startTime, durationMinutes, coaches });
+  } catch (e) {
+    console.error('[coach_addon_v2_options]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to load available coaches' });
+  }
+}
+
+async function handleCoachAddonV2Quote(res, body) {
+  const date = typeof body.date === 'string' ? body.date.trim() : '';
+  const startTime = typeof body.startTime === 'string' ? body.startTime.trim() : '';
+  const coachId = typeof body.coachId === 'string' ? body.coachId.trim() : '';
+  const durationMinutes = Number(body.durationMinutes);
+  const studentCount = body.studentCount === 2 || body.studentCount === '2' ? 2 : 1;
+  if (!DATE_RE.test(date) || !TIME_RE.test(startTime) || !coachId || !isCoachAddonV2Duration(durationMinutes)) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Invalid Coach Add-on quote' });
+  }
+  let db;
+  try { db = getAdminDb(); }
+  catch { return res.status(500).json({ ok: false, error: 'Server error' }); }
+  if (!(await coachAddonV2Enabled(db))) return res.status(403).json({ ok: false, code: 'DISABLED', error: 'Coach Add-on v2 is disabled' });
+  const uid = await v2VerifiedUid(body);
+  try {
+    const [coachSnap, pricingSnap, holidaySnap] = await Promise.all([
+      db.collection('coaches').doc(coachId).get(),
+      db.collection('system_settings').doc('pricing').get(),
+      db.collection('holidays').doc(date).get(),
+    ]);
+    if (!coachSnap.exists || coachSnap.data().active === false) throw new Error('COACH_UNAVAILABLE');
+    const coach = coachSnap.data();
+    const packageCtx = await v2LoadPackage(db, body, uid, durationMinutes);
+    const court = v2CourtQuoteFromSnapshots({
+      date, startTime, durationMinutes, lineUserId: uid || 'guest',
+      pricing: pricingSnap.exists ? pricingSnap.data() : null,
+      isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true,
+    });
+    const price = calculateCoachAddonV2Price({
+      durationMinutes, fundingMode: packageCtx.fundingMode,
+      courtGrossAmount: court.quote.finalPrice,
+      coachRatePerHour: Number(coach.lessonPrice),
+      coachPayoutRatePerHour: Number(coach.payoutPerHour) || 500,
+      studentCount,
+    });
+    return res.status(200).json({ ok: true, quote: price, coach: { id: coachId, displayName: coach.displayName || coachId } });
+  } catch (e) {
+    if (V2_ERROR_TEXT[e.message]) return res.status(409).json({ ok: false, code: e.message, error: V2_ERROR_TEXT[e.message] });
+    if (e.message === 'COACH_UNAVAILABLE') return res.status(409).json({ ok: false, code: 'COACH_UNAVAILABLE', error: 'โค้ชไม่พร้อมรับจอง' });
+    if (e.code === 'MIXED_RECEIVER') return res.status(409).json({ ok: false, code: 'MIXED_RECEIVER', error: 'ช่วงเวลานี้ไม่สามารถรวมยอดชำระได้' });
+    console.error('[coach_addon_v2_quote]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to quote Coach Add-on' });
+  }
+}
+
+async function handleCreateCoachAddonV2(req, res, body) {
+  const date = typeof body.date === 'string' ? body.date.trim() : '';
+  const startTime = typeof body.startTime === 'string' ? body.startTime.trim() : '';
+  const coachId = typeof body.coachId === 'string' ? body.coachId.trim() : '';
+  const customerName = typeof body.customerName === 'string' ? body.customerName.trim() : '';
+  const customerPhone = typeof body.customerPhone === 'string' ? body.customerPhone.trim() : '';
+  const customerNote = typeof body.customerNote === 'string' ? body.customerNote.slice(0, 500) : '';
+  const lineDisplayName = typeof body.lineDisplayName === 'string' ? body.lineDisplayName : '';
+  const durationMinutes = Number(body.durationMinutes);
+  const studentCount = body.studentCount === 2 || body.studentCount === '2' ? 2 : 1;
+  const idemKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : '';
+  if (!DATE_RE.test(date) || !TIME_RE.test(startTime) || !coachId || !customerName || !customerPhone || !isCoachAddonV2Duration(durationMinutes)) {
+    return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Invalid Coach Add-on booking' });
+  }
+  if (!isValidIdempotencyKey(idemKey)) return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey has invalid format or length' });
+  const cells = coachClaimCellStarts(startTime, durationMinutes);
+  if (!cells) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Invalid coach time range' });
+
+  let db;
+  try { db = getAdminDb(); }
+  catch { return res.status(500).json({ ok: false, error: 'Server error' }); }
+  if (!(await coachAddonV2Enabled(db))) return res.status(403).json({ ok: false, code: 'DISABLED', error: 'Coach Add-on v2 is disabled' });
+
+  const uid = await v2VerifiedUid(body);
+  const assertedUid = typeof body.lineUserId === 'string' ? body.lineUserId : 'guest';
+  if (body.idToken && !uid) return res.status(401).json({ ok: false, code: 'AUTH', error: 'Session expired' });
+  if (uid && assertedUid !== 'guest' && assertedUid !== uid) return res.status(409).json({ ok: false, code: 'IDENTITY_MISMATCH', error: 'Authenticated account does not match request' });
+  const lineUserId = uid || 'guest';
+
+  const nowMs = Date.now();
+  const startMs = Date.parse(`${date}T${startTime}:00+07:00`);
+  if (!Number.isFinite(startMs) || startMs <= nowMs) return res.status(409).json({ ok: false, code: 'SLOT', error: 'ช่วงเวลานี้ผ่านมาแล้ว' });
+
+  let packageCtx;
+  try { packageCtx = await v2LoadPackage(db, body, uid, durationMinutes); }
+  catch (e) { return res.status(409).json({ ok: false, code: e.message, error: V2_ERROR_TEXT[e.message] || 'แพ็คเกจไม่พร้อมใช้งาน' }); }
+
+  const coachClaimRefs = cells.map(cell => db.collection('coach_slot_claims').doc(coachClaimId(coachId, date, cell)));
+  // Lazy cleanup keeps package reservations from remaining deducted after an
+  // abandoned 15-minute hold.  The create transaction itself still rechecks
+  // every deterministic claim, so this pre-pass is never the concurrency gate.
+  try {
+    const stale = await db.getAll(...coachClaimRefs);
+    const expiredOwners = [...new Set(stale.filter(s => s.exists && s.data().status === 'held' &&
+      (s.data().expiresAt?.toMillis?.() ?? Infinity) <= nowMs).map(s => s.data().bookingId).filter(Boolean))];
+    for (const expiredBookingId of expiredOwners) {
+      await releaseCoachAddonV2Hold(db, expiredBookingId, { nowMs, reason: 'lazy_claim_reclaim', actor: 'system' }).catch(() => null);
+    }
+  } catch (e) { console.warn('[coach addon v2] lazy cleanup:', e.message); }
+
+  const startMin = toMin(startTime);
+  const needCells = []; for (let m = startMin; m < startMin + durationMinutes; m += 30) needCells.push(m);
+  const touchedHours = [...new Set(needCells.map(m => Math.floor(m / 60)))];
+  const segs = segmentsOf(startTime, durationMinutes);
+  const bookingRef = db.collection('bookings').doc();
+  const segRefs = segs.map(segment => db.collection('booking_slots').doc(slotIdOf(date, segment.start)));
+  const cellRefs = touchedHours.flatMap(hour => [
+    db.collection('booking_slots').doc(slotIdOf(date, `${String(hour).padStart(2, '0')}:00`)),
+    db.collection('booking_slots').doc(slotIdOf(date, `${String(hour).padStart(2, '0')}:30`)),
+  ]);
+  const availRefs = touchedHours.map(hour => db.collection('available_slots').doc(slotIdOf(date, `${String(hour).padStart(2, '0')}:00`)));
+  const scheduleRefs = v2TouchedHours(cells).map(hour => db.collection('coach_availability').doc(coachAvailDocId(coachId, date, hour)));
+  const coachRef = db.collection('coaches').doc(coachId);
+  const pricingRef = db.collection('system_settings').doc('pricing');
+  const holidayRef = db.collection('holidays').doc(date);
+  const packageRef = packageCtx.packageId ? db.collection('customer_packages').doc(packageCtx.packageId) : null;
+  const bookingCode = genBookingCode();
+  const endTime = endTimeAfterMin(startTime, durationMinutes);
+  const holdExpiresAt = Timestamp.fromMillis(nowMs + PAY_MINS * 60 * 1000);
+  const idemScope = `create_coach_addon_v2:${lineUserId}`;
+  const idemRef = idempotencyRef(db, idemKey, idemScope);
+  const idemFp = fingerprintOf({ lineUserId, date, startTime, durationMinutes, coachId, studentCount, fundingMode: packageCtx.fundingMode, packageId: packageCtx.packageId, customerName, customerPhone, customerNote });
+  const guestAccess = lineUserId === 'guest' ? prepareGuestAccess({ bookingEndMs: Date.parse(`${date}T${endTime}:00+07:00`), nowMs }) : null;
+  const guestAccessRef = guestAccess ? db.collection(GUEST_ACCESS_COLLECTION).doc(bookingRef.id) : null;
+  let replayed = null;
+  let response = null;
+
+  try {
+    await db.runTransaction(async t => {
+      const idem = await readIdempotencyInTx(t, idemRef, idemFp);
+      if (idem.state === 'conflict') throw new Error('IDEMPOTENCY_CONFLICT');
+      if (idem.state === 'replay') { replayed = idem.response; return; }
+      const snaps = await Promise.all([
+        ...cellRefs.map(ref => t.get(ref)), ...availRefs.map(ref => t.get(ref)),
+        ...scheduleRefs.map(ref => t.get(ref)), ...coachClaimRefs.map(ref => t.get(ref)),
+        t.get(coachRef), t.get(pricingRef), t.get(holidayRef),
+        ...(packageRef ? [t.get(packageRef)] : []),
+      ]);
+      let at = 0;
+      const cellSnaps = snaps.slice(at, at += cellRefs.length);
+      const availSnaps = snaps.slice(at, at += availRefs.length);
+      const scheduleSnaps = snaps.slice(at, at += scheduleRefs.length);
+      const coachClaimSnaps = snaps.slice(at, at += coachClaimRefs.length);
+      const coachSnap = snaps[at++], pricingSnap = snaps[at++], holidaySnap = snaps[at++];
+      const packageSnap = packageRef ? snaps[at] : null;
+
+      if (!coachSnap.exists || coachSnap.data().active === false) throw new Error('COACH_UNAVAILABLE');
+      const coach = coachSnap.data();
+      if (!Number.isFinite(Number(coach.lessonPrice)) || Number(coach.lessonPrice) <= 0) throw new Error('COACH_UNAVAILABLE');
+      if (availSnaps.some(snap => !snap.exists || snap.data().status !== 'open')) throw new Error('SLOT_NOT_OPEN');
+      if (scheduleSnaps.some(snap => !snap.exists || snap.data().status !== 'open')) throw new Error('COACH_NOT_OPEN');
+
+      cellSnaps.forEach((snap, index) => {
+        if (!snap.exists) return;
+        const data = snap.data();
+        const docMin = touchedHours[Math.floor(index / 2)] * 60 + (index % 2) * 30;
+        const docSpan = data.slotSpanMinutes === 30 ? 30 : 60;
+        if (needCells.some(cell => cell >= docMin && cell < docMin + docSpan) && isOccupiedSlot(data, nowMs)) {
+          throw new Error('SLOT_TAKEN');
+        }
+      });
+      coachClaimSnaps.forEach(snap => {
+        if (!snap.exists) return;
+        if (isActiveCoachClaim(snap.data(), nowMs)) throw new Error('COACH_TAKEN');
+        throw new Error('COACH_EXPIRED_RETRY');
+      });
+
+      const isHoliday = holidaySnap.exists && holidaySnap.data().isHoliday === true;
+      const court = v2CourtQuoteFromSnapshots({
+        date, startTime, durationMinutes, lineUserId,
+        pricing: pricingSnap.exists ? pricingSnap.data() : null, isHoliday,
+      });
+
+      let packageUpdate = null;
+      let packageData = null;
+      if (packageRef) {
+        if (!packageSnap.exists) throw new Error('PACKAGE_MISSING');
+        packageData = packageSnap.data();
+        const kind = coachAddonV2PackageKind(packageData.packageType);
+        if (!kind) throw new Error('PACKAGE_TYPE_UNSUPPORTED');
+        if (kind !== packageCtx.fundingMode) throw new Error('PACKAGE_TYPE_MISMATCH');
+        if (packageData.lineUserId !== uid) throw new Error('PACKAGE_NOT_OWNED');
+        if (packageData.status !== 'active') throw new Error('PACKAGE_INACTIVE');
+        const validUntil = packageData.validUntil?.toMillis?.() ?? null;
+        if (!validUntil || validUntil < nowMs) throw new Error('PACKAGE_EXPIRED');
+        const remaining = Number(packageData.remainingMinutes);
+        if (!Number.isFinite(remaining) || remaining < durationMinutes) throw new Error('PACKAGE_INSUFFICIENT');
+        packageUpdate = { remainingMinutes: remaining - durationMinutes };
+      }
+
+      const price = calculateCoachAddonV2Price({
+        durationMinutes, fundingMode: packageCtx.fundingMode,
+        courtGrossAmount: court.quote.finalPrice,
+        coachRatePerHour: Number(coach.lessonPrice),
+        coachPayoutRatePerHour: Number(coach.payoutPerHour) || 500,
+        studentCount,
+      });
+      const states = initialCoachAddonV2States(price);
+      const expiresAt = states.bookingState === 'held' ? holdExpiresAt : null;
+      const claimStatus = states.bookingState === 'held' ? 'held' : 'confirmed';
+      const claimPaymentStatus = states.cashState === 'not_required' ? 'package' : 'unpaid';
+      const coachClaimIds = coachClaimRefs.map(ref => ref.id);
+
+      const bookingData = {
+        coachAddonSchemaVersion: 2,
+        bookingCode, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
+        bookingSlotIds: segRefs.map(ref => ref.id), coachClaimIds,
+        bookingType: 'Coach Add-on v2', serviceType: 'coach_lesson',
+        serviceCategory: price.serviceCategory, fundingSource: price.fundingSource,
+        bookingState: states.bookingState, cashState: states.cashState,
+        packageUsageState: states.packageUsageState,
+        coachId, coachName: coach.displayName || coachId,
+        coachPriceAtBooking: Number(coach.lessonPrice),
+        coachPayoutRateAtBooking: Number(coach.payoutPerHour) || 500,
+        coachPayoutStatus: 'pending', lessonStatus: 'scheduled',
+        ...price,
+        priceBreakdown: { ...price },
+        coachPayoutBreakdown: {
+          coachPayoutRatePerHour: price.coachPayoutRatePerHour,
+          coachBasePayoutAmount: price.coachBasePayoutAmount,
+          extraPersonCoachPayout: price.extraPersonCoachPayout,
+          coachPayoutAmount: price.coachPayoutAmount,
+        },
+        lineUserId, lineDisplayName,
+        customerName, customerPhone, customerPhoneNormalized: normalizePhone(customerPhone), customerNote,
+        date, startTime, endTime, durationMinutes, durationHours: durationMinutes / 60,
+        price: price.cashDueAmount, amount: price.cashDueAmount,
+        finalPrice: price.cashDueAmount, originalPrice: price.cashDueAmount,
+        basePrice: price.cashDueAmount, effectivePrice: price.cashDueAmount,
+        pricingType: 'coach_addon_v2', pricingMode: 'coach_addon_v2', priceRuleVersion: 'coach-addon-v2',
+        qrAmount: price.cashDueAmount,
+        qrType: packageCtx.fundingMode === 'cash' ? court.quote.qrType : 'normal',
+        paymentQrType: packageCtx.fundingMode === 'cash' ? court.quote.qrType : 'normal',
+        bookingStatus: states.legacyBookingStatus, paymentStatus: states.legacyPaymentStatus,
+        status: states.legacyBookingStatus, paymentExpiresAt: expiresAt,
+        slipUrl: null, slipUploadedAt: null, cancelReason: null,
+        ...(packageRef ? {
+          packageId: packageCtx.packageId,
+          packageType: packageData.packageType,
+          packageName: packageData.packageName || packageData.packageType,
+          usedPackageId: packageCtx.packageId,
+          usedPackageType: packageData.packageType,
+          usedPackageName: packageData.packageName || packageData.packageType,
+          packageMinutesUsed: durationMinutes,
+        } : {}),
+        ...(states.bookingState === 'confirmed' ? { confirmedAt: FieldValue.serverTimestamp() } : {}),
+        createdVia: 'coach_addon_v2',
+        createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+      };
+      t.create(bookingRef, bookingData);
+      segs.forEach((segment, index) => writeSlotDoc(t, db, segRefs[index].id, {
+        resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
+        date, hour: segment.start, slotSpanMinutes: segment.span,
+        bookingStatus: states.legacyBookingStatus, paymentStatus: claimPaymentStatus, expiresAt,
+      }, { bookingId: bookingRef.id, bookingCode, coachId }));
+      coachClaimRefs.forEach((ref, index) => t.set(ref, {
+        coachId, branchId: DEFAULT_BRANCH_ID, date, cellStart: cells[index], slotSpanMinutes: 30,
+        bookingId: bookingRef.id, bookingCode, status: claimStatus, expiresAt,
+        createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+      }));
+
+      if (packageRef) {
+        t.update(packageRef, { ...packageUpdate, lastReservedAt: FieldValue.serverTimestamp(), lastReservedBooking: bookingCode, updatedAt: FieldValue.serverTimestamp() });
+        t.create(db.collection('customer_package_logs').doc(), {
+          packageId: packageCtx.packageId, lineUserId,
+          packageType: packageData.packageType, packageName: packageData.packageName || packageData.packageType,
+          action: states.packageUsageState === 'reserved' ? 'reserve_minutes' : 'consume_minutes',
+          oldRemainingMinutes: Number(packageData.remainingMinutes),
+          newRemainingMinutes: packageUpdate.remainingMinutes,
+          deltaMinutes: -durationMinutes,
+          reason: `coach add-on booking ${bookingCode}`,
+          bookingId: bookingRef.id, source: 'coach_addon_v2', createdAt: FieldValue.serverTimestamp(),
+        });
+      }
+      if (guestAccessRef) t.create(guestAccessRef, guestAccess.document);
+
+      response = {
+        ok: true,
+        requiresPayment: states.bookingState === 'held',
+        paymentExpiresAt: expiresAt ? expiresAt.toDate().toISOString() : null,
+        ...(guestAccess ? { guestAccessToken: guestAccess.token, guestAccessExpiresAt: guestAccess.expiresAt } : {}),
+        booking: {
+          id: bookingRef.id, bookingCode, date, startTime, endTime, durationMinutes,
+          bookingType: bookingData.bookingType, serviceCategory: price.serviceCategory,
+          fundingSource: price.fundingSource, bookingState: states.bookingState,
+          cashState: states.cashState, packageUsageState: states.packageUsageState,
+          bookingStatus: states.legacyBookingStatus, paymentStatus: states.legacyPaymentStatus,
+          coachId, coachName: bookingData.coachName, studentCount,
+          finalPrice: price.cashDueAmount, price: price.cashDueAmount,
+          qrAmount: price.cashDueAmount, qrType: bookingData.qrType,
+          priceBreakdown: price,
+        },
+      };
+      writeIdempotencyInTx(t, idemRef, { scope: idemScope, fingerprint: idemFp, response, nowMs });
+    });
+  } catch (e) {
+    const msg = e.message || '';
+    if (msg === 'IDEMPOTENCY_CONFLICT') return res.status(409).json({ ok: false, code: msg, error: 'idempotencyKey ถูกใช้กับคำขออื่นแล้ว' });
+    if (V2_ERROR_TEXT[msg]) return res.status(409).json({ ok: false, code: msg, error: V2_ERROR_TEXT[msg] });
+    const map = {
+      COACH_UNAVAILABLE: 'โค้ชไม่พร้อมรับจอง', COACH_NOT_OPEN: 'โค้ชไม่ได้เปิดรับสอนครบทั้งช่วง',
+      COACH_TAKEN: 'โค้ชเพิ่งถูกจองในช่วงเวลานี้', COACH_EXPIRED_RETRY: 'กำลังคืน hold เก่า กรุณาลองอีกครั้ง',
+      SLOT_NOT_OPEN: 'คอร์ทยังไม่เปิดครบทั้งช่วง', SLOT_TAKEN: 'คอร์ทเพิ่งถูกจองในช่วงเวลานี้',
+    };
+    if (map[msg]) return res.status(409).json({ ok: false, code: msg.startsWith('COACH') ? 'COACH_SLOT' : 'SLOT', error: map[msg] });
+    if (e.code === 'MIXED_RECEIVER') return res.status(409).json({ ok: false, code: 'MIXED_RECEIVER', error: 'ช่วงเวลานี้ไม่สามารถรวมยอดชำระได้' });
+    console.error('[create_coach_addon_v2]', msg);
+    return res.status(500).json({ ok: false, error: 'Failed to create Coach Add-on booking' });
+  }
+  if (replayed) return res.status(200).json({ ...replayed, replayed: true });
+  return res.status(200).json(response);
+}
+
+async function handleExpireCoachAddonV2(req, res, body) {
+  const bookingId = typeof body.bookingId === 'string' ? body.bookingId.trim() : '';
+  if (!bookingId) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'Missing bookingId' });
+  let db;
+  try { db = getAdminDb(); }
+  catch { return res.status(500).json({ ok: false, error: 'Server error' }); }
+  if (!(await coachAddonV2Enabled(db))) return res.status(403).json({ ok: false, code: 'DISABLED', error: 'Coach Add-on v2 is disabled' });
+  const snap = await db.collection('bookings').doc(bookingId).get();
+  if (!snap.exists) return res.status(404).json({ ok: false, error: 'Booking not found' });
+  const booking = snap.data();
+  let authorized = false;
+  const uid = await v2VerifiedUid(body);
+  if (uid && uid === booking.lineUserId) authorized = true;
+  if (!authorized && typeof body.guestToken === 'string' && body.guestToken.trim()) {
+    authorized = (await verifyGuestToken(db, bookingId, body.guestToken.trim(), 'booking:cancel')).ok;
+  }
+  if (!authorized) return res.status(403).json({ ok: false, code: 'AUTH', error: 'ยืนยันตัวตนไม่ผ่าน' });
+  try {
+    const result = await releaseCoachAddonV2Hold(db, bookingId, { reason: 'customer_timer_expired', actor: uid || 'guest', requireExpired: true });
+    return res.status(200).json(result);
+  } catch (e) {
+    if (e.message === 'NOT_EXPIRED') return res.status(409).json({ ok: false, code: 'NOT_EXPIRED', error: 'Hold ยังไม่หมดอายุ' });
+    if (e.message === 'NOT_HELD') return res.status(409).json({ ok: false, code: 'NOT_HELD', error: 'Booking ไม่ได้อยู่ในสถานะ hold' });
+    console.error('[expire_coach_addon_v2]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to release expired hold' });
+  }
 }
