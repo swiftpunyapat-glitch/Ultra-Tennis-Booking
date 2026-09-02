@@ -2830,7 +2830,7 @@ function renderCoachAddonV2(){
     btn.type="button"; btn.className="hcard";
     btn.style.cssText="flex-direction:row;align-items:center;gap:12px;padding:12px 14px;text-align:left"+(ca.selectedCoach?.id===coach.id?";border-color:var(--brand);box-shadow:0 0 0 1px var(--brand)":"");
     const image=coach.photoUrl?`<img src="${esc(coach.photoUrl)}" alt="" style="width:48px;height:48px;border-radius:50%;object-fit:cover">`:`<div style="font-size:1.7rem">👨‍🏫</div>`;
-    btn.innerHTML=`${image}<div style="min-width:0"><div style="font-weight:800">${esc(coach.displayName)}</div><div style="font-size:.72rem;color:var(--muted)">฿${Number(coach.lessonPrice).toLocaleString("en-US")} / ชั่วโมง${coach.bio?` · ${esc(coach.bio)}`:""}</div></div>`;
+    btn.innerHTML=`${image}<div style="min-width:0"><div style="font-weight:800">${esc(coach.displayName)}</div><div style="font-size:.72rem;color:var(--muted)">฿${Number(coach.lessonPrice).toLocaleString("en-US")} / ชั่วโมง (รวมค่าคอร์ทแล้ว)${coach.bio?` · ${esc(coach.bio)}`:""}</div></div>`;
     btn.addEventListener("click",()=>{ ca.selectedCoach=coach; ca.quote=null; renderCoachAddonV2(); refreshCoachAddonV2Quote(); });
     list.appendChild(btn);
   });

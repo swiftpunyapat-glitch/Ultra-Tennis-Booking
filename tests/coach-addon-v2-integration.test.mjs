@@ -63,7 +63,7 @@ async function wipe() {
   await db.collection('system_settings').doc('pricing').set({ normalPrice: 350 });
   await db.collection('coaches').doc(COACH).set({
     name: COACH, displayName: 'Coach V2', active: true,
-    lessonPrice: 600, payoutPerHour: 500, branchId: 'ladprao1',
+    lessonPrice: 900, payoutPerHour: 550, branchId: 'ladprao1',
   });
   for (const hour of ['10:00', '11:00', '12:00']) {
     await db.collection('available_slots').doc(roomSlotId(hour)).set({
@@ -107,7 +107,8 @@ describe('Coach Add-on v2 feature gate and atomic claims', () => {
     const result = await call(bookingHandler, createBody({ durationMinutes: 90, idempotencyKey: 'cash-90' }));
     expect(result.statusCode).toBe(200);
     expect(result.body.booking.priceBreakdown).toMatchObject({
-      courtCashAmount: 520, coachChargeAmount: 900, coachPayoutAmount: 750, cashDueAmount: 1420,
+      courtCashAmount: 520, lessonGrossAmount: 1350, coachChargeAmount: 830,
+      coachPayoutAmount: 825, cashDueAmount: 1350,
     });
     expect((await db.collection('booking_slots').get()).size).toBe(2);
     expect((await db.collection('booking_slot_claims').get()).size).toBe(2);
@@ -133,7 +134,7 @@ describe('Coach Add-on v2 mixed payment lifecycle', () => {
     }));
     expect(result.statusCode).toBe(200);
     expect(result.body.booking).toMatchObject({ fundingSource: 'mixed', bookingState: 'held', cashState: 'unpaid', packageUsageState: 'reserved' });
-    expect(result.body.booking.priceBreakdown).toMatchObject({ courtPackageMinutes: 90, courtCashAmount: 0, coachChargeAmount: 900, cashDueAmount: 900 });
+    expect(result.body.booking.priceBreakdown).toMatchObject({ courtPackageMinutes: 90, courtCashAmount: 0, coachChargeAmount: 830, cashDueAmount: 830 });
     expect((await db.collection('customer_packages').doc(ULTRA).get()).data().remainingMinutes).toBe(510);
   });
 
@@ -143,7 +144,7 @@ describe('Coach Add-on v2 mixed payment lifecycle', () => {
     }));
     expect(result.body.booking.priceBreakdown).toMatchObject({
       extraPersonFee: 100, extraPersonCoachPayout: 100,
-      coachBasePayoutAmount: 500, coachPayoutAmount: 600, cashDueAmount: 700,
+      coachBasePayoutAmount: 550, coachPayoutAmount: 650, cashDueAmount: 680,
     });
   });
 
@@ -156,10 +157,10 @@ describe('Coach Add-on v2 mixed payment lifecycle', () => {
     expect((await call(accountingHandler, { operation: 'coach_lesson_update', bookingId, lessonAction: 'complete' }, true)).statusCode).toBe(200);
     expect((await call(accountingHandler, { operation: 'coach_payout_paid', bookingId }, true)).statusCode).toBe(200);
     const booking = (await db.collection('bookings').doc(bookingId).get()).data();
-    expect(booking).toMatchObject({ bookingState: 'completed', coachPayoutAmount: 600, coachPayoutStatus: 'paid' });
+    expect(booking).toMatchObject({ bookingState: 'completed', coachPayoutAmount: 650, coachPayoutStatus: 'paid' });
     const expenses = await db.collection('finance_expenses').where('sourceBookingId', '==', bookingId).get();
     expect(expenses.size).toBe(1);
-    expect(expenses.docs[0].data().amount).toBe(600);
+    expect(expenses.docs[0].data().amount).toBe(650);
   });
 
   test('Beginner Coaching consumes entitlement and never charges base coach fee', async () => {
@@ -171,7 +172,7 @@ describe('Coach Add-on v2 mixed payment lifecycle', () => {
     expect(result.body.booking).toMatchObject({
       fundingSource: 'coaching_package', bookingState: 'confirmed', cashState: 'not_required', packageUsageState: 'consumed',
     });
-    expect(result.body.booking.priceBreakdown).toMatchObject({ coachChargeAmount: 0, cashDueAmount: 0, coachPayoutAmount: 1000 });
+    expect(result.body.booking.priceBreakdown).toMatchObject({ coachChargeAmount: 0, cashDueAmount: 0, coachPayoutAmount: 1100 });
     expect((await db.collection('customer_packages').doc(BEGINNER).get()).data().remainingMinutes).toBe(180);
   });
 
@@ -224,7 +225,7 @@ describe('Coach Add-on v2 mixed payment lifecycle', () => {
     const approved = await call(accountingHandler, { operation: 'approve_slip', bookingId }, true);
     expect(approved.statusCode).toBe(200);
     const booking = (await db.collection('bookings').doc(bookingId).get()).data();
-    expect(booking).toMatchObject({ bookingState: 'confirmed', cashState: 'paid', packageUsageState: 'consumed', cashPaidAmount: 600 });
+    expect(booking).toMatchObject({ bookingState: 'confirmed', cashState: 'paid', packageUsageState: 'consumed', cashPaidAmount: 580 });
     expect((await db.collection('customer_packages').doc(ULTRA).get()).data().remainingMinutes).toBe(540);
   });
 

@@ -16,6 +16,10 @@ describe('Coach Add-on v2 customer cutover', () => {
     expect(html).toContain('action:"expire_coach_addon_v2"');
   });
 
+  test('coach card explains that the lesson price already includes court', () => {
+    expect(html).toContain('(รวมค่าคอร์ทแล้ว)');
+  });
+
   test('only Beginner Coaching is exposed as a coaching package', () => {
     expect(html).toContain('p.packageType === "beginner_coaching_5"');
     expect(html).toContain('coach_at_ultra_10 is intentionally excluded');

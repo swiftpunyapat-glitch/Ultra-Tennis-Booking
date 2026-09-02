@@ -11,8 +11,8 @@ const base = overrides => ({
   durationMinutes: 60,
   fundingMode: 'cash',
   courtGrossAmount: 350,
-  coachRatePerHour: 600,
-  coachPayoutRatePerHour: 500,
+  lessonRatePerHour: 900,
+  coachPayoutRatePerHour: 550,
   studentCount: 1,
   ...overrides,
 });
@@ -22,26 +22,26 @@ describe('Coach Add-on v2 pricing', () => {
     expect(calculateCoachAddonV2Price(base())).toMatchObject({
       serviceCategory: 'coach_lesson', fundingSource: 'cash',
       courtCashAmount: 350, courtPackageMinutes: 0,
-      coachChargeAmount: 600, coachBasePayoutAmount: 500,
+      lessonGrossAmount: 900, coachChargeAmount: 550, coachBasePayoutAmount: 550,
       extraPersonFee: 0, extraPersonCoachPayout: 0,
-      coachPayoutAmount: 500, cashDueAmount: 950, cashPaidAmount: 0,
+      coachPayoutAmount: 550, cashDueAmount: 900, cashPaidAmount: 0,
     });
   });
 
   test('Ultra Pass reserves court minutes and charges only coach cash', () => {
-    expect(calculateCoachAddonV2Price(base({ fundingMode: 'ultra_pass', durationMinutes: 90 }))).toMatchObject({
+    expect(calculateCoachAddonV2Price(base({ fundingMode: 'ultra_pass', durationMinutes: 90, courtGrossAmount: 520 }))).toMatchObject({
       fundingSource: 'mixed', courtCashAmount: 0, courtPackageMinutes: 90,
-      coachChargeAmount: 900, coachBasePayoutAmount: 750,
-      coachPayoutAmount: 750, cashDueAmount: 900,
+      lessonGrossAmount: 1350, coachChargeAmount: 830, coachBasePayoutAmount: 825,
+      coachPayoutAmount: 825, cashDueAmount: 830,
     });
   });
 
   test('Ultra Pass + coach + extra person sends all ฿100 to coach payout', () => {
     expect(calculateCoachAddonV2Price(base({ fundingMode: 'ultra_pass', studentCount: 2 }))).toMatchObject({
-      courtPackageMinutes: 60, coachChargeAmount: 600,
+      courtPackageMinutes: 60, coachChargeAmount: 550,
       extraPersonFee: 100, extraPersonCoachPayout: 100,
-      coachBasePayoutAmount: 500, coachPayoutAmount: 600,
-      cashDueAmount: 700,
+      coachBasePayoutAmount: 550, coachPayoutAmount: 650,
+      cashDueAmount: 650,
     });
   });
 
@@ -49,8 +49,8 @@ describe('Coach Add-on v2 pricing', () => {
     const price = calculateCoachAddonV2Price(base({ fundingMode: 'coaching_package', durationMinutes: 120 }));
     expect(price).toMatchObject({
       fundingSource: 'coaching_package', courtCashAmount: 0, courtPackageMinutes: 120,
-      coachChargeAmount: 0, coachBasePayoutAmount: 1000,
-      coachPayoutAmount: 1000, cashDueAmount: 0,
+      coachChargeAmount: 0, coachBasePayoutAmount: 1100,
+      coachPayoutAmount: 1100, cashDueAmount: 0,
     });
     expect(initialCoachAddonV2States(price)).toMatchObject({
       bookingState: 'confirmed', cashState: 'not_required', packageUsageState: 'consumed',
@@ -62,7 +62,7 @@ describe('Coach Add-on v2 pricing', () => {
     expect(price).toMatchObject({
       fundingSource: 'mixed', coachChargeAmount: 0,
       extraPersonFee: 100, extraPersonCoachPayout: 100,
-      coachBasePayoutAmount: 1250, coachPayoutAmount: 1350,
+      coachBasePayoutAmount: 1375, coachPayoutAmount: 1475,
       cashDueAmount: 100,
     });
     expect(initialCoachAddonV2States(price)).toMatchObject({
@@ -71,9 +71,12 @@ describe('Coach Add-on v2 pricing', () => {
   });
 
   test('rates are proportional at every supported duration', () => {
-    const expected = new Map([[60, 600], [90, 900], [120, 1200], [150, 1500], [180, 1800]]);
+    const expected = new Map([[60, 550], [90, 825], [120, 1100], [150, 1375], [180, 1650]]);
     for (const [durationMinutes, coachChargeAmount] of expected) {
-      expect(calculateCoachAddonV2Price(base({ durationMinutes })).coachChargeAmount).toBe(coachChargeAmount);
+      expect(calculateCoachAddonV2Price(base({
+        durationMinutes,
+        courtGrossAmount: 350 * (durationMinutes / 60),
+      })).coachChargeAmount).toBe(coachChargeAmount);
     }
   });
 

@@ -72,7 +72,7 @@ export function coachClaimId(coachId, date, cellStart) {
  * Server-authoritative Coach Add-on v2 calculator.
  *
  * fundingMode:
- *   cash             court and coach are paid in cash
+ *   cash             lessonPrice already includes court; cash pays that total
  *   ultra_pass       pass covers court; cash covers coach
  *   coaching_package Beginner Coaching covers court + coach
  */
@@ -80,7 +80,7 @@ export function calculateCoachAddonV2Price({
   durationMinutes,
   fundingMode,
   courtGrossAmount = 0,
-  coachRatePerHour,
+  lessonRatePerHour,
   coachPayoutRatePerHour,
   studentCount = 1,
 }) {
@@ -93,16 +93,21 @@ export function calculateCoachAddonV2Price({
   if (![1, 2].includes(studentCount)) throw new Error('INVALID_STUDENT_COUNT');
 
   const courtGross = Number(courtGrossAmount);
-  const coachRate = Number(coachRatePerHour);
+  const lessonRate = Number(lessonRatePerHour);
   const payoutRate = Number(coachPayoutRatePerHour);
   if (!Number.isFinite(courtGross) || courtGross < 0) throw new Error('INVALID_COURT_AMOUNT');
-  if (!Number.isFinite(coachRate) || coachRate <= 0) throw new Error('INVALID_COACH_RATE');
+  if (!Number.isFinite(lessonRate) || lessonRate <= 0) throw new Error('INVALID_LESSON_RATE');
   if (!Number.isFinite(payoutRate) || payoutRate <= 0) throw new Error('INVALID_PAYOUT_RATE');
 
   const ratio = durationMinutes / 60;
   const extraPersonFee = studentCount === 2 ? COACH_ADDON_V2_EXTRA_PERSON_FEE : 0;
   const extraPersonCoachPayout = extraPersonFee;
-  const coachGrossCharge = money(coachRate * ratio);
+  // coaches.lessonPrice is the customer-facing lesson total INCLUDING court.
+  // The coach component is therefore the frozen lesson total minus the exact
+  // court quote for this booking.  Never add lessonPrice on top of court again.
+  const lessonGrossAmount = money(lessonRate * ratio);
+  const coachGrossCharge = money(lessonGrossAmount - courtGross);
+  if (coachGrossCharge < 0) throw new Error('LESSON_PRICE_BELOW_COURT');
   const coachBasePayoutAmount = money(payoutRate * ratio);
   const packageCoversCourt = fundingMode !== 'cash';
   const packageCoversCoach = fundingMode === 'coaching_package';
@@ -124,7 +129,9 @@ export function calculateCoachAddonV2Price({
     courtGrossAmount: money(courtGross),
     courtCashAmount,
     courtPackageMinutes,
-    coachRatePerHour: money(coachRate),
+    lessonRatePerHour: money(lessonRate),
+    lessonGrossAmount,
+    coachRatePerHour: money(coachGrossCharge / ratio),
     coachGrossChargeAmount: coachGrossCharge,
     coachChargeAmount,
     coachPayoutRatePerHour: money(payoutRate),

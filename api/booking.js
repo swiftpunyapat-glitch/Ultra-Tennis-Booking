@@ -2331,6 +2331,8 @@ const V2_ERROR_TEXT = {
   PACKAGE_INACTIVE: 'แพ็คเกจไม่พร้อมใช้งาน',
   PACKAGE_EXPIRED: 'แพ็คเกจหมดอายุแล้ว',
   PACKAGE_INSUFFICIENT: 'เวลาในแพ็คเกจไม่เพียงพอ',
+  INVALID_LESSON_RATE: 'ราคาคาบสอนไม่ถูกต้อง กรุณาแจ้ง Admin',
+  LESSON_PRICE_BELOW_COURT: 'ราคาคาบสอนต่ำกว่าค่าคอร์ท กรุณาแจ้ง Admin',
 };
 
 async function handleCoachAddonV2Options(res, body) {
@@ -2414,7 +2416,7 @@ async function handleCoachAddonV2Quote(res, body) {
     const price = calculateCoachAddonV2Price({
       durationMinutes, fundingMode: packageCtx.fundingMode,
       courtGrossAmount: court.quote.finalPrice,
-      coachRatePerHour: Number(coach.lessonPrice),
+      lessonRatePerHour: Number(coach.lessonPrice),
       coachPayoutRatePerHour: Number(coach.payoutPerHour) || 500,
       studentCount,
     });
@@ -2571,7 +2573,7 @@ async function handleCreateCoachAddonV2(req, res, body) {
       const price = calculateCoachAddonV2Price({
         durationMinutes, fundingMode: packageCtx.fundingMode,
         courtGrossAmount: court.quote.finalPrice,
-        coachRatePerHour: Number(coach.lessonPrice),
+        lessonRatePerHour: Number(coach.lessonPrice),
         coachPayoutRatePerHour: Number(coach.payoutPerHour) || 500,
         studentCount,
       });
@@ -2590,6 +2592,7 @@ async function handleCreateCoachAddonV2(req, res, body) {
         bookingState: states.bookingState, cashState: states.cashState,
         packageUsageState: states.packageUsageState,
         coachId, coachName: coach.displayName || coachId,
+        lessonPriceAtBooking: Number(coach.lessonPrice),
         coachPriceAtBooking: Number(coach.lessonPrice),
         coachPayoutRateAtBooking: Number(coach.payoutPerHour) || 500,
         coachPayoutStatus: 'pending', lessonStatus: 'scheduled',
