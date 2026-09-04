@@ -77,6 +77,7 @@ describe('Art-owned AI Report access management', () => {
     expect(created.payload.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(created.payload.tokenShownOnce).toBe(true);
     expect(state.records.has(created.payload.access.id)).toBe(true);
+    expect(state.records.get(created.payload.access.id).scopes).toContain('customer_analytics_anonymous');
     expect(JSON.stringify([...state.records.values()])).not.toContain(created.payload.token);
 
     const listed = await call({ action: 'ai_report_access_list' });

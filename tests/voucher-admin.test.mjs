@@ -114,6 +114,8 @@ describe('Voucher Manager security surface', () => {
     }
     expect(adminApi).toContain("includesPii: false");
     expect(adminApi).toContain("tokenShownOnce: true");
+    expect(adminHtml).toContain('url.searchParams.set("customers","1")');
+    expect(adminApi).toContain("'customer_analytics_anonymous'");
   });
 
   test('exposes an owner-controlled Event Pass approval mode with MONSTR set to auto', () => {

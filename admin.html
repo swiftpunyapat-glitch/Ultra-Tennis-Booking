@@ -6040,6 +6040,7 @@ $("aiReportCreateBtn").addEventListener("click",async()=>{
     const data=await voucherApi("ai_report_access_create",{label,expiresDays});
     const url=new URL("/api/ai-report",location.origin);
     url.searchParams.set("token",data.token);
+    url.searchParams.set("customers","1");
     if($("aiReportMonth").value)url.searchParams.set("month",$("aiReportMonth").value);
     if($("aiReportDetails").checked)url.searchParams.set("details","1");
     showCreatedAiReportLink(url.toString());showToast("✓ AI Report link created");await loadAiReportAccess();

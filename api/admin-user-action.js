@@ -891,7 +891,7 @@ async function handleAiReportAccessAction({ req, res, adminName, session, action
         label: normalized.label,
         active: true,
         tokenSuffix: token.slice(-6),
-        scopes: ['booking_summary', 'booking_details_sanitized'],
+        scopes: ['booking_summary', 'booking_details_sanitized', 'customer_analytics_anonymous'],
         includesPii: false,
         createdAt: FieldValue.serverTimestamp(),
         createdBy: adminName,

@@ -8,6 +8,7 @@ import {
 const mockState = vi.hoisted(() => ({
   access: null,
   bookings: [],
+  registeredUsers: [],
   rateAllowed: true,
   usageSet: vi.fn(),
 }));
@@ -32,6 +33,9 @@ vi.mock('../api/_lib/firebase-admin.js', () => ({
         };
         return query;
       }
+      if (name === 'registered_users') return {
+        get: async () => ({ docs: mockState.registeredUsers.map(item => ({ id: item.id, data: () => item.data })) }),
+      };
       throw new Error(`Unexpected collection ${name}`);
     },
   }),
@@ -61,9 +65,10 @@ beforeEach(() => {
     active: true,
     label: 'Ace Report',
     expiresAt: Timestamp.fromMillis(Date.now() + 86400000),
-    scopes: ['booking_summary', 'booking_details_sanitized'],
+    scopes: ['booking_summary', 'booking_details_sanitized', 'customer_analytics_anonymous'],
   };
   mockState.bookings = [];
+  mockState.registeredUsers = [];
   mockState.rateAllowed = true;
   mockState.usageSet.mockReset();
 });
@@ -144,5 +149,31 @@ describe('AI Report HTTP security boundary', () => {
     mockState.rateAllowed = true;
     mockState.access.scopes = ['booking_summary'];
     expect((await call({ query: { token: TOKEN, details: '1' } })).statusCode).toBe(403);
+  });
+
+  test('returns anonymous read-only customer analytics without package reads or PII', async () => {
+    mockState.registeredUsers = [{ id: 'U192bdc0f5d57d09f4949edda2b96d549', data: { phone: '0800508899', name: 'Hidden User' } }];
+    mockState.bookings = [
+      { id: 'old', data: { date: '2026-07-10', lineUserId: 'U192bdc0f5d57d09f4949edda2b96d549', customerPhone: '0800508899', customerName: 'Hidden User', bookingStatus: 'confirmed', paymentStatus: 'paid', price: 390 } },
+      { id: 'aug', data: { date: '2026-08-10', lineUserId: 'manual', customerPhone: '0800508899', customerName: 'Hidden User', bookingStatus: 'confirmed', paymentStatus: 'paid', price: 390 } },
+    ];
+    const out = await call({ query: { token: TOKEN, month: '2026-08', customers: '1' } });
+    expect(out.statusCode).toBe(200);
+    expect(out.payload).toMatchObject({
+      reportVersion: '2',
+      filters: { customers: true },
+      customerAnalytics: {
+        readOnly: true, writesPerformed: 0, piiIncluded: false,
+        packageDocumentsRead: 0, summary: { activeCustomers: 1, returningCustomers: 1 },
+      },
+    });
+    expect(JSON.stringify(out.payload)).not.toMatch(/Hidden User|0800508899|U192bdc/);
+  });
+
+  test('does not upgrade old report links to customer-level analytics implicitly', async () => {
+    mockState.access.scopes = ['booking_summary', 'booking_details_sanitized'];
+    const out = await call({ query: { token: TOKEN, month: '2026-08', customers: '1' } });
+    expect(out.statusCode).toBe(403);
+    expect(out.payload.error).toContain('anonymous customer analytics');
   });
 });

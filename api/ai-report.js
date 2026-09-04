@@ -10,6 +10,7 @@ import {
   buildAiBookingReport, hashAiReportToken, normalizeAiReportToken,
   resolveAiReportRange, AI_REPORT_MAX_RANGE_DAYS,
 } from './_lib/ai-report.js';
+import { buildReadOnlyCustomerAnalytics } from './_lib/customer-analytics.js';
 
 function singleQueryValue(value) {
   return Array.isArray(value) ? value[0] : value;
@@ -87,18 +88,33 @@ export default async function handler(req, res) {
   if (!range.ok) return res.status(400).json({ ok: false, error: range.error });
 
   const details = boolQuery(req.query?.details);
+  const customers = boolQuery(req.query?.customers);
   if (details && (!Array.isArray(access.scopes) || !access.scopes.includes('booking_details_sanitized'))) {
     return res.status(403).json({ ok: false, error: 'This AI Report link cannot read booking rows' });
+  }
+  if (customers && (!Array.isArray(access.scopes) || !access.scopes.includes('customer_analytics_anonymous'))) {
+    return res.status(403).json({ ok: false, error: 'This AI Report link cannot read anonymous customer analytics' });
   }
   const page = Number(singleQueryValue(req.query?.page) || 1);
   const limit = Number(singleQueryValue(req.query?.limit) || 200);
   try {
-    const bookingSnap = await db.collection('bookings')
-      .where('date', '>=', range.from)
-      .where('date', '<=', range.to)
-      .get();
+    const bookingQuery = customers
+      ? db.collection('bookings')
+      : db.collection('bookings').where('date', '>=', range.from).where('date', '<=', range.to);
+    const [bookingSnap, userSnap] = await Promise.all([
+      bookingQuery.get(),
+      customers ? db.collection('registered_users').get() : Promise.resolve({ docs: [] }),
+    ]);
     const records = bookingSnap.docs.map(doc => ({ id: doc.id, data: doc.data() }));
     const report = buildAiBookingReport(records, range, { details, page, limit });
+    const customerAnalytics = customers
+      ? buildReadOnlyCustomerAnalytics(
+        records,
+        userSnap.docs.map(doc => ({ id: doc.id, data: doc.data() })),
+        range,
+        { referenceSalt: tokenHash },
+      )
+      : undefined;
 
     try {
       await accessSnap.ref.set({
@@ -111,7 +127,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       ok: true,
-      reportVersion: '1',
+      reportVersion: customers ? '2' : '1',
       generatedAt: new Date().toISOString(),
       timezone: 'Asia/Bangkok',
       access: { label: access.label || 'AI Booking Report', expiresAt: access.expiresAt.toDate().toISOString() },
@@ -119,12 +135,14 @@ export default async function handler(req, res) {
         piiIncluded: false,
         excludedFields: ['customerName', 'customerPhone', 'lineUserId', 'slipUrl'],
       },
-      filters: { mode: range.mode, month: range.month, from: range.from, to: range.to, details },
+      filters: { mode: range.mode, month: range.month, from: range.from, to: range.to, details, customers },
       ...report,
+      ...(customerAnalytics ? { customerAnalytics } : {}),
       usage: {
         currentMonth: '?month=YYYY-MM',
         dateRange: `?from=YYYY-MM-DD&to=YYYY-MM-DD (maximum ${AI_REPORT_MAX_RANGE_DAYS} days per request)`,
         sanitizedBookings: '?details=1&page=1&limit=200 (limit maximum 500)',
+        anonymousCustomerAnalytics: '?month=YYYY-MM&customers=1',
         authentication: 'Use this link token or Authorization: Bearer <token>',
       },
     });
