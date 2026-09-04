@@ -207,6 +207,33 @@
     .mfield select,.mfield input[type=number],.mfield input[type=text]{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:8px 10px;font-size:.88rem;}
     .mfield select:focus,.mfield input[type=number]:focus,.mfield input[type=text]:focus{outline:none;border-color:var(--g);}
 
+    /* Coach profile editor — mirrors the customer-facing Coach Card. */
+    .coach-profile-modal-box{max-width:780px;}
+    .coach-profile-editor-grid{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:18px;align-items:start;}
+    .coach-profile-form textarea{width:100%;min-height:118px;background:var(--s2);border:1px solid var(--bd);border-radius:8px;color:var(--t);padding:9px 10px;font-size:.82rem;line-height:1.55;resize:vertical;}
+    .coach-profile-form textarea:focus{outline:none;border-color:var(--g);}
+    .coach-photo-picker{display:flex;align-items:center;gap:11px;padding:11px;border:1px dashed var(--bd);border-radius:10px;background:var(--s2);cursor:pointer;transition:border-color .15s,background .15s;}
+    .coach-photo-picker:hover{border-color:var(--g);background:var(--gd);}
+    .coach-photo-picker-icon{width:42px;height:42px;border-radius:10px;display:grid;place-items:center;background:var(--s);font-size:1.25rem;flex-shrink:0;}
+    .coach-photo-picker strong{display:block;font-size:.78rem;color:var(--t);}
+    .coach-photo-picker small{display:block;margin-top:2px;color:var(--m);font-size:.66rem;line-height:1.45;}
+    .coach-profile-preview-label{margin-bottom:7px;color:var(--m);font-size:.66rem;font-weight:800;text-transform:uppercase;letter-spacing:.6px;}
+    .coach-profile-preview{padding:14px;color:#fff;background:linear-gradient(145deg,#102f55,#0b2447);border:1px solid rgba(255,199,44,.6);border-radius:16px;box-shadow:0 12px 28px rgba(0,0,0,.24);}
+    .coach-profile-preview-head{display:grid;grid-template-columns:68px minmax(0,1fr) auto;gap:12px;align-items:center;}
+    .coach-profile-preview-photo{position:relative;width:68px;height:68px;border-radius:18px;overflow:hidden;display:grid;place-items:center;color:#ffc72c;font-size:1.35rem;font-weight:900;background:linear-gradient(145deg,#1d4d7d,#143258);border:1px solid rgba(150,180,225,.24);}
+    .coach-profile-preview-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+    .coach-profile-preview-available{display:flex;align-items:center;gap:5px;color:#72e2b6;font-size:.67rem;font-weight:800;}
+    .coach-profile-preview-available::before{content:"";width:7px;height:7px;border-radius:50%;background:#37d196;box-shadow:0 0 0 3px rgba(55,209,150,.13);}
+    .coach-profile-preview-name{margin-top:3px;font-size:1rem;font-weight:900;line-height:1.3;overflow-wrap:anywhere;}
+    .coach-profile-preview-duration{margin-top:3px;color:#c9d6e8;font-size:.69rem;}
+    .coach-profile-preview-choice{min-width:29px;height:29px;padding:0 8px;border-radius:999px;display:grid;place-items:center;color:#0b2447;background:#ffc72c;font-size:.66rem;font-weight:900;}
+    .coach-profile-preview-bio{margin:11px 0 0;color:#c9d6e8;font-size:.74rem;line-height:1.55;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+    .coach-profile-preview-footer{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-top:12px;padding-top:11px;border-top:1px solid rgba(150,180,225,.15);}
+    .coach-profile-preview-price-label{color:#9fb2cf;font-size:.66rem;line-height:1.4;}
+    .coach-profile-preview-price{color:#ffc72c;font-size:1rem;font-weight:950;white-space:nowrap;}
+    .coach-profile-preview-price small{color:#c9d6e8;font-size:.65rem;font-weight:700;}
+    @media(max-width:700px){.coach-profile-editor-grid{grid-template-columns:1fr}.coach-profile-preview-wrap{order:-1}.coach-profile-modal-box{max-width:460px;}}
+
     /* ADMIN ACTIVITY FEED */
     .activity-panel{background:var(--s);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;}
     .activity-hdr{padding:10px 14px;background:var(--s2);border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;gap:10px;}
@@ -1290,6 +1317,40 @@
   </div>
 </div>
 
+<!-- COACH PROFILE MODAL — admin-managed public profile + customer-card preview -->
+<div class="moverlay" id="coachProfileModal" style="display:none">
+  <div class="mbox coach-profile-modal-box">
+    <div class="mhdr"><h2>👨‍🏫 Coach Profile</h2><button class="mclose" id="coachProfileClose" type="button">✕</button></div>
+    <div class="mbody coach-profile-editor-grid">
+      <div class="coach-profile-form">
+        <div class="minfo"><strong id="coachProfileId">—</strong><span>ข้อมูลนี้จะแสดงให้ลูกค้าเห็นในหน้าจอง Coach Add-on</span></div>
+        <div class="mfield">
+          <label for="coachProfileName">ชื่อที่ลูกค้าเห็น</label>
+          <input type="text" id="coachProfileName" maxlength="60" autocomplete="off" placeholder="เช่น Coach Art"/>
+        </div>
+        <div class="mfield">
+          <label for="coachProfileBio">ประวัติย่อ</label>
+          <textarea id="coachProfileBio" maxlength="500" placeholder="ประสบการณ์ แนวทางการสอน หรือกลุ่มผู้เรียนที่ถนัด"></textarea>
+          <div id="coachProfileBioCount" style="margin-top:4px;text-align:right;color:var(--m);font-size:.66rem">0 / 500</div>
+        </div>
+        <div class="mfield">
+          <label>รูปโค้ช</label>
+          <label class="coach-photo-picker" for="coachProfilePhotoInput">
+            <span class="coach-photo-picker-icon">📷</span>
+            <span><strong id="coachProfilePhotoTitle">เลือกรูปจากเครื่อง</strong><small id="coachProfilePhotoHint">JPEG, PNG หรือ WebP · ระบบจะย่อรูปให้อัตโนมัติ</small></span>
+          </label>
+          <input type="file" id="coachProfilePhotoInput" accept="image/jpeg,image/png,image/webp" style="display:none"/>
+        </div>
+      </div>
+      <div class="coach-profile-preview-wrap">
+        <div class="coach-profile-preview-label">ตัวอย่างที่ลูกค้าจะเห็น</div>
+        <div class="coach-profile-preview" id="coachProfilePreview" aria-live="polite"></div>
+      </div>
+    </div>
+    <div class="mftr"><button class="mcancel" id="coachProfileCancel" type="button">Cancel</button><button class="mconfirm" id="coachProfileSave" type="button">💾 บันทึก Profile</button></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script type="module">
@@ -1964,6 +2025,77 @@ function renderBookings(){
 
 // ── COACH MANAGEMENT (Phase Coach 1) ────────────────────────────────
 let coachCache = [];
+let coachProfileDraft = null;
+
+function coachProfileInitial(name){
+  return String(name||"Coach").trim().charAt(0).toUpperCase()||"C";
+}
+
+function closeCoachProfileEditor(){
+  if(coachProfileDraft?.previewUrl) URL.revokeObjectURL(coachProfileDraft.previewUrl);
+  coachProfileDraft=null;
+  $("coachProfilePhotoInput").value="";
+  $("coachProfileModal").style.display="none";
+}
+
+function renderCoachProfileAdminPreview(){
+  if(!coachProfileDraft) return;
+  const coach=coachProfileDraft.coach;
+  const displayName=$("coachProfileName").value.trim()||coach.displayName||coach.name||"Coach";
+  const bio=$("coachProfileBio").value.trim()||"โค้ชพร้อมดูแลตลอดช่วงเวลาที่จอง";
+  const photoUrl=coachProfileDraft.previewUrl||coach.photoUrl||"";
+  const price=Number(coach.lessonPrice)>0?`฿${Number(coach.lessonPrice).toLocaleString("en-US")} <small>/ ชั่วโมง</small>`:`<small>ยังไม่ตั้งราคา</small>`;
+  $("coachProfileBioCount").textContent=`${$("coachProfileBio").value.length} / 500`;
+  $("coachProfilePreview").innerHTML=`<div class="coach-profile-preview-head"><div class="coach-profile-preview-photo"><span>${esc(coachProfileInitial(displayName))}</span>${photoUrl?`<img src="${esc(photoUrl)}" alt="รูป ${esc(displayName)}">`:""}</div><div><div class="coach-profile-preview-available">ว่างช่วงนี้</div><div class="coach-profile-preview-name">${esc(displayName)}</div><div class="coach-profile-preview-duration">พร้อมสอนครบ 60 นาที</div></div><span class="coach-profile-preview-choice">✓</span></div><p class="coach-profile-preview-bio">${esc(bio)}</p><div class="coach-profile-preview-footer"><span class="coach-profile-preview-price-label">ราคาคาบต่อชั่วโมง<br>รวมค่าคอร์ทแล้ว</span><strong class="coach-profile-preview-price">${price}</strong></div>`;
+  const image=$("coachProfilePreview").querySelector("img");
+  if(image) image.addEventListener("error",()=>image.remove(),{once:true});
+}
+
+function openCoachProfileEditor(coach){
+  if(coachProfileDraft?.previewUrl) URL.revokeObjectURL(coachProfileDraft.previewUrl);
+  coachProfileDraft={coach,photoDataUrl:null,previewUrl:null,processing:false};
+  $("coachProfileId").textContent=coach.name||coach.id;
+  $("coachProfileName").value=coach.displayName||coach.name||"";
+  $("coachProfileBio").value=coach.bio||"";
+  $("coachProfilePhotoInput").value="";
+  $("coachProfilePhotoTitle").textContent=coach.photoUrl?"เลือกรูปใหม่":"เลือกรูปจากเครื่อง";
+  $("coachProfilePhotoHint").textContent=coach.photoUrl?"มีรูปอยู่แล้ว · เลือกไฟล์เพื่อเปลี่ยน":"JPEG, PNG หรือ WebP · ระบบจะย่อรูปให้อัตโนมัติ";
+  $("coachProfileSave").disabled=false;
+  $("coachProfileSave").textContent="💾 บันทึก Profile";
+  $("coachProfileModal").style.display="flex";
+  renderCoachProfileAdminPreview();
+}
+
+function loadCoachPhotoImage(file){
+  return new Promise((resolve,reject)=>{
+    const objectUrl=URL.createObjectURL(file);
+    const image=new Image();
+    image.onload=()=>{URL.revokeObjectURL(objectUrl);resolve(image);};
+    image.onerror=()=>{URL.revokeObjectURL(objectUrl);reject(new Error("เปิดไฟล์รูปไม่ได้"));};
+    image.src=objectUrl;
+  });
+}
+
+async function prepareCoachPhotoDataUrl(file){
+  const allowed=new Set(["image/jpeg","image/png","image/webp"]);
+  if(!allowed.has(file.type)) throw new Error("รองรับเฉพาะ JPEG, PNG หรือ WebP");
+  if(file.size>10*1024*1024) throw new Error("ไฟล์ต้นฉบับต้องไม่เกิน 10 MB");
+  const image=await loadCoachPhotoImage(file);
+  const maxSide=900;
+  const scale=Math.min(1,maxSide/Math.max(image.naturalWidth,image.naturalHeight));
+  const canvas=document.createElement("canvas");
+  canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));
+  canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));
+  const context=canvas.getContext("2d",{alpha:false});
+  if(!context) throw new Error("อุปกรณ์นี้ไม่รองรับการเตรียมรูป");
+  context.fillStyle="#ffffff";context.fillRect(0,0,canvas.width,canvas.height);
+  context.drawImage(image,0,0,canvas.width,canvas.height);
+  for(const quality of [.86,.74,.62,.5]){
+    const dataUrl=canvas.toDataURL("image/jpeg",quality);
+    if(dataUrl.length<=2000000) return dataUrl;
+  }
+  throw new Error("รูปยังมีขนาดใหญ่เกินไป กรุณาเลือกรูปอื่น");
+}
 
 async function loadCoaches(activeOnly){
   const res = await fetch("/api/admin-ops",{
@@ -1993,6 +2125,7 @@ async function renderCoachTab(){
           <div style="font-size:.7rem;color:${linked?'#2fbf76':'var(--warn)'}">${linked?'🔗 LINE linked — โค้ชเข้าระบบได้':'⚠ ยังไม่ผูก LINE — โค้ชล็อกอินไม่ได้'}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end">
+          <button class="smbtn" data-coach-profile="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#182743;color:#ffd75e;border:1px solid #8d7424">🪪 Profile</button>
           <button class="smbtn" data-coach-rates="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#0f2d1e;color:#2fbf76;border:1px solid #2fbf76">💰 Rates</button>
           <button class="smbtn" data-coach-line="${esc(c.id)}" style="padding:6px 10px;font-size:.72rem;background:#1e2f4d;color:#8fb8ff;border:1px solid #2d4a7a">${linked?'🔗 เปลี่ยน/ถอน LINE':'🔗 ผูก LINE'}</button>
           <button class="smbtn ${active?'':'smg'}" data-coach-toggle="${esc(c.id)}" data-coach-active="${active?'1':'0'}" style="padding:6px 12px;font-size:.75rem">${active?'Deactivate':'Activate'}</button>
@@ -2000,6 +2133,12 @@ async function renderCoachTab(){
         </div>
       </div>`;
     }).join("");
+    box.querySelectorAll("[data-coach-profile]").forEach(btn=>{
+      btn.addEventListener("click",()=>{
+        const coach=coachCache.find(item=>item.id===btn.dataset.coachProfile);
+        if(coach) openCoachProfileEditor(coach);
+      });
+    });
     box.querySelectorAll("[data-coach-rates]").forEach(btn=>{
       btn.addEventListener("click", async ()=>{
         const coachId = btn.dataset.coachRates;
@@ -2117,6 +2256,61 @@ async function renderCoachTab(){
   }catch(e){ console.error(e); box.innerHTML = `<div class="smempty">❌ ${esc(e.message||"Failed")}</div>`; }
   renderPayoutList();
 }
+
+$("coachProfileName").addEventListener("input",renderCoachProfileAdminPreview);
+$("coachProfileBio").addEventListener("input",renderCoachProfileAdminPreview);
+$("coachProfilePhotoInput").addEventListener("change",async event=>{
+  const file=event.target.files?.[0];
+  if(!file||!coachProfileDraft) return;
+  const draft=coachProfileDraft;
+  if(draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
+  draft.previewUrl=URL.createObjectURL(file);
+  draft.photoDataUrl=null;
+  draft.processing=true;
+  event.target.disabled=true;
+  $("coachProfileSave").disabled=true;
+  $("coachProfilePhotoTitle").textContent="กำลังเตรียมรูป...";
+  $("coachProfilePhotoHint").textContent=file.name;
+  renderCoachProfileAdminPreview();
+  try{
+    const photoDataUrl=await prepareCoachPhotoDataUrl(file);
+    if(coachProfileDraft!==draft) return;
+    draft.photoDataUrl=photoDataUrl;
+    $("coachProfilePhotoTitle").textContent="เลือกรูปใหม่แล้ว";
+    $("coachProfilePhotoHint").textContent=`${file.name} · พร้อมบันทึก`;
+  }catch(error){
+    if(coachProfileDraft!==draft) return;
+    URL.revokeObjectURL(draft.previewUrl);
+    draft.previewUrl=null;
+    event.target.value="";
+    $("coachProfilePhotoTitle").textContent=draft.coach.photoUrl?"เลือกรูปใหม่":"เลือกรูปจากเครื่อง";
+    $("coachProfilePhotoHint").textContent=error.message||"เตรียมรูปไม่สำเร็จ";
+    showToast(error.message||"เตรียมรูปไม่สำเร็จ",true);
+  }finally{
+    event.target.disabled=false;
+    if(coachProfileDraft===draft){draft.processing=false;$("coachProfileSave").disabled=false;renderCoachProfileAdminPreview();}
+  }
+});
+$("coachProfileClose").addEventListener("click",closeCoachProfileEditor);
+$("coachProfileCancel").addEventListener("click",closeCoachProfileEditor);
+$("coachProfileSave").addEventListener("click",async()=>{
+  if(!coachProfileDraft||coachProfileDraft.processing) return;
+  const displayName=$("coachProfileName").value.trim();
+  const bio=$("coachProfileBio").value.trim();
+  if(!displayName){showToast("กรอกชื่อที่ลูกค้าเห็น",true);return;}
+  const button=$("coachProfileSave");button.disabled=true;button.textContent="กำลังบันทึก...";
+  try{
+    const payload={action:"coach_update_profile",coachId:coachProfileDraft.coach.id,displayName,bio};
+    if(coachProfileDraft.photoDataUrl) payload.photoDataUrl=coachProfileDraft.photoDataUrl;
+    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    const data=await res.json().catch(()=>({}));
+    if(!res.ok||!data.ok){showToast(data.error||"บันทึก Profile ไม่สำเร็จ",true);return;}
+    closeCoachProfileEditor();
+    showToast(`✓ อัปเดต Profile ของ ${displayName} แล้ว`);
+    renderCoachTab();
+  }catch(error){console.error(error);showToast("บันทึก Profile ไม่สำเร็จ",true);}
+  finally{if(coachProfileDraft){button.disabled=false;button.textContent="💾 บันทึก Profile";}}
+});
 
 // ── Coach V2: per-lesson payouts awaiting transfer ──────────────────
 // bookings where coachPayoutStatus == "payable" (set when the coach marks a

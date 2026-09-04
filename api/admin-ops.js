@@ -27,11 +27,17 @@ import {
   getAdminUser, coachSessionFromToken,
 } from './_lib/admin-auth.js';
 import {
-  getAdminDb, getAdminAuth, serializeFsDoc, writeAuditLog,
+  getAdminDb, getAdminAuth, getAdminBucket, serializeFsDoc, writeAuditLog,
   BRANCH_STATUSES, statusFlags,
 } from './_lib/firebase-admin.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { randomUUID } from 'node:crypto';
 import { buildCustomerIdentityDryRun } from './_lib/customer-identity.js';
+import {
+  parseCoachProfilePhotoDataUrl,
+  coachProfilePhotoObjectPath,
+  coachProfilePhotoDownloadUrl,
+} from './_lib/coach-profile-photo.js';
 
 // ── Constants ─────────────────────────────────────────────────────
 const VALID_ACTIONS = [
@@ -1335,9 +1341,42 @@ async function handleCoachUpdateProfile(res, session, body) {
     if (v && !/^https:\/\//.test(v)) return res.status(400).json({ ok: false, error: 'photoUrl must be https' });
     update.photoUrl = v || null;
   }
-  if (!Object.keys(update).length) return res.status(400).json({ ok: false, error: 'Nothing to update' });
+  const hasPhotoUpload = body.photoDataUrl !== undefined;
+  if (hasPhotoUpload && session.role === 'coach') {
+    return res.status(403).json({ ok: false, error: 'Coach photo uploads are managed by Admin' });
+  }
+  if (hasPhotoUpload && body.photoUrl !== undefined) {
+    return res.status(400).json({ ok: false, error: 'Send either photoDataUrl or photoUrl, not both' });
+  }
+  if (!Object.keys(update).length && !hasPhotoUpload) return res.status(400).json({ ok: false, error: 'Nothing to update' });
 
+  let uploadedFile = null;
   try {
+    if (hasPhotoUpload) {
+      let photo;
+      try { photo = parseCoachProfilePhotoDataUrl(body.photoDataUrl); }
+      catch (e) {
+        const messages = {
+          COACH_PHOTO_TOO_LARGE: 'Coach photo must be 1.5 MB or smaller after processing',
+          COACH_PHOTO_INVALID_TYPE: 'Coach photo must be JPEG, PNG, or WebP',
+          COACH_PHOTO_INVALID_CONTENT: 'Coach photo content does not match its file type',
+        };
+        return res.status(400).json({ ok: false, code: e.message, error: messages[e.message] || 'Invalid coach photo' });
+      }
+      const bucketName = process.env.FIREBASE_STORAGE_BUCKET || 'ultra-tennis-booking.firebasestorage.app';
+      const token = randomUUID();
+      const objectPath = coachProfilePhotoObjectPath(coachId, `${Date.now()}-${randomUUID()}.${photo.extension}`);
+      uploadedFile = getAdminBucket(bucketName).file(objectPath);
+      await uploadedFile.save(photo.buffer, {
+        resumable: false,
+        metadata: {
+          contentType: photo.contentType,
+          cacheControl: 'public,max-age=31536000,immutable',
+          metadata: { firebaseStorageDownloadTokens: token },
+        },
+      });
+      update.photoUrl = coachProfilePhotoDownloadUrl(bucketName, objectPath, token);
+    }
     update.profileUpdatedAt = FieldValue.serverTimestamp();
     update.updatedAt        = FieldValue.serverTimestamp();
     await db.collection('coaches').doc(coachId).update(update);
@@ -1347,8 +1386,20 @@ async function handleCoachUpdateProfile(res, session, body) {
       before: { displayName: coach.displayName ?? null, bio: coach.bio ?? null, photoUrl: coach.photoUrl ?? null },
       after:  { displayName: update.displayName ?? coach.displayName ?? null, bio: update.bio ?? coach.bio ?? null, photoUrl: update.photoUrl !== undefined ? update.photoUrl : (coach.photoUrl ?? null) },
     });
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({
+      ok: true,
+      profile: {
+        coachId,
+        displayName: update.displayName ?? coach.displayName ?? coachId,
+        bio: update.bio ?? coach.bio ?? '',
+        photoUrl: update.photoUrl !== undefined ? update.photoUrl : (coach.photoUrl ?? null),
+      },
+    });
   } catch (e) {
+    if (uploadedFile) {
+      try { await uploadedFile.delete({ ignoreNotFound: true }); }
+      catch (cleanupError) { console.error('[coach_update_profile] upload rollback:', cleanupError.message); }
+    }
     console.error('[coach_update_profile]', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to update profile' });
   }
