@@ -49,9 +49,9 @@ describe('Event Pass booking policy', () => {
     expect(adminHtml).toContain('2026-09-24');
     expect(adminHtml).toContain('Event Pass Approval');
     expect(adminHtml).toContain('voucher_import_codes');
-    expect(customerHtml).toContain('Redeem Event Code');
+    expect(customerHtml).toContain('Redeem Code');
     expect(customerHtml).toContain('event_pass_redeem');
-    expect(customerHtml).toContain('รับ Event Pass ทันที');
+    expect(customerHtml).toContain('กรอก Code ที่ได้รับ ระบบจะเพิ่มสิทธิ์เข้าบัญชี LINE นี้');
     expect(customerHtml).toContain('data.status==="approved"');
     expect(adminHtml).toContain('Auto Approval');
   });

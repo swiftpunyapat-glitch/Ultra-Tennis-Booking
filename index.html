@@ -4,6 +4,9 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Ultra Tennis Booking</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <!-- QR encoder (deferred, non-blocking) for dynamic PromptPay payment QRs.
        If it fails to load, the app falls back to the static QR images. -->
@@ -487,6 +490,208 @@
       .coach-profile-photo{width:58px;height:58px;border-radius:15px;}
       .coach-profile-card{padding:12px;}
     }
+
+    /* Ultra Tennis Studio Brand Book v1.0 — customer booking UI. */
+    :root{
+      --ut-yellow:#F6ED1F;
+      --ut-blue:#0A3EC1;
+      --ut-blue-dark:#072D8F;
+      --ut-blue-soft:#EAF0FF;
+      --ut-navy:var(--ut-text);
+      --ut-navy-2:var(--ut-blue-dark);
+      --ut-cyan:var(--ut-blue);
+      --ut-white:#FFFFFF;
+      --ut-gray:#EEEFF1;
+      --ut-bg:#F7F8FA;
+      --ut-card:#FFFFFF;
+      --ut-soft:#F1F4FA;
+      --ut-border:#DDE2EA;
+      --ut-text:#14161C;
+      --ut-muted:#656B78;
+      --ut-disabled:#E7E9EE;
+      --bg:var(--ut-bg);
+      --surface:var(--ut-card);
+      --surface-soft:var(--ut-bg);
+      --soft:var(--ut-soft);
+      --ink:var(--ut-text);
+      --muted:var(--ut-muted);
+      --line:var(--ut-border);
+      --brand:var(--ut-blue);
+      --brand-dark:var(--ut-blue-dark);
+      --accent:var(--ut-yellow);
+      --yellow:var(--ut-yellow);
+      --danger:#C93C49;
+      --warning:#A65A00;
+      --success:#147A4D;
+      --r:16px;
+    }
+    html{background:var(--ut-gray);}
+    body{
+      font-family:"IBM Plex Sans Thai","Archivo",ui-sans-serif,system-ui,sans-serif;
+      background:
+        radial-gradient(circle at 92% 4%,transparent 0 104px,rgba(10,62,193,.08) 105px 109px,transparent 110px),
+        linear-gradient(180deg,#fff 0,#f7f8fa 420px);
+      color:var(--ut-text);
+    }
+    body::before{
+      opacity:1;
+      background:
+        radial-gradient(circle at -12% 36%,transparent 0 170px,rgba(246,237,31,.22) 171px 184px,transparent 185px),
+        radial-gradient(circle at 108% 78%,transparent 0 210px,rgba(10,62,193,.05) 211px 216px,transparent 217px);
+    }
+    .shell{
+      width:min(100%,480px);min-height:100vh;padding-bottom:104px;background:#fff;
+      box-shadow:0 0 56px rgba(20,22,28,.12);overflow:hidden;
+    }
+    .pheader{
+      grid-template-columns:46px minmax(0,1fr) auto;padding:12px 16px;background:rgba(255,255,255,.94);
+      border-color:var(--ut-border);box-shadow:0 8px 26px rgba(20,22,28,.06);backdrop-filter:blur(16px);
+    }
+    .avatar{
+      width:46px;height:46px;border-radius:50%;color:#fff;background:var(--ut-blue);
+      border:3px solid var(--ut-blue-soft);box-shadow:none;
+    }
+    .pname{color:var(--ut-text);font-size:1rem;}
+    .psub{color:var(--ut-muted);font-size:.67rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .lang-toggle{background:var(--ut-gray);border-color:var(--ut-border);}
+    .lang-btn{color:var(--ut-muted);}
+    .lang-btn.on{background:var(--ut-blue);color:#fff;box-shadow:none;}
+    .view{padding:18px;}
+    .back{
+      min-width:40px;height:40px;margin:0 0 14px;padding:0 12px;justify-content:center;
+      border:1px solid #CAD5F0;border-radius:12px;background:var(--ut-blue-soft);color:var(--ut-blue);
+    }
+    .back:hover{color:var(--ut-blue-dark);background:#DDE7FF;}
+    .ptitle{font-size:1.35rem;color:var(--ut-text);margin-bottom:16px;}
+    .card,.bitem,.passitem,.pkgcard{
+      color:var(--ut-text);background:#fff;border-color:var(--ut-border);border-radius:16px;
+      box-shadow:0 9px 24px rgba(20,22,28,.07);
+    }
+    .card{padding:16px;margin-bottom:13px;}
+    .slabel,.eyebrow,.sec-title{color:var(--ut-muted);letter-spacing:.08em;}
+    .home-intro{
+      position:relative;padding:22px 22px 16px;overflow:hidden;
+      background:linear-gradient(145deg,#fff 55%,rgba(246,237,31,.20));
+      border-bottom:1px solid var(--ut-border);
+    }
+    .home-intro::after{
+      content:"";position:absolute;width:190px;height:190px;right:-92px;top:-90px;border:12px solid rgba(10,62,193,.08);
+      border-left-color:transparent;border-radius:50%;transform:rotate(-18deg);pointer-events:none;
+    }
+    .home-brand-lockup{position:relative;z-index:1;display:flex;align-items:center;gap:12px;margin-bottom:16px;}
+    .home-brand-logo{width:68px;height:68px;object-fit:contain;border-radius:18px;background:#fff;border:1px solid var(--ut-border);}
+    .home-brand-name{font-family:"Archivo",sans-serif;color:var(--ut-blue);font-size:.96rem;font-weight:800;letter-spacing:.08em;}
+    .home-brand-line{margin-top:3px;color:var(--ut-text);font-size:.68rem;font-weight:800;letter-spacing:.18em;}
+    .home-kicker{position:relative;z-index:1;color:var(--ut-blue);font-size:.7rem;letter-spacing:.1em;margin-bottom:5px;}
+    .home-title{position:relative;z-index:1;max-width:390px;color:var(--ut-text);font-size:1.55rem;line-height:1.28;font-weight:800;}
+    .home-hours{position:relative;z-index:1;margin-top:8px!important;text-align:left!important;color:var(--ut-muted)!important;font-size:.76rem!important;}
+    .hgrid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:11px;padding:14px 18px 20px;}
+    .hcard{
+      min-height:136px;padding:15px!important;align-items:flex-start!important;flex-direction:column!important;
+      justify-content:flex-start;gap:10px!important;color:var(--ut-text);background:#fff;
+      border:1px solid var(--ut-border);border-radius:16px;box-shadow:0 8px 22px rgba(20,22,28,.07);
+    }
+    .hcard:hover{transform:translateY(-2px);background:#fff;border-color:#A9BCEB;box-shadow:0 12px 28px rgba(10,62,193,.12);}
+    .hcard-icon{
+      width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+      color:var(--ut-blue);background:var(--ut-blue-soft);font-size:0!important;
+    }
+    .hcard-icon svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+    .hcard-label{color:var(--ut-text)!important;font-size:.91rem!important;line-height:1.35;}
+    .hcard-sub{color:var(--ut-muted)!important;font-size:.69rem!important;line-height:1.48;}
+    #btnSingle{
+      grid-column:1/-1;min-height:126px;flex-direction:row!important;align-items:center!important;
+      padding:18px 20px!important;background:var(--ut-blue);color:#fff;border-color:var(--ut-blue);
+      box-shadow:0 14px 30px rgba(10,62,193,.22);
+    }
+    #btnSingle:hover{background:var(--ut-blue-dark);}
+    #btnSingle .hcard-icon{flex:0 0 54px;width:54px;height:54px;color:var(--ut-blue);background:var(--ut-yellow);}
+    #btnSingle .hcard-label{color:#fff!important;font-size:.75rem!important;letter-spacing:.06em;text-transform:uppercase;}
+    #btnSingle .hcard-sub{color:#DCE5FF!important;}
+    .hcard-price{margin:2px 0 3px;color:var(--ut-yellow);font-family:"Archivo",sans-serif;font-size:1.46rem;font-weight:900;line-height:1;}
+    .hcard-price small{font-family:"IBM Plex Sans Thai",sans-serif;font-size:.7rem;font-weight:600;}
+    .dstrip{gap:9px;}
+    .dbtn,.tbtn,.ptbtn{color:var(--ut-text);background:#fff;border-color:var(--ut-border);border-radius:12px;}
+    .dbtn:hover,.tbtn:hover:not(:disabled),.ptbtn:hover:not(:disabled){background:var(--ut-blue-soft);border-color:#A9BCEB;}
+    .dbtn.on,.tbtn.on{color:#fff;background:var(--ut-blue);border-color:var(--ut-blue);box-shadow:0 7px 16px rgba(10,62,193,.18);}
+    .dbtn.on span,.dbtn.on strong{color:#fff;}
+    .tbtn:disabled,.ptbtn:disabled{background:var(--ut-disabled);color:#9298A4;border-color:var(--ut-border);}
+    .dur-badge,.pmeta-item,.tnote{color:var(--ut-text);background:var(--ut-blue-soft);border-color:#CFDAF5;border-radius:12px;}
+    .dur-badge strong,.rtag,.ptbtn.on .pt-name{color:var(--ut-blue-dark);}
+    .ptbtn.on{background:var(--ut-blue-soft);border-color:var(--ut-blue);box-shadow:0 0 0 2px rgba(10,62,193,.08);}
+    .coach-profile-card{
+      color:var(--ut-text);background:#fff;border:1px solid var(--ut-border);border-radius:16px;
+      box-shadow:0 8px 22px rgba(20,22,28,.07);
+    }
+    .coach-profile-card:hover{background:#fff;border-color:#A9BCEB;box-shadow:0 12px 26px rgba(10,62,193,.11);}
+    .coach-profile-card:focus-visible{outline:3px solid rgba(10,62,193,.18);}
+    .coach-profile-card.is-selected{border-color:var(--ut-blue);background:#F7F9FF;box-shadow:0 0 0 2px rgba(10,62,193,.08);}
+    .coach-profile-photo{color:var(--ut-blue);background:var(--ut-blue-soft);border-color:#CAD5F0;}
+    .coach-profile-availability{color:var(--success);}
+    .coach-profile-availability::before{background:#1B9C64;box-shadow:0 0 0 3px rgba(27,156,100,.12);}
+    .coach-profile-duration,.coach-profile-bio,.coach-profile-price-label{color:var(--ut-muted);}
+    .coach-profile-choice{color:var(--ut-muted);border-color:var(--ut-border);}
+    .coach-profile-card.is-selected .coach-profile-choice{color:var(--ut-text);background:var(--ut-yellow);border-color:#DDD400;}
+    .coach-profile-footer{border-top-color:var(--ut-border);}
+    .coach-profile-price{color:var(--ut-blue);}
+    .coach-profile-price small{color:var(--ut-muted);}
+    .rcard{background:#fff;border-color:var(--ut-border);border-radius:16px;}
+    .rimg{background:linear-gradient(135deg,var(--ut-blue),#416CDC);}
+    .rtag{background:var(--ut-blue-soft);}
+    input[type=text],input[type=tel],textarea{color:var(--ut-text);background:#fff;border-color:#C9CED8;border-radius:11px;}
+    input::placeholder,textarea::placeholder{color:#999FAA;}
+    input[type=text]:focus,input[type=tel]:focus,textarea:focus{border-color:var(--ut-blue);box-shadow:0 0 0 3px rgba(10,62,193,.10);}
+    .crow h2,.pcode,.pkg-price,.bitem-code,.pass-mins,.scode{color:var(--ut-blue);}
+    .btn-go,.btn-slip,.btn-home{
+      color:var(--ut-text);background:var(--ut-yellow);border-radius:13px;
+      box-shadow:0 9px 22px rgba(196,187,0,.20);
+    }
+    .btn-go:hover:not(:disabled),.btn-slip:hover:not(:disabled),.btn-home:hover{background:#FFF72F;}
+    .btn-go:disabled,.btn-slip:disabled{background:var(--ut-disabled);color:#8B919C;box-shadow:none;}
+    .qrwrap{border-radius:16px;border:7px solid #fff;box-shadow:0 0 0 1px var(--ut-border);}
+    .sarea{background:#FAFBFD;border-color:#C9CED8;border-radius:14px;}
+    .sarea:hover,.sarea.has{background:#F7F9FF;border-color:var(--ut-blue);}
+    .btn-qr-download,.btn-rpay,.btn-empty{background:#fff;border-color:var(--ut-blue);color:var(--ut-blue);border-radius:11px;}
+    .empty p,.pass-info,.pkg-desc,.bitem-details,.scard p{color:var(--ut-muted);}
+    .s-pending_payment{background:#FFF3DD;color:#925300;}
+    .s-confirmed,.s-paid,.pass-active{background:#E8F6EF;color:var(--success);}
+    .s-pending_review{background:var(--ut-blue-soft);color:var(--ut-blue);}
+    .s-cancelled{background:#FCEAEC;color:var(--danger);}
+    .s-package{background:#FFFDE1;color:#6C6600;}
+    .loverlay{background:#fff;color:var(--ut-text);}
+    .brand-loader-logo{width:108px;height:108px;object-fit:contain;border-radius:24px;background:#fff;box-shadow:0 14px 34px rgba(10,62,193,.12);}
+    .spinner{border-color:var(--ut-gray);border-top-color:var(--ut-blue);}
+    .toast{bottom:112px;background:var(--ut-text);color:#fff;border-radius:999px;}
+    .toast.err{background:var(--danger);color:#fff;}
+    .bottomnav{
+      width:min(100%,480px);background:rgba(255,255,255,.96);border-top:1px solid var(--ut-border);
+      box-shadow:0 -8px 26px rgba(20,22,28,.06);backdrop-filter:blur(16px);
+    }
+    .navbtn{color:#7B818D;}
+    .navbtn.active{color:var(--ut-blue);}
+    .navbtn.book-fab{color:#7B818D;}
+    .navbtn.book-fab .fab{color:var(--ut-text);background:var(--ut-yellow);box-shadow:0 8px 20px rgba(196,187,0,.24);}
+    .navbtn.book-fab.active{color:var(--ut-blue);}
+    .ptitle,.card h2,.card h3,.pkg-name,.pass-name,.bf-val,.bitem-type{color:var(--ut-text);}
+    .slabel,.eyebrow,.sec-title,.pkg-desc,.pass-info,.bitem-details,.bf-lbl,.qrnote,.sarea p,.crow p,.empty p,.scard p,.fgrid label,#slotsText,#viewBooking .rinfo p{color:var(--ut-muted)!important;}
+    #regExistsCard,#regIntroCard,#viewPromotions .card{color:var(--ut-text);}
+    #regExistsCard p,#regExistsCard span,#regIntroCard p,#viewPromotions .card p,.bitem-footer span:not(.sp),.pass-info span{color:var(--ut-muted)!important;}
+    #regExistsCard #regExistsHeader{color:var(--success)!important;}
+    .btn-rpay,.btn-empty,.btn-qr-download{color:var(--ut-blue);}
+    @media(min-width:700px){
+      body{padding:28px 0;}
+      .shell{min-height:calc(100vh - 56px);border-radius:30px;}
+      .bottomnav{bottom:28px;border-radius:0 0 30px 30px;}
+    }
+    @media(max-width:380px){
+      .hgrid{grid-template-columns:repeat(2,minmax(0,1fr))!important;padding-inline:14px;}
+      .hcard{min-height:128px;}
+      .pheader{padding-inline:14px;}
+      .view{padding:14px;}
+      .home-intro{padding-inline:18px;}
+      .home-brand-logo{width:60px;height:60px;}
+      .home-title{font-size:1.35rem;}
+    }
   </style>
 </head>
 <body>
@@ -497,6 +702,7 @@
 <script src="/notify-client.js" defer></script>
 
 <div class="loverlay" id="loverlay">
+  <img class="brand-loader-logo" src="/assets/brand/ultra-logo-master.png" alt="Ultra Tennis Studio">
   <div class="spinner"></div>
   <p id="ltext" data-i18n="loading">Loading...</p>
 </div>
@@ -508,7 +714,7 @@
     <div class="avatar" id="avatarEl">U</div>
     <div>
       <div class="pname" id="pname">Loading...</div>
-      <div class="psub">Ultra Tennis · Floor G, Omni Business Mall</div>
+      <div class="psub">ULTRA TENNIS STUDIO · Floor G, Omni Business Mall</div>
     </div>
     <div class="lang-toggle" role="group" aria-label="Language">
       <button class="lang-btn" data-lang="th" type="button">TH</button>
@@ -519,60 +725,56 @@
   <!-- VIEW: HOME -->
   <div id="viewHome">
     <div class="home-intro">
-      <div class="home-kicker">Ultra Tennis Booking</div>
-      <div class="home-title">Your court, ready when you are.</div>
+      <div class="home-brand-lockup">
+        <img class="home-brand-logo" src="/assets/brand/ultra-logo-master.png" alt="Ultra Tennis Studio">
+        <div><div class="home-brand-name">ULTRA TENNIS STUDIO</div><div class="home-brand-line">PLAY YOUR WAY</div></div>
+      </div>
+      <div class="home-kicker" data-i18n="homeKicker">PRIVATE TENNIS STUDIO</div>
+      <div class="home-title" data-i18n="homeTitle">ห้องพร้อม อุปกรณ์พร้อม เหลือแค่คุณมาเล่น</div>
       <p class="home-hours" data-i18n="homeHours">Open daily 06:00–00:00 · Floor G, Omni Business Mall</p>
     </div>
     <div class="hgrid" style="grid-template-columns:1fr">
       <button class="hcard" id="btnSingle" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
-        <div class="hcard-icon" style="font-size:2rem">🎾</div>
+        <div class="hcard-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"></circle><path d="M6.1 6.4c2.5 1.6 4 3.4 4.7 5.5.8 2.4 2.3 4.2 5.8 5.7M17.9 6.4c-2.5 1.6-4 3.4-4.7 5.5"></path></svg></div>
         <div>
-          <div class="hcard-label" style="font-size:1rem" data-i18n="bookSingle">Book Single Use</div>
-          <div class="hcard-sub" id="homeSingleSub" style="font-size:.8rem;margin-top:3px" data-i18n="singleSub">฿350 / hour · Weekday mornings ฿330/320 · Pay by QR slip</div>
-        </div>
-      </button>
-      <!-- Coach booking (Stage 3) — stays hidden unless the feature flag is on
-           AND at least one coach has rates configured (see initCoachHome). -->
-      <button class="hcard" id="btnCoach" style="display:none;flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
-        <div class="hcard-icon" style="font-size:2rem">👨‍🏫</div>
-        <div>
-          <div class="hcard-label" style="font-size:1rem">จองคอร์ทพร้อมโค้ช</div>
-          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px">เลือกโค้ช · ราคาเดียวรวมค่าคอร์ท · จ่ายด้วย QR</div>
+          <div class="hcard-label" data-i18n="bookSingle">จองห้องส่วนตัว</div>
+          <div class="hcard-price" id="homeSinglePrice">350 บาท <small>/ ชั่วโมง</small></div>
+          <div class="hcard-sub" id="homeSingleSub" data-i18n="singleSub">ห้องส่วนตัว · รวมไม้ ลูก บอลแมชชีน และน้ำ</div>
         </div>
       </button>
       <button class="hcard" id="btnRegister" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
-        <div class="hcard-icon" style="font-size:2rem">👤</div>
+        <div class="hcard-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"></circle><path d="M5.5 19c.8-3.7 3-5.6 6.5-5.6s5.7 1.9 6.5 5.6"></path></svg></div>
         <div>
           <div class="hcard-label" style="font-size:1rem" data-i18n="registerProfile">Register Profile</div>
           <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="registerSub">Verify name/phone for passes</div>
         </div>
       </button>
-      <button class="hcard" id="btnEventRedeem" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px;border-color:#f5c542">
-        <div class="hcard-icon" style="font-size:2rem">🎟️</div>
+      <button class="hcard" id="btnEventRedeem" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
+        <div class="hcard-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 6.5h14v3a2.5 2.5 0 0 0 0 5v3H5v-3a2.5 2.5 0 0 0 0-5z"></path><path d="M12 8.3v1.2M12 12v1.2M12 15.7v.1"></path></svg></div>
         <div>
-          <div class="hcard-label" style="font-size:1rem">Redeem Event Code</div>
-          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px">กรอก Code จากผู้จัดงาน · รับ Event Pass ทันที · เลือกเวลาจอง</div>
+          <div class="hcard-label" style="font-size:1rem" data-i18n="redeemCode">Redeem Code</div>
+          <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="redeemCodeSub">กรอก Code เพื่อรับสิทธิ์และเลือกเวลาจอง</div>
         </div>
       </button>
       <!-- Coach V2: visible ONLY when this LINE account is an active coach
            (server-checked via coach_whoami — hidden card is cosmetic, the
            real gate is on every coach API call). -->
       <button class="hcard" id="btnCoachMode" style="display:none;flex-direction:row;align-items:center;gap:14px;padding:20px 18px;border-color:var(--brand)">
-        <div class="hcard-icon" style="font-size:2rem">🎾</div>
+        <div class="hcard-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"></circle><path d="M6.1 6.4c2.5 1.6 4 3.4 4.7 5.5.8 2.4 2.3 4.2 5.8 5.7M17.9 6.4c-2.5 1.6-4 3.4-4.7 5.5"></path></svg></div>
         <div>
           <div class="hcard-label" style="font-size:1rem">Coach Mode</div>
           <div class="hcard-sub" id="coachModeSub" style="font-size:.8rem;margin-top:3px">เข้าหน้าโค้ช · ตารางสอน · เวลาว่าง · รายได้</div>
         </div>
       </button>
       <button class="hcard" id="btnPromotions" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
-        <div class="hcard-icon" style="font-size:2rem">🎫</div>
+        <div class="hcard-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m4.5 12.2 7.7-7.7H19v6.8L11.3 19z"></path><circle cx="16" cy="8" r="1"></circle></svg></div>
         <div>
           <div class="hcard-label" style="font-size:1rem" data-i18n="promotions">Promotions</div>
           <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="promotionsSub">ซื้อแพ็กเกจออนไลน์ · จ่ายผ่าน QR</div>
         </div>
       </button>
       <button class="hcard" id="btnMyBookings" style="flex-direction:row;align-items:center;gap:14px;padding:20px 18px">
-        <div class="hcard-icon" style="font-size:2rem">📋</div>
+        <div class="hcard-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="5.5" width="14" height="14" rx="2"></rect><path d="M8 3.8v3.4M16 3.8v3.4M8.5 11h7M8.5 14.5h5"></path></svg></div>
         <div>
           <div class="hcard-label" style="font-size:1rem" data-i18n="myBookingPass">My Booking & My Pass</div>
           <div class="hcard-sub" style="font-size:.8rem;margin-top:3px" data-i18n="myBookingSub">View bookings · Check pass balance</div>
@@ -592,14 +794,14 @@
   <div id="viewEventRedeem" style="display:none">
     <div class="view">
       <button class="back" id="eventRedeemBack">← Back</button>
-      <div class="ptitle">🎟️ Redeem Event Code</div>
+      <div class="ptitle" data-i18n="redeemCode">Redeem Code</div>
       <div class="card">
-        <p style="font-size:.82rem;line-height:1.6;color:var(--muted);margin-bottom:12px">กรอก Code ที่ได้รับจาก Organizer ระบบจะออก Event Pass 1 ชั่วโมงเข้าบัญชี LINE นี้ทันที</p>
-        <label><span>Event Code</span><input type="text" id="eventRedeemCode" autocomplete="off" placeholder="MSTR-XXXXX" maxlength="64" style="text-transform:uppercase;font-weight:800;letter-spacing:.6px"/></label>
-        <button class="btn-go" id="eventRedeemSubmit" style="width:100%;margin-top:12px">รับ Event Pass</button>
+        <p style="font-size:.82rem;line-height:1.6;color:var(--muted);margin-bottom:12px" data-i18n="redeemIntro">กรอก Code ที่ได้รับ ระบบจะเพิ่มสิทธิ์เข้าบัญชี LINE นี้</p>
+        <label><span data-i18n="code">Code</span><input type="text" id="eventRedeemCode" autocomplete="off" placeholder="MSTR-XXXXX" maxlength="64" style="text-transform:uppercase;font-weight:800;letter-spacing:.6px"/></label>
+        <button class="btn-go" id="eventRedeemSubmit" style="width:100%;margin-top:12px" data-i18n="redeemSubmit">Redeem Code</button>
       </div>
       <div class="card">
-        <div class="slabel">Event Pass ของฉัน</div>
+        <div class="slabel" data-i18n="redeemedBenefits">สิทธิ์ที่ได้รับ</div>
         <div id="eventRedeemStatus"><p style="font-size:.78rem;color:var(--muted)">ยังไม่มีคำขอ</p></div>
         <button class="back" id="eventRedeemRefresh" style="margin-top:10px">↻ Refresh status</button>
       </div>
@@ -1260,9 +1462,16 @@ const I18N = {
     loading:"กำลังโหลด...",
     connectingLine:"กำลังเชื่อมต่อ LINE...",
     loadingPass:"กำลังโหลดข้อมูลแพ็กเกจ...",
+    homeKicker:"PRIVATE TENNIS STUDIO",
+    homeTitle:"ห้องพร้อม อุปกรณ์พร้อม เหลือแค่คุณมาเล่น",
     homeHours:"เปิดทุกวัน 06:00–00:00 · ชั้น G, Omni Business Mall",
-    bookSingle:"จองใช้บริการรายครั้ง",
-    singleSub:"350 บาท / ชั่วโมง · เช้า จ.–ศ. เหลือ 330/320 · ชำระผ่าน QR และอัปโหลดสลิป",
+    bookSingle:"จองห้องส่วนตัว",
+    singleSub:"ห้องส่วนตัว · รวมไม้ ลูก บอลแมชชีน และน้ำ",
+    redeemCode:"Redeem Code",
+    redeemCodeSub:"กรอก Code เพื่อรับสิทธิ์และเลือกเวลาจอง",
+    redeemIntro:"กรอก Code ที่ได้รับ ระบบจะเพิ่มสิทธิ์เข้าบัญชี LINE นี้",
+    redeemSubmit:"Redeem Code",
+    redeemedBenefits:"สิทธิ์ที่ได้รับ",
     myBookingPass:"การจองและแพ็กเกจของฉัน",
     myBookingSub:"ดูการจอง · เช็กชั่วโมงคงเหลือ",
     back:"กลับ",
@@ -1407,9 +1616,16 @@ const I18N = {
     loading:"Loading...",
     connectingLine:"Connecting to LINE...",
     loadingPass:"Loading your pass info...",
+    homeKicker:"PRIVATE TENNIS STUDIO",
+    homeTitle:"Everything is ready. Just come and play.",
     homeHours:"Open daily 06:00–00:00 · Floor G, Omni Business Mall",
-    bookSingle:"Book Single Use",
-    singleSub:"฿350 / hour · Weekday mornings ฿330/320 · Pay by QR slip",
+    bookSingle:"Book a Private Room",
+    singleSub:"Private room · Rackets, balls, ball machine & water included",
+    redeemCode:"Redeem Code",
+    redeemCodeSub:"Enter your code to receive access and book a time",
+    redeemIntro:"Enter the code you received. Access will be added to this LINE account.",
+    redeemSubmit:"Redeem Code",
+    redeemedBenefits:"Redeemed access",
     myBookingPass:"My Booking & My Pass",
     myBookingSub:"View bookings · Check pass balance",
     back:"Back",
@@ -1889,13 +2105,9 @@ function setupNav() {
   if (_navBound) return;
   _navBound = true;
   $("btnSingle").addEventListener("click", ()=>{ openBookingView(); });
-  // Coach booking (Stage 3) — button is display:none until initCoachHome()
-  // confirms the feature flag is on AND at least one coach is bookable.
-  $("btnCoach").addEventListener("click", ()=>{ openCoachView(); });
   $("ckBack").addEventListener("click", ()=>showView("viewHome"));
   $("ckName").addEventListener("input", updateCkConfirm);
   $("ckPhone").addEventListener("input", updateCkConfirm);
-  initCoachHome();
   initCoachModeCard();
   $("btnCoachMode").addEventListener("click", ()=>{ location.href="/coach.html"; });
   initPassSelfPurchase();
@@ -2014,7 +2226,7 @@ let isAlreadyRegistered = false;
 
 async function openEventRedeemView(){
   if(state.lineProfile.userId==="guest"){
-    showToast("กรุณาเปิดผ่าน LINE เพื่อรับ Event Pass",true);
+    showToast("กรุณาเปิดผ่าน LINE เพื่อใช้ Redeem Code",true);
     return;
   }
   showView("viewEventRedeem");
@@ -2026,7 +2238,7 @@ async function openEventRedeemView(){
 }
 
 const eventRequestLabel=status=>({
-  pending:"⏳ รอ Admin ตรวจสอบ", approved:"✓ รับสิทธิ์แล้ว — Event Pass พร้อมใช้",
+  pending:"⏳ รอ Admin ตรวจสอบ", approved:"✓ รับสิทธิ์แล้ว — พร้อมใช้",
   rejected:"✗ ไม่อนุมัติ", reset:"↻ Code ถูกคืนและพร้อมทดสอบใหม่",
 }[status]||status);
 
@@ -2043,19 +2255,19 @@ async function loadEventRedeemStatus(){
     box.innerHTML=items.map(item=>`<div style="border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:8px">
       <strong style="letter-spacing:.5px">${esc(item.code)}</strong><br>
       <span style="font-size:.76rem;color:${item.status==="approved"?"var(--success)":item.status==="pending"?"#f5c542":"var(--muted)"}">${esc(eventRequestLabel(item.status))}</span>
-      ${item.status==="approved"?`<button class="btn-go" data-event-book style="width:100%;margin-top:9px">เลือกเวลาจองด้วย Event Pass</button>`:""}
+      ${item.status==="approved"?`<button class="btn-go" data-event-book style="width:100%;margin-top:9px">เลือกเวลาจอง</button>`:""}
     </div>`).join("");
     box.querySelectorAll("[data-event-book]").forEach(btn=>btn.addEventListener("click",async()=>{
       await openBookingView();
       if(state.eligibility.hasEvent) $("ptEvent").click();
-      else showToast("Event Pass ยังไม่พร้อม กรุณารีเฟรชอีกครั้ง",true);
+      else showToast("สิทธิ์ยังไม่พร้อม กรุณารีเฟรชอีกครั้ง",true);
     }));
   }catch(e){box.innerHTML=`<p style="font-size:.78rem;color:var(--danger)">${esc(e.message||"โหลดสถานะไม่สำเร็จ")}</p>`;}
 }
 
 async function submitEventRedeemCode(){
   const code=$("eventRedeemCode").value.trim().toUpperCase();
-  if(!/^[A-Z0-9][A-Z0-9_-]{2,63}$/.test(code)){showToast("กรุณากรอก Event Code ให้ถูกต้อง",true);return;}
+  if(!/^[A-Z0-9][A-Z0-9_-]{2,63}$/.test(code)){showToast("กรุณากรอก Code ให้ถูกต้อง",true);return;}
   const btn=$("eventRedeemSubmit");btn.disabled=true;btn.textContent="กำลังตรวจ Code...";
   try{
     const idToken=await protectedIdToken();
@@ -2064,11 +2276,11 @@ async function submitEventRedeemCode(){
     })});
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok) throw new Error(data.error||"ส่ง Code ไม่สำเร็จ");
-    if(data.status==="approved") showToast(data.replayed?"Event Pass นี้อยู่ในบัญชีแล้ว":"✓ รับ Event Pass สำเร็จ เลือกเวลาจองได้เลย");
+    if(data.status==="approved") showToast(data.replayed?"สิทธิ์นี้อยู่ในบัญชีแล้ว":"✓ รับสิทธิ์สำเร็จ เลือกเวลาจองได้เลย");
     else showToast(data.replayed?"Code นี้รอตรวจสอบอยู่แล้ว":"ส่ง Code ให้ Admin แล้ว");
     await loadEventRedeemStatus();
   }catch(e){showToast(e.message||"ส่ง Code ไม่สำเร็จ",true);}
-  finally{btn.disabled=false;btn.textContent="รับ Event Pass";}
+  finally{btn.disabled=false;btn.textContent=t("redeemSubmit");}
 }
 
 async function openRegisterView() {
@@ -2295,24 +2507,30 @@ function updatePromoBanner() {
 
 function updateHomeSingleUsePricing() {
   const subEl = $("homeSingleSub");
-  if (!subEl) return;
+  const priceEl = $("homeSinglePrice");
+  if (!subEl || !priceEl) return;
   const prices = clientStorePricing();
   const promo = getPromoState();
+  const setPrice = value => {
+    priceEl.textContent = currentLang === "th" ? `${value} บาท ` : `฿${value} `;
+    const unit = document.createElement("small");
+    unit.textContent = currentLang === "th" ? "/ ชั่วโมง" : "/ hour";
+    priceEl.appendChild(unit);
+  };
+  const included = currentLang === "th"
+    ? "ห้องส่วนตัว · รวมไม้ ลูก บอลแมชชีน และน้ำ"
+    : "Private room · Rackets, balls, ball machine & water included";
   if (promo.active) {
-    if (currentLang === "th") {
-      subEl.textContent = `${promo.price} บาท / ชั่วโมง · ชำระผ่าน QR และอัปโหลดสลิป`;
-    } else {
-      subEl.textContent = `฿${promo.price} / hour · Pay by QR slip`;
-    }
+    setPrice(promo.price);
+    subEl.textContent = `${included} · ${currentLang === "th" ? "ราคาโปรโมชั่น" : "Promotion price"}`;
   } else if (state.pricing && state.pricing.morningPromoActive === false) {
-    // Morning pricing paused by admin — advertise only the current standard.
-    subEl.textContent = currentLang === "th"
-      ? `${prices.normal} บาท / ชั่วโมง · ชำระผ่าน QR และอัปโหลดสลิป`
-      : `฿${prices.normal} / hour · Pay by QR slip`;
+    setPrice(prices.normal);
+    subEl.textContent = included;
   } else {
+    setPrice(prices.normal);
     subEl.textContent = currentLang === "th"
-      ? `${prices.normal} บาท / ชั่วโมง · เช้า จ.–ศ. เหลือ ${prices.morning}/${prices.morningAdvance} · ชำระผ่าน QR และอัปโหลดสลิป`
-      : `฿${prices.normal} / hour · Weekday mornings ฿${prices.morning}/${prices.morningAdvance} · Pay by QR slip`;
+      ? `${included} · เช้า จ.–ศ. ${prices.morning}/${prices.morningAdvance} บาท`
+      : `${included} · Weekday mornings ฿${prices.morning}/${prices.morningAdvance}`;
   }
 }
 
@@ -4070,18 +4288,6 @@ function initCoachModeCard(){
       }
     }catch(e){ console.warn("[coachmode] whoami failed (card stays hidden):", e); _coachCardChecked = false; }
   });
-}
-
-async function initCoachHome(){
-  try{
-    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"coach_options"})});
-    const d=await r.json().catch(()=>null);
-    if(r.ok&&d&&d.ok&&d.enabled===true&&Array.isArray(d.coaches)&&d.coaches.length){
-      ckCoaches=d.coaches;
-      $("btnCoach").style.display="flex";
-    }
-  }catch(e){ console.warn("[coach] options failed (button stays hidden):",e); }
 }
 
 function openCoachView(){
