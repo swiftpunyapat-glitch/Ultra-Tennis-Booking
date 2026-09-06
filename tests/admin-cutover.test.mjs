@@ -343,6 +343,31 @@ describe('manual booking and calendar sync cutover',()=>{
 });
 
 describe('admin operational mutation matrix',()=>{
+  test.each(['reschedule_park','reschedule_assign','reschedule_cancel'])('C3: viewer cannot perform %s on a valid in-branch booking',async operation=>{
+    const {bookingId}=await seedTwoHourPaidBooking();
+    await open('12:00');await open('13:00');
+    if(operation==='reschedule_cancel') {
+      expect((await call(accountingHandler,{operation:'reschedule_park',bookingId},'Staff')).statusCode).toBe(200);
+    }
+    const snapshot=async()=>Promise.all(['bookings','booking_slots','booking_slot_claims','customer_packages','customer_package_logs','audit_logs'].map(async name=>{
+      const docs=await db.collection(name).get();return docs.docs.map(doc=>({id:doc.id,...doc.data()}));
+    }));
+    const before=await snapshot();
+    const result=await call(accountingHandler,{operation,bookingId,newDate:DATE,newStartTime:'12:00'},'View');
+    expect(result.statusCode).toBe(403);
+    expect(await snapshot()).toEqual(before);
+  });
+
+  test.each(['reschedule_park','reschedule_assign','reschedule_cancel'])('C3 scope: %s also rejects coach cookies and other-branch staff',async operation=>{
+    const {bookingId}=await seedTwoHourPaidBooking();
+    const before=(await db.collection('bookings').doc(bookingId).get()).data();
+    for(const who of ['Coach1','Other']) {
+      const result=await call(accountingHandler,{operation,bookingId,newDate:DATE,newStartTime:'12:00'},who);
+      expect(result.statusCode).toBe(403);
+      expect((await db.collection('bookings').doc(bookingId).get()).data()).toEqual(before);
+    }
+  });
+
   test('slot and holiday mutations enforce role and branch scope',async()=>{
     expect((await call(opsHandler,{action:'slot_toggle',date:DATE,hour:12,op:'open'},'View')).statusCode).toBe(403);
     expect((await call(opsHandler,{action:'slot_toggle',date:DATE,hour:12,op:'open'},'Other')).statusCode).toBe(403);

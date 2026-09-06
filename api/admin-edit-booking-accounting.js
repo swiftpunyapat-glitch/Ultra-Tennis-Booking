@@ -443,6 +443,11 @@ export default async function handler(req, res) {
     return res.status(403).json({ ok: false, error: 'Role cannot perform financial approval actions' });
   }
 
+  if (['reschedule_park', 'reschedule_assign', 'reschedule_cancel'].includes(operation) &&
+      !requireRole(session, 'owner', 'ultra_admin', 'branch_manager', 'branch_staff')) {
+    return res.status(403).json({ ok: false, error: 'Role cannot reschedule bookings' });
+  }
+
   // ── Per-operation auth + input validation (before any DB call) ────
 
   if (operation === 'accounting_edit') {
@@ -1200,7 +1205,14 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
   // between reading slot ownership and committing. All reads precede all writes.
   // Multi-hour: every held slot must exist and belong to this booking.
   try {
-    await db.runTransaction(async (t) => {
+    if (isCoachAddonV2Booking(booking)) {
+      // Keep cash, entitlement and both resource claims in the v2 transition.
+      const result = await confirmCoachAddonV2Payment(db, bookingId, {
+        actor: adminName,
+        manualPayment: { amount: Number(amount), paymentMethod, paymentNote: String(paymentNote).slice(0, 400) },
+      });
+      if (!result.ok) throw new Error(result.code);
+    } else await db.runTransaction(async (t) => {
       const slotSnaps = await Promise.all(slotRefs.map(r => t.get(r)));
       const claimSnaps = await Promise.all(slotRefs.map(r => t.get(slotClaimRef(db, r.id))));
       for (let i = 0; i < slotSnaps.length; i++) {
@@ -1248,6 +1260,14 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
       CANCELLED:       [409, 'Booking was cancelled'],
       VOUCHER_MISSING: [409, 'Reserved voucher was not found'],
       VOUCHER_CONFLICT:[409, 'Voucher is no longer reserved for this booking'],
+      HOLD_EXPIRED:   [409, 'Coach Add-on hold expired before payment confirmation'],
+      AMOUNT_MISMATCH:[409, 'Amount must match the frozen Coach Add-on cash due'],
+      CLAIM_MISSING:  [409, 'Coach Add-on resource claim is missing'],
+      CLAIM_CONFLICT: [409, 'Coach Add-on resource claim belongs to another booking'],
+      PACKAGE_MISSING:[409, 'Reserved package is missing'],
+      PACKAGE_BALANCE_INVALID: [409, 'Reserved package balance is invalid'],
+      PACKAGE_RESERVATION_INVALID: [409, 'Package reservation does not match this booking'],
+      NOT_V2:         [409, 'Booking is no longer a Coach Add-on v2 booking'],
     };
     const [code, msg] = map[e.message] || [500, 'Failed to update booking'];
     if (code === 500) console.error('[mark-paid] write:', e.message);
@@ -1281,8 +1301,11 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
   if (isCoachAddonV2Booking(booking)) {
     try {
       const result = await confirmCoachAddonV2Payment(db, bookingId, { actor: adminName, withoutSlip });
-      if (!result.ok && result.code === 'HOLD_EXPIRED') {
-        return res.status(409).json({ ok: false, code: 'HOLD_EXPIRED', error: 'Hold หมดอายุก่อนส่งสลิป ระบบคืนคอร์ท โค้ช และแพ็คเกจแล้ว' });
+      if (result?.ok !== true || result.confirmed !== true) {
+        if (result?.code === 'HOLD_EXPIRED') {
+          return res.status(409).json({ ok: false, code: 'HOLD_EXPIRED', error: 'Hold หมดอายุก่อนส่งสลิป ระบบคืนคอร์ท โค้ช และแพ็คเกจแล้ว' });
+        }
+        throw new Error(result?.code || 'CONFIRMATION_FAILED');
       }
       await writeAuditLog(db, {
         actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
@@ -1303,6 +1326,9 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
         SLOT_MISSING: [409, 'Court slot is missing'],
         PACKAGE_MISSING: [409, 'Reserved package is missing'],
         PACKAGE_BALANCE_INVALID: [409, 'Reserved package balance is invalid'],
+        PACKAGE_RESERVATION_INVALID: [409, 'Package reservation does not match this booking'],
+        BOOKING_MISSING: [404, 'Booking not found'],
+        NOT_V2: [409, 'Booking is no longer a Coach Add-on v2 booking'],
       };
       const [status, message] = map[e.message] || [500, 'Failed to approve Coach Add-on booking'];
       if (status === 500) console.error('[approve coach addon v2]', e.message);
@@ -2298,6 +2324,9 @@ async function handleAssignCoach({ res, adminName, session, db, booking, booking
   }
   if (!hasBranchAccess(session, resolveBranchId(booking))) {
     return res.status(403).json({ ok: false, error: 'No access to this branch' });
+  }
+  if (isCoachAddonV2Booking(booking)) {
+    return res.status(409).json({ ok: false, code: 'COACH_ADDON_V2_ASSIGN_UNSUPPORTED', error: 'Coach Add-on v2 assignment requires a coach-aware claim transition' });
   }
   if (booking.bookingStatus === 'cancelled') {
     return res.status(409).json({ ok: false, error: 'Cannot assign a coach to a cancelled booking' });

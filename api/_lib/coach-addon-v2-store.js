@@ -1,5 +1,5 @@
 import { FieldValue } from 'firebase-admin/firestore';
-import { isCoachAddonV2Booking } from './coach-addon-v2.js';
+import { isCoachAddonV2Booking, coachClaimCellStarts, coachClaimId, coachAddonV2PackageKind } from './coach-addon-v2.js';
 
 const PACKAGE_LOGS = 'customer_package_logs';
 
@@ -26,22 +26,66 @@ function refsForBooking(db, booking) {
   };
 }
 
-async function readTransitionDocs(t, bookingRef, refs) {
-  const all = [
-    t.get(bookingRef),
-    ...refs.courtSlotRefs.map(ref => t.get(ref)),
-    ...refs.courtClaimRefs.map(ref => t.get(ref)),
-    ...refs.coachClaimRefs.map(ref => t.get(ref)),
-    ...(refs.packageRef ? [t.get(refs.packageRef)] : []),
+async function readTransitionDocs(t, db, bookingRef, outerBooking, validateClaims = false) {
+  // Read the booking and resources together, avoiding incremental acquisition
+  // of booking then claim locks while a competing release is committing.
+  if (validateClaims) assertCompleteClaims(outerBooking);
+  const refs = refsForBooking(db, outerBooking);
+  const targets = [
+    bookingRef,
+    ...refs.courtSlotRefs,
+    ...refs.courtClaimRefs,
+    ...refs.coachClaimRefs,
+    ...(refs.packageRef ? [refs.packageRef] : []),
   ];
-  const snaps = await Promise.all(all);
+  const [bookingSnap, ...snaps] = await t.getAll(...targets);
+  if (!bookingSnap.exists) throw new Error('BOOKING_MISSING');
+  const booking = bookingSnap.data();
+  if (!isCoachAddonV2Booking(booking)) throw new Error('NOT_V2');
+  if (validateClaims) assertCompleteClaims(booking);
+  // The outer read only selects documents. The locked snapshot must still
+  // name exactly those resources; otherwise no transition may be written.
+  const current = refsForBooking(db, booking);
+  const sameRefs = (a, b) => a.length === b.length && a.every((ref, i) => ref.path === b[i].path);
+  if (!sameRefs(refs.courtSlotRefs, current.courtSlotRefs) ||
+      !sameRefs(refs.coachClaimRefs, current.coachClaimRefs) || refs.packageId !== current.packageId) {
+    throw new Error('CLAIM_CONFLICT');
+  }
   let at = 0;
-  const bookingSnap = snaps[at++];
   const courtSlotSnaps = snaps.slice(at, at += refs.courtSlotRefs.length);
   const courtClaimSnaps = snaps.slice(at, at += refs.courtClaimRefs.length);
   const coachClaimSnaps = snaps.slice(at, at += refs.coachClaimRefs.length);
   const packageSnap = refs.packageRef ? snaps[at] : null;
-  return { bookingSnap, courtSlotSnaps, courtClaimSnaps, coachClaimSnaps, packageSnap };
+  return { refs, bookingSnap, courtSlotSnaps, courtClaimSnaps, coachClaimSnaps, packageSnap };
+}
+
+function assertCompleteClaims(booking) {
+  const cells = coachClaimCellStarts(booking.startTime, booking.durationMinutes);
+  if (!cells || !booking.coachId || !booking.resourceId || !/^\d{4}-\d{2}-\d{2}$/.test(booking.date)) throw new Error('CLAIM_MISSING');
+  const coachIds = cells.map(cell => coachClaimId(booking.coachId, booking.date, cell));
+  const courtIds = [];
+  for (let i = 0; i < cells.length; i++) {
+    courtIds.push(`${booking.resourceId}_${booking.date}_${cells[i].replace(':', '')}`);
+    if (cells[i].endsWith(':00') && cells[i + 1]?.endsWith(':30')) i++;
+  }
+  const matches = (actual, expected) => Array.isArray(actual) &&
+    actual.length === expected.length && new Set(actual).size === expected.length &&
+    expected.every(id => actual.includes(id));
+  if (!matches(booking.coachClaimIds, coachIds) || !matches(booking.bookingSlotIds, courtIds)) throw new Error('CLAIM_MISSING');
+}
+
+function assertReservedPackage(booking, refs, docs) {
+  const usesPackage = ['ultra_pass', 'coaching_package'].includes(booking.fundingMode);
+  if (!usesPackage && booking.packageUsageState !== 'reserved' && !(Number(booking.courtPackageMinutes) > 0)) return;
+  if (!refs.packageRef || !docs.packageSnap?.exists) throw new Error('PACKAGE_MISSING');
+  const pkg = docs.packageSnap.data();
+  if (booking.packageUsageState !== 'reserved' || booking.courtPackageMinutes !== booking.durationMinutes ||
+      pkg.lineUserId !== booking.lineUserId || pkg.packageType !== booking.packageType ||
+      coachAddonV2PackageKind(pkg.packageType) !== booking.fundingMode ||
+      (booking.usedPackageId && booking.usedPackageId !== refs.packageId)) throw new Error('PACKAGE_RESERVATION_INVALID');
+  if (!Number.isFinite(pkg.remainingMinutes) || pkg.remainingMinutes < 0) throw new Error('PACKAGE_BALANCE_INVALID');
+  // Minutes were already deducted at reservation. Do not deduct again or apply
+  // today's expiry/active policy to a previously accepted reservation.
 }
 
 function assertOwnedClaims(snaps, bookingId, code) {
@@ -124,11 +168,11 @@ export async function releaseCoachAddonV2Hold(db, bookingId, {
   if (!outer.exists) return { ok: false, code: 'BOOKING_MISSING' };
   const outerBooking = outer.data();
   if (!isCoachAddonV2Booking(outerBooking)) return { ok: false, code: 'NOT_V2' };
-  const refs = refsForBooking(db, outerBooking);
   let outcome = null;
 
   await db.runTransaction(async t => {
-    const docs = await readTransitionDocs(t, bookingRef, refs);
+    const docs = await readTransitionDocs(t, db, bookingRef, outerBooking);
+    const { refs } = docs;
     if (!docs.bookingSnap.exists) throw new Error('BOOKING_MISSING');
     const booking = docs.bookingSnap.data();
     if (!isCoachAddonV2Booking(booking)) throw new Error('NOT_V2');
@@ -150,20 +194,28 @@ export async function releaseCoachAddonV2Hold(db, bookingId, {
 
 /** Confirm cash and consume any package reservation atomically. */
 export async function confirmCoachAddonV2Payment(db, bookingId, {
-  actor = 'admin', withoutSlip = false, nowMs = Date.now(),
+  actor = 'admin', withoutSlip = false, clock = Date.now, manualPayment = null,
 } = {}) {
   const bookingRef = db.collection('bookings').doc(bookingId);
   const outer = await bookingRef.get();
   if (!outer.exists) return { ok: false, code: 'BOOKING_MISSING' };
   const outerBooking = outer.data();
   if (!isCoachAddonV2Booking(outerBooking)) return { ok: false, code: 'NOT_V2' };
-  const refs = refsForBooking(db, outerBooking);
   let outcome = null;
 
   await db.runTransaction(async t => {
-    const docs = await readTransitionDocs(t, bookingRef, refs);
+    const docs = await readTransitionDocs(t, db, bookingRef, outerBooking, true);
+    const { refs } = docs;
     if (!docs.bookingSnap.exists) throw new Error('BOOKING_MISSING');
     const booking = docs.bookingSnap.data();
+    if (!isCoachAddonV2Booking(booking)) throw new Error('NOT_V2');
+    // mark_paid retains its unpaid-only contract and cannot edit a v2 quote.
+    if (manualPayment) {
+      if (booking.paymentStatus === 'paid') throw new Error('ALREADY_PAID');
+      if (booking.paymentStatus !== 'unpaid' || booking.cashState !== 'unpaid') throw new Error('BAD_STATE');
+      if (!Number.isFinite(manualPayment.amount) || manualPayment.amount <= 0 ||
+          manualPayment.amount !== Number(booking.cashDueAmount)) throw new Error('AMOUNT_MISMATCH');
+    }
     if (booking.bookingState === 'confirmed' && booking.cashState === 'paid') {
       outcome = { ok: true, confirmed: true, replayed: true };
       return;
@@ -171,8 +223,13 @@ export async function confirmCoachAddonV2Payment(db, bookingId, {
     if (booking.bookingState !== 'held' || !['unpaid', 'pending_review'].includes(booking.cashState)) {
       throw new Error('BAD_STATE');
     }
+    assertCompleteClaims(booking);
+    assertReservedPackage(booking, refs, docs);
     const expiresAt = millis(booking.paymentExpiresAt);
-    if (booking.cashState === 'unpaid' && expiresAt !== null && expiresAt <= nowMs) {
+    if (booking.cashState === 'unpaid' && expiresAt === null) throw new Error('BAD_STATE');
+    // Authorization occurs after all reads on every transaction attempt. There
+    // are no awaited operations between this decision and queuing the writes.
+    if (booking.cashState === 'unpaid' && expiresAt <= clock()) {
       releaseWrites(t, db, bookingRef, bookingId, booking, refs, docs, {
         terminalState: 'expired', reason: 'approval_after_expiry', actor,
       });
@@ -218,6 +275,7 @@ export async function confirmCoachAddonV2Payment(db, bookingId, {
       bookingStatus: 'confirmed', paymentStatus: 'paid', status: 'confirmed',
       paidBy: actor, paidAt: FieldValue.serverTimestamp(), confirmedAt: FieldValue.serverTimestamp(),
       adminReviewedAt: FieldValue.serverTimestamp(),
+      ...(manualPayment ? { paymentMethod: manualPayment.paymentMethod, paymentNote: manualPayment.paymentNote } : {}),
       ...(withoutSlip ? { confirmedByAdmin: true, confirmedWithoutSlip: true } : {}),
       updatedAt: FieldValue.serverTimestamp(),
     });

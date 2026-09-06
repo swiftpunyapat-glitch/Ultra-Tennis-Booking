@@ -8,7 +8,7 @@ import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { getStorage } from 'firebase-admin/storage';
-import { createHash, randomBytes, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'crypto';
 import { isIP } from 'node:net';
 
 export function getAdminDb() {
@@ -141,8 +141,8 @@ export async function writeAuditLog(db, { actor, actorRole, branchId, action, ta
 //     and provide no protection at all.
 //
 // Storage: guest_booking_access/{bookingId} — the raw token is NEVER
-// persisted. It is returned to the caller exactly once, in the response of
-// the request that created it.
+// persisted in plaintext. A v2 create retry may return the same token from
+// an authenticated encrypted envelope in its private idempotency record.
 //
 // NOTE: bookingCode / bookingId are identifiers, not authentication secrets.
 // They must never form part of the token — see RD-01.
@@ -223,6 +223,40 @@ export function prepareGuestAccess({ bookingEndMs = null, scopes = GUEST_SCOPES,
       tokenVersion: 1,
     },
   };
+}
+
+// Separate encryption purpose from session signing. Keep GUEST_RETRY_SECRET
+// stable for the retry retention window; ADMIN_SESSION_SECRET is the existing
+// deployment-compatible fallback. Missing configuration fails closed.
+function guestRetryKey() {
+  const secret = process.env.GUEST_RETRY_SECRET || process.env.ADMIN_SESSION_SECRET;
+  if (!secret) throw new Error('GUEST_RETRY_UNAVAILABLE');
+  return createHmac('sha256', secret).update('ultra-tennis:guest-retry:aes-256-gcm:v1').digest();
+}
+
+export function protectGuestRetryResponse(response, context) {
+  if (!response?.guestAccessToken) return response;
+  const { guestAccessToken, ...safe } = response;
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', guestRetryKey(), iv);
+  cipher.setAAD(Buffer.from(context));
+  const ciphertext = Buffer.concat([cipher.update(guestAccessToken, 'utf8'), cipher.final()]);
+  return { ...safe, guestRetryEnvelope: {
+    version: 1, iv: iv.toString('base64url'), ciphertext: ciphertext.toString('base64url'), tag: cipher.getAuthTag().toString('base64url'),
+  } };
+}
+
+export function restoreGuestRetryResponse(response, context) {
+  if (!response?.guestRetryEnvelope) return response;
+  const { guestRetryEnvelope: envelope, ...safe } = response;
+  try {
+    if (envelope.version !== 1) throw new Error();
+    const decipher = createDecipheriv('aes-256-gcm', guestRetryKey(), Buffer.from(envelope.iv, 'base64url'));
+    decipher.setAAD(Buffer.from(context));
+    decipher.setAuthTag(Buffer.from(envelope.tag, 'base64url'));
+    const token = Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64url')), decipher.final()]).toString('utf8');
+    return { ...safe, guestAccessToken: token };
+  } catch { throw new Error('GUEST_RETRY_UNAVAILABLE'); }
 }
 
 // Issue (or reissue) the token for ONE booking, atomically.
@@ -499,8 +533,10 @@ export function fingerprintOf(fields) {
 //   { state: 'fresh' }                      → proceed with the mutation
 //   { state: 'replay', response }           → return the stored response
 //   { state: 'conflict' }                   → same key, different request
-export async function readIdempotencyInTx(t, ref, fingerprint) {
-  const snap = await t.get(ref);
+export async function readIdempotencyInTx(t, ref, fingerprint, snapshot = null) {
+  // Optional snapshot must come from this transaction's batch read.
+  if (snapshot && snapshot.ref.path !== ref.path) throw new Error('IDEMPOTENCY_SNAPSHOT_MISMATCH');
+  const snap = snapshot || await t.get(ref);
   if (!snap.exists) return { state: 'fresh' };
   const d = snap.data();
   if (d.fingerprint && fingerprint && d.fingerprint !== fingerprint) return { state: 'conflict' };

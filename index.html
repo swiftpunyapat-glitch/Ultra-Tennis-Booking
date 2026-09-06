@@ -3408,20 +3408,37 @@ async function tryServerPassCreate({dateISO,name,phone,note,payType}){
   }
 }
 
+let coachAddonV2RetryIntent=null;
+function coachAddonV2RetryKey(intent){
+  const fingerprint=JSON.stringify(intent);
+  try{coachAddonV2RetryIntent=JSON.parse(sessionStorage.getItem("ut_coach_v2_retry"))||coachAddonV2RetryIntent;}catch(_){}
+  if(coachAddonV2RetryIntent?.fingerprint===fingerprint) return coachAddonV2RetryIntent.key;
+  coachAddonV2RetryIntent={fingerprint,key:`coach-addon-v2-${crypto.randomUUID()}`};
+  try{sessionStorage.setItem("ut_coach_v2_retry",JSON.stringify(coachAddonV2RetryIntent));}catch(_){}
+  return coachAddonV2RetryIntent.key;
+}
+function clearCoachAddonV2RetryKey(key){
+  if(coachAddonV2RetryIntent?.key!==key) return;
+  coachAddonV2RetryIntent=null;
+  try{sessionStorage.removeItem("ut_coach_v2_retry");}catch(_){}
+}
+
 async function tryCoachAddonV2Create({dateISO,name,phone,note}){
   const ca=state.coachAddonV2;
   if(!ca?.active||!ca.selectedCoach||!ca.quote) return "handled";
   try{
     const auth=await coachAddonV2AuthFields(ca.fundingMode);
     const idToken=auth.idToken||(state.lineProfile.userId==="guest"?null:await protectedIdToken());
-    const res=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-      action:"create_coach_addon_v2",idempotencyKey:`coach-addon-v2-${crypto.randomUUID()}`,
+    const requestBody={
+      action:"create_coach_addon_v2",
       date:dateISO,startTime:state.time,durationMinutes:state.durationMinutes,
       coachId:ca.selectedCoach.id,studentCount:ca.studentCount,fundingMode:ca.fundingMode,
       packageId:auth.packageId||undefined,idToken:idToken||undefined,
       lineUserId:state.lineProfile.userId,lineDisplayName:state.lineProfile.displayName,
       customerName:name,customerPhone:phone,customerNote:note,
-    })});
+    };
+    requestBody.idempotencyKey=coachAddonV2RetryKey({...requestBody,idToken:undefined});
+    const res=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(requestBody)});
     const d=await res.json().catch(()=>null);
     if(!res.ok||!d?.ok){
       showToast(d?.error||t("bookingFailed"),true);
@@ -3437,6 +3454,7 @@ async function tryCoachAddonV2Create({dateISO,name,phone,note}){
       try{localStorage.removeItem("ut_pending_booking");}catch(_){}
       showSuccess("✅","จองคาบเรียนสำเร็จ",b.bookingCode,`${name} · ${dateISO} · ${state.time}–${b.endTime} · โค้ช ${b.coachName}\nใช้ Beginner Coaching ${b.durationMinutes} นาที · ไม่ต้องชำระเพิ่ม`);
       checkEligibility();
+      clearCoachAddonV2RetryKey(requestBody.idempotencyKey);
       return true;
     }
     const expiresAt=new Date(d.paymentExpiresAt);
@@ -3445,6 +3463,7 @@ async function tryCoachAddonV2Create({dateISO,name,phone,note}){
     showPaymentPanel(b.bookingCode,b.finalPrice,expiresAt,dateISO,`${state.time} – ${b.endTime} · โค้ช ${b.coachName}`,false);
     scheduleCoachAddonV2Expiry(b.id,expiresAt,d.guestAccessToken||null);
     showView("viewPayment");
+    clearCoachAddonV2RetryKey(requestBody.idempotencyKey);
     return true;
   }catch(e){showToast(e.message||t("bookingFailed"),true);return "handled";}
 }

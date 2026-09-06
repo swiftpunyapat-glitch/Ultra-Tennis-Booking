@@ -18,6 +18,7 @@ import {
   checkRateLimit, readRateLimitGate, RATE_LIMITS, clientIp,
   idempotencyRef, fingerprintOf, readIdempotencyInTx, writeIdempotencyInTx,
   isValidIdempotencyKey,
+  protectGuestRetryResponse, restoreGuestRetryResponse, hashGuestToken,
 } from './_lib/firebase-admin.js';
 import { computeQuote } from './_lib/pricing.js';
 import {
@@ -2459,6 +2460,39 @@ async function handleCreateCoachAddonV2(req, res, body) {
   if (uid && assertedUid !== 'guest' && assertedUid !== uid) return res.status(409).json({ ok: false, code: 'IDENTITY_MISMATCH', error: 'Authenticated account does not match request' });
   const lineUserId = uid || 'guest';
 
+  // Recover a committed response before checking current availability/package
+  // balance. Those may legitimately have changed because the first call won.
+  const retryScope = `create_coach_addon_v2:${lineUserId}`;
+  const retryRef = idempotencyRef(db, idemKey, retryScope);
+  const retryFingerprint = fingerprintOf({ lineUserId, date, startTime, durationMinutes, coachId, studentCount,
+    fundingMode: String(body.fundingMode || 'cash'), packageId: body.fundingMode && body.fundingMode !== 'cash' ? String(body.packageId || '').trim() : '',
+    customerName, customerPhone, customerNote });
+  async function readRetry(t, existing = null) {
+    const idem = existing || await readIdempotencyInTx(t, retryRef, retryFingerprint);
+    if (idem.state === 'conflict') throw new Error('IDEMPOTENCY_CONFLICT');
+    if (idem.state !== 'replay') return null;
+    const context = `${retryRef.id}:${idem.response?.booking?.id}`;
+    const restored = restoreGuestRetryResponse(idem.response, context);
+    if (lineUserId === 'guest') {
+      if (!restored?.guestAccessToken || !restored.booking?.id) throw new Error('GUEST_RETRY_UNAVAILABLE');
+      const access = await t.get(db.collection(GUEST_ACCESS_COLLECTION).doc(restored.booking.id));
+      const accessExpiry = access.exists ? access.data().expiresAt?.toMillis?.() : null;
+      if (!access.exists || access.data().revokedAt || !Number.isFinite(accessExpiry) || accessExpiry <= Date.now() ||
+          access.data().tokenHash !== hashGuestToken(restored.guestAccessToken)) throw new Error('GUEST_RETRY_REVOKED');
+      // Opportunistically protect records created before the envelope cutover.
+      if (idem.response.guestAccessToken) t.update(retryRef, { response: protectGuestRetryResponse(restored, context) });
+    }
+    return restored;
+  }
+  try {
+    const retry = await db.runTransaction(readRetry);
+    if (retry) return res.status(200).json({ ...retry, replayed: true });
+  } catch (e) {
+    if (e.message === 'IDEMPOTENCY_CONFLICT') return res.status(409).json({ ok: false, code: e.message, error: 'idempotencyKey ถูกใช้กับคำขออื่นแล้ว' });
+    const code = e.message === 'GUEST_RETRY_REVOKED' ? 'GUEST_RETRY_REVOKED' : 'GUEST_RETRY_UNAVAILABLE';
+    return res.status(code === 'GUEST_RETRY_REVOKED' ? 409 : 503).json({ ok: false, code, error: 'Cannot recover this booking response' });
+  }
+
   const nowMs = Date.now();
   const startMs = Date.parse(`${date}T${startTime}:00+07:00`);
   if (!Number.isFinite(startMs) || startMs <= nowMs) return res.status(409).json({ ok: false, code: 'SLOT', error: 'ช่วงเวลานี้ผ่านมาแล้ว' });
@@ -2509,15 +2543,15 @@ async function handleCreateCoachAddonV2(req, res, body) {
 
   try {
     await db.runTransaction(async t => {
-      const idem = await readIdempotencyInTx(t, idemRef, idemFp);
+      // Acquire idempotency and resource reads together. Parallel individual
+      // reads can outlive a rejected Promise.all and split the lock acquisition.
+      const [idemSnap, ...snaps] = await t.getAll(
+        idemRef, ...cellRefs, ...availRefs, ...scheduleRefs, ...coachClaimRefs,
+        coachRef, pricingRef, holidayRef, ...(packageRef ? [packageRef] : []),
+      );
+      const idem = await readIdempotencyInTx(t, idemRef, idemFp, idemSnap);
       if (idem.state === 'conflict') throw new Error('IDEMPOTENCY_CONFLICT');
-      if (idem.state === 'replay') { replayed = idem.response; return; }
-      const snaps = await Promise.all([
-        ...cellRefs.map(ref => t.get(ref)), ...availRefs.map(ref => t.get(ref)),
-        ...scheduleRefs.map(ref => t.get(ref)), ...coachClaimRefs.map(ref => t.get(ref)),
-        t.get(coachRef), t.get(pricingRef), t.get(holidayRef),
-        ...(packageRef ? [t.get(packageRef)] : []),
-      ]);
+      if (idem.state === 'replay') { replayed = await readRetry(t, idem); return; }
       let at = 0;
       const cellSnaps = snaps.slice(at, at += cellRefs.length);
       const availSnaps = snaps.slice(at, at += availRefs.length);
@@ -2655,7 +2689,7 @@ async function handleCreateCoachAddonV2(req, res, body) {
           bookingId: bookingRef.id, source: 'coach_addon_v2', createdAt: FieldValue.serverTimestamp(),
         });
       }
-      if (guestAccessRef) t.create(guestAccessRef, guestAccess.document);
+      if (guestAccessRef) t.create(guestAccessRef, guestAccess.record);
 
       response = {
         ok: true,
@@ -2674,10 +2708,14 @@ async function handleCreateCoachAddonV2(req, res, body) {
           priceBreakdown: price,
         },
       };
-      writeIdempotencyInTx(t, idemRef, { scope: idemScope, fingerprint: idemFp, response, nowMs });
+      const storedResponse = protectGuestRetryResponse(response, `${idemRef.id}:${bookingRef.id}`);
+      writeIdempotencyInTx(t, idemRef, { scope: idemScope, fingerprint: idemFp, response: storedResponse, nowMs });
     });
   } catch (e) {
     const msg = e.message || '';
+    if (msg === 'GUEST_RETRY_REVOKED' || msg === 'GUEST_RETRY_UNAVAILABLE') {
+      return res.status(msg === 'GUEST_RETRY_REVOKED' ? 409 : 503).json({ ok: false, code: msg, error: 'Cannot recover this booking response' });
+    }
     if (msg === 'IDEMPOTENCY_CONFLICT') return res.status(409).json({ ok: false, code: msg, error: 'idempotencyKey ถูกใช้กับคำขออื่นแล้ว' });
     if (V2_ERROR_TEXT[msg]) return res.status(409).json({ ok: false, code: msg, error: V2_ERROR_TEXT[msg] });
     const map = {
