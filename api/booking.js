@@ -1,3 +1,4 @@
+import { handleAvailabilityDiagnostic } from './_lib/availability-diagnostic.js';
 // ════════════════════════════════════════════════════════════════════
 // POST /api/booking — customer booking route (Pricing v2)
 // ════════════════════════════════════════════════════════════════════
@@ -473,6 +474,7 @@ export default async function handler(req, res) {
   // Guest capability token (Security Hotfix 2026-08-04)
   if (body.action === 'guest_booking') return handleGuestBooking(req, res, body);
 
+  if (body.action === 'availability_diagnostic') return handleAvailabilityDiagnostic(req,res,body);
   if (body.action === 'price_quote')   return handlePriceQuote(res, body);
   if (body.action === 'create')        return handleCreate(req, res, body);
   if (body.action === 'event_pass_redeem') return handleEventPassRedeem(req, res, body);

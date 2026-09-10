@@ -297,6 +297,7 @@
   </main>
 
   <script type="module">
+    import { AVAILABILITY_BUILD, reportAvailability } from "./availability-state.js";
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
     import {
       getFirestore, collection, getDocs, getDocsFromServer, query, where
@@ -318,7 +319,7 @@
     const OPEN_HOUR = 6;
     const CLOSE_HOUR = 24;
     const BANGKOK_TZ = "Asia/Bangkok";
-    const BUILD_VERSION = "2026-07-22-p0.4";
+    const BUILD_VERSION = AVAILABILITY_BUILD;
     const DEBUG_MODE = new URLSearchParams(location.search).get("debug") === "1";
 
     const $ = id => document.getElementById(id);
@@ -488,13 +489,14 @@
     function statusText(status){
       if(status === "available") return "ว่าง";
       if(status === "booked") return "จองแล้ว";
+      if(status === "unscheduled") return "ไม่มีตาราง";
       return "ปิด";
     }
 
     function renderSlots(rows){
       const available = rows.filter(r=>r.status==="available").length;
       $("availableCount").textContent = available;
-      $("summaryText").textContent = `ว่าง ${available} ช่วงเวลา`;
+      $("summaryText").textContent = rows.length && rows.every(r=>r.status==="unscheduled") ? "ยังไม่มีตารางเวลาสำหรับวันนี้" : `ว่าง ${available} ช่วงเวลา`;
       $("slots").innerHTML = rows.map(r=>`
         <div class="slot ${r.status}">
           <div class="time">${r.start}–${r.end}</div>
@@ -523,7 +525,7 @@
         if(requestId!==availabilityRequestId) throw Object.assign(new Error("Stale availability request"),{code:"stale-request"});
         try{
           const reads=attempt===1?[getDocs(avQuery),getDocs(bkQuery)]:[getDocsFromServer(avQuery),getDocsFromServer(bkQuery)];
-          const snapshots=await availabilityTimeout(Promise.all(reads),attempt===1?5000:8000);
+          const snapshots=await availabilityTimeout(Promise.all(reads),attempt===1?4000:5000);
           const fromCache=snapshots.some(snapshot=>snapshot.metadata?.fromCache===true);
           updateDebugTelemetry({availabilityAttempt:attempt,firestoreFromCache:fromCache});
           if(fromCache){
@@ -542,6 +544,7 @@
     }
 
     async function loadAvailability(){
+      const startedAt=Date.now();
       const dateAtStart=selectedDate;
       const requestId=++availabilityRequestId;
       const cached=availabilityCache.get(dateAtStart);
@@ -553,6 +556,7 @@
       try{
         const [avSnap,bkSnap] = await fetchFreshAvailability(dateAtStart,requestId);
 
+        reportAvailability({page:"availability",selectedDate:dateAtStart,requestId,loadMs:Date.now()-startedAt,rawSlotCount:avSnap.size,bookedSlotCount:bkSnap.size});
         const avByTime = {};
         avSnap.forEach(docSnap=>{
           const data = docSnap.data();
@@ -582,8 +586,8 @@
           const fullyBusy   = firstHalfBusy && secondHalfBusy;
           const partlyBusy  = (firstHalfBusy || secondHalfBusy) && !fullyBusy;
           const past = isPastSlot(dateAtStart,h);
-          let status = "closed";
-          let reason = past ? "ผ่านเวลาแล้ว" : "ยังไม่เปิดให้จอง";
+          let status = av ? "closed" : "unscheduled";
+          let reason = past ? "ผ่านเวลาแล้ว" : av ? "ยังไม่เปิดให้จอง" : "ยังไม่มีตารางเวลา";
 
           if(av?.status === "closed") reason = "ปิดให้จอง";
           if(av?.status === "open" && !past){
@@ -600,8 +604,8 @@
           }
           rows.push({start,end,status,reason});
         }
-        availabilityCache.set(dateAtStart,rows);
         if(requestId!==availabilityRequestId || dateAtStart!==selectedDate) return;
+        availabilityCache.set(dateAtStart,rows);
         availabilityLoadedAt=Date.now();
         updateDebugTelemetry({
           requestId,
@@ -616,6 +620,7 @@
         renderSlots(rows);
       }catch(e){
         if(requestId!==availabilityRequestId || dateAtStart!==selectedDate) return;
+        reportAvailability({page:"availability",selectedDate:dateAtStart,requestId,loadMs:Date.now()-startedAt,availabilityError:e?.code||"availability-failed"});
         console.error(e);
         updateDebugTelemetry({requestId,availabilityError:e?.code||e?.message||String(e)});
         $("summaryText").textContent = cached

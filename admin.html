@@ -3600,6 +3600,7 @@ async function setSlots(dates,close=false,hours=null){
   });
   const data=await res.json().catch(()=>({}));
   if(!res.ok||!data.ok) throw new Error(data.error||"Failed to set slots");
+  return data;
 }
 
 function getViewDate(){return $("viewDate").value;}
@@ -3626,7 +3627,7 @@ $("closeDayBtn").addEventListener("click",async()=>{
   const d=$("dayDate").value;if(!d){showToast("Pick a date.",true);return;}
   if(!confirm(`Close ALL slots for ${d}?\nExisting confirmed bookings are NOT cancelled.`))return;
   const btn=$("closeDayBtn");btn.disabled=true;btn.textContent="Closing...";
-  try{await setSlots([d],true);showToast(`✓ Closed all slots for ${d}`);
+  try{const result=await setSlots([d],true);showToast(`✓ Closed ${result.count} slots for ${d}${result.skipped ? ` · Kept ${result.skipped} booked slots open` : ""}`);
     if(getViewDate()===d)await loadSlotGrid(d);}
   catch(e){console.error(e);showToast(e?.message||"Failed.",true);}
   finally{btn.disabled=false;btn.textContent="✕ Close This Day";}
@@ -3665,8 +3666,8 @@ $("closeLNBtn").addEventListener("click",async()=>{
   if(!confirm(`Close Late Night slots (00:00–06:00) for ${d}?`))return;
   const btn=$("closeLNBtn");btn.disabled=true;btn.textContent="Closing...";
   try{
-    await setSlots([d],true,LN_HOURS);
-    showToast(`✓ Late Night slots closed for ${d}`);
+    const result=await setSlots([d],true,LN_HOURS);
+    showToast(`✓ Closed ${result.count} late-night slots${result.skipped ? ` · Kept ${result.skipped} booked slots open` : ""}`);
     if(getViewDate()===d) await loadSlotGrid(d);
     if(dvLastLoad===d) loadDailyView();
   }catch(e){console.error(e);showToast(e?.message||"Failed.",true);}

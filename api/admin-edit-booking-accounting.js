@@ -1,3 +1,4 @@
+import { checkedWriteBatch } from './_lib/checked-write-batch.js';
 // ════════════════════════════════════════════════════════════════════
 // POST /api/admin-edit-booking-accounting
 // ════════════════════════════════════════════════════════════════════
@@ -183,7 +184,7 @@ function isLiveBookedSlot(slotData, nowMs = Date.now()) {
   if (slotData.bookingStatus === 'pending_payment') {
     const exp = slotData.expiresAt;
     const expMs = exp && typeof exp.toMillis === 'function' ? exp.toMillis() : null;
-    return expMs !== null && expMs > nowMs;
+    return expMs === null || expMs > nowMs;
   }
   return false;
 }
@@ -522,11 +523,12 @@ export default async function handler(req, res) {
 
   // ── Read booking (common to both operations) ──────────────────────
   const bookingRef = db.collection('bookings').doc(bookingId.trim());
-  let booking;
+  let booking, bookingSnapshot;
   try {
     const snap = await bookingRef.get();
     if (!snap.exists) return res.status(404).json({ ok: false, error: 'Booking not found' });
     booking = snap.data();
+    bookingSnapshot = snap;
   } catch (e) {
     console.error(`[${operation}] read booking:`, e.message);
     return res.status(500).json({ ok: false, error: 'Failed to read booking' });
@@ -538,10 +540,10 @@ export default async function handler(req, res) {
 
   // ── Dispatch ──────────────────────────────────────────────────────
   if (operation === 'accounting_edit') {
-    return handleAccountingEdit({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+    return handleAccountingEdit({ req, res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId: bookingId.trim(), body });
   }
   if (operation === 'refund') {
-    return handleRefund({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+    return handleRefund({ req, res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId: bookingId.trim(), body });
   }
   if (operation === 'delete_booking') {
     return handleDeleteBooking({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim() });
@@ -758,7 +760,7 @@ async function handleCalendarSyncFields({ res, adminName, session, db, booking, 
 // ════════════════════════════════════════════════════════════════════
 // handleAccountingEdit — Art-only accounting correction
 // ════════════════════════════════════════════════════════════════════
-async function handleAccountingEdit({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+async function handleAccountingEdit({ res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId, body }) {
   if (isCoachAddonV2Booking(booking)) {
     return res.status(409).json({ ok: false, code: 'COACH_ADDON_V2_FROZEN', error: 'Coach Add-on v2 price and accounting fields are frozen; use its state transition actions' });
   }
@@ -881,7 +883,7 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
   const isNowInfluencer = accountingType === 'influencer_free';
   const existingExpId   = booking.influencerExpenseId || null;
 
-  const batch = db.batch();
+  const batch = checkedWriteBatch(db, [bookingSnapshot]);
   let expIdUpdate = {};
 
   if (!isNowInfluencer && wasInfluencer && existingExpId) {
@@ -945,14 +947,18 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
     updatedAt:                  FieldValue.serverTimestamp(),
   });
 
-  // ── Update booking_slots (best-effort, non-fatal if missing) — all hours ──
+  // Slot decisions are version-checked with the booking at transaction commit.
   try {
     for (const slotId of bookingSlotIds(booking)) {
       const slotRef  = db.collection('booking_slots').doc(slotId);
       const claimRef = slotClaimRef(db, slotId);
-      const [slotSnap, claimSnap] = await Promise.all([slotRef.get(), claimRef.get()]);
+      const [slotSnap, claimSnap] = await Promise.all([batch.get(slotRef), batch.get(claimRef)]);
       const slotData = slotSnap.exists ? slotSnap.data() : null;
       const ownsSlot = claimOwnsBooking(claimSnap, slotData, bookingId, booking.bookingCode);
+      const resultingStatus = accountingFields.bookingStatus || booking.bookingStatus;
+      if ((!ownsSlot || !slotSnap.exists) && ['confirmed','pending_payment','pending_review'].includes(resultingStatus)) {
+        return res.status(409).json({ok:false,code:'SLOT_OWNERSHIP_MISMATCH',error:'This booking no longer owns the slot. Refresh before editing.'});
+      }
       if (ownsSlot) {
         const cancelled = accountingFields.bookingStatus === 'cancelled';
         if (cancelled) {
@@ -982,6 +988,7 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
   try {
     await batch.commit();
   } catch (e) {
+    if(e.code==='ADMIN_DATA_CHANGED') return res.status(409).json({ok:false,code:e.code,error:e.message});
     console.error('[acct-edit] batch commit:', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to save accounting changes' });
   }
@@ -1001,7 +1008,7 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
 // ════════════════════════════════════════════════════════════════════
 // handleRefund — any valid admin
 // ════════════════════════════════════════════════════════════════════
-async function handleRefund({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+async function handleRefund({ res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId, body }) {
   // Mixed confirmed cancellations need an explicit policy for restoring a
   // consumed package and reversing coach payable.  Until that rule is supplied,
   // fail closed instead of sending a v2 booking through the legacy cash-only
@@ -1036,7 +1043,7 @@ async function handleRefund({ res, adminName, session, db, booking, bookingRef, 
     refundNote ? `| Note: ${String(refundNote).slice(0, 120)}` : '',
   ].filter(Boolean).join(' ').slice(0, 400);
 
-  const batch = db.batch();
+  const batch = checkedWriteBatch(db, [bookingSnapshot]);
 
   // ── Finance expense: create or update (idempotency via refundExpenseId) ──
   const existingExpId = booking.refundExpenseId || null;
@@ -1107,11 +1114,11 @@ async function handleRefund({ res, adminName, session, db, booking, bookingRef, 
     try {
       for (const slotId of bookingSlotIds(booking)) {
         const slotRef  = db.collection('booking_slots').doc(slotId);
-        const slotSnap = await slotRef.get();
+        const slotSnap = await batch.get(slotRef);
         if (!slotSnap.exists) continue;   // Admin SDK: .exists is a boolean property, not a method
         const slotData = slotSnap.data();
         const claimRef = slotClaimRef(db, slotId);
-        const claimSnap = await claimRef.get();
+        const claimSnap = await batch.get(claimRef);
         const ownsSlot = claimOwnsBooking(claimSnap, slotData, bookingId, booking.bookingCode);
         if (ownsSlot) {
           batch.update(slotRef, {
@@ -1125,16 +1132,17 @@ async function handleRefund({ res, adminName, session, db, booking, bookingRef, 
         // warrant admin review before the slot is offered again (use Slot Manager).
       }
     } catch (e) {
-      console.error('[refund] slot read (non-fatal):', e.message);
+      console.error('[refund] slot read:', e.message);
+      return res.status(500).json({ok:false,error:'Failed to verify slot ownership'});
     }
 
     // Coach lesson (Stage 3): a refund that releases the room also releases
-    // the coach hour — ownership-checked, non-fatal on read error.
+    // the coach hour in the same checked transaction.
     if (booking.serviceType === 'coach_lesson' && booking.coachId && booking.date && booking.startTime) {
       const caRef = db.collection('coach_availability')
         .doc(`${booking.coachId}_${booking.date}_${String(booking.startTime).replace(':', '')}`);
       try {
-        const caSnap = await caRef.get();
+        const caSnap = await batch.get(caRef);
         if (caSnap.exists) {
           const ca = caSnap.data();
           if (ca.status === 'booked' && ca.bookingId === bookingId) {
@@ -1146,7 +1154,8 @@ async function handleRefund({ res, adminName, session, db, booking, bookingRef, 
           }
         }
       } catch (e) {
-        console.error('[refund] coach availability read (non-fatal):', e.message);
+        console.error('[refund] coach availability read:', e.message);
+        return res.status(500).json({ok:false,error:'Failed to verify coach ownership'});
       }
     }
   }
@@ -1155,6 +1164,7 @@ async function handleRefund({ res, adminName, session, db, booking, bookingRef, 
   try {
     await batch.commit();
   } catch (e) {
+    if(e.code==='ADMIN_DATA_CHANGED') return res.status(409).json({ok:false,code:e.code,error:e.message});
     console.error('[refund] batch commit:', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to save refund' });
   }

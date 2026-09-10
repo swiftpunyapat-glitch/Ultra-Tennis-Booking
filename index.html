@@ -1159,6 +1159,7 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
+import { AVAILABILITY_BUILD, canUseAvailability, reportAvailability } from "./availability-state.js";
 import { initializeApp }             from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
 import { isSupported, getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
 import {
@@ -1284,7 +1285,7 @@ const DEFAULT_BRANCH_ID = "ladprao1";
 const OPEN_HOUR   = 6, CLOSE_HOUR = 24;
 const PAY_MINS    = 15;
 const BANGKOK_TZ  = "Asia/Bangkok";
-const BUILD_VERSION = "2026-07-22-p0.5";
+const BUILD_VERSION = AVAILABILITY_BUILD;
 function slotDateTime(dateKey,time="00:00"){
   return new Date(`${dateKey}T${time}:00+07:00`);
 }
@@ -2654,7 +2655,7 @@ async function fetchFreshAvailability(dateStr,requestId){
       const reads=attempt===1
         ? [getDocs(avQuery),getDocs(bkQuery),getDoc(doc(db,"holidays",dateStr))]
         : [getDocsFromServer(avQuery),getDocsFromServer(bkQuery),getDocFromServer(doc(db,"holidays",dateStr))];
-      const snapshots=await availabilityTimeout(Promise.all(reads),attempt===1?5000:8000);
+      const snapshots=await availabilityTimeout(Promise.all(reads),attempt===1?4000:5000);
       const fromCache=snapshots.some(snapshot=>snapshot.metadata?.fromCache===true);
       updateDebugTelemetry({availabilityAttempt:attempt,firestoreFromCache:fromCache});
       if(fromCache){
@@ -2673,7 +2674,9 @@ async function fetchFreshAvailability(dateStr,requestId){
 }
 
 async function loadSlotsAndRender(dateStr) {
+  const startedAt=Date.now();
   const requestId=++bookingAvailabilityRequestId;
+  state.availabilityRefreshing=true;
   const cached=bookingAvailabilityCache.get(dateStr);
   state.availabilityDate=dateStr;
   state.availabilityError=null;
@@ -2682,6 +2685,7 @@ async function loadSlotsAndRender(dateStr) {
     state.openSlots=new Set(cached.openSlots);
     state.blockedCells=new Set(cached.blockedCells);
     state.currentDateIsHoliday=cached.currentDateIsHoliday;
+    state.availabilityRawCount=cached.rawSlotCount;
     state.availabilityStatus="ready";
     state.availabilityLoadedAt=cached.loadedAt||0;
     renderTimes();
@@ -2712,11 +2716,11 @@ async function loadSlotsAndRender(dateStr) {
       for(let c=docMin;c<docMin+span;c+=30) blockedCells.add(c);
     });
     if(holSnap.exists()) currentDateIsHoliday = holSnap.data().isHoliday===true;
-    const result={openSlots,blockedCells,currentDateIsHoliday,loadedAt:Date.now()};
-    bookingAvailabilityCache.set(dateStr,result);
+    const result={openSlots,blockedCells,currentDateIsHoliday,loadedAt:Date.now(),rawSlotCount:availSnap.size};
     // Firestore getDocs cannot be aborted. Ignore an older response that
     // finishes after the customer has already selected another date.
     if(requestId!==bookingAvailabilityRequestId || dateStr!==getSelectedDateISO()) return;
+    bookingAvailabilityCache.set(dateStr,result);
     state.openSlots=new Set(openSlots);
     state.blockedCells=new Set(blockedCells);
     state.currentDateIsHoliday=currentDateIsHoliday;
@@ -2725,6 +2729,10 @@ async function loadSlotsAndRender(dateStr) {
     state.availabilityError=null;
     state.availabilityStale=false;
     state.availabilityLoadedAt=result.loadedAt;
+    state.availabilityRawCount=availSnap.size;
+    state.availabilityRefreshing=false;
+    if(state.time && getDisabledReasonRange(toMinB(state.time))) { state.time=null; refreshQuote(); }
+    reportAvailability({page:"customer",selectedDate:dateStr,requestId,loadMs:Date.now()-startedAt,rawSlotCount:availSnap.size,bookedSlotCount:bookSnap.size});
     const bkkHour=Number(bangkokDateParts().hour);
     let availableSlotCount=0,pastSlotCount=0;
     for(let h=OPEN_HOUR;h<CLOSE_HOUR;h++){
@@ -2745,6 +2753,8 @@ async function loadSlotsAndRender(dateStr) {
     });
   } catch(e) {
     if(requestId!==bookingAvailabilityRequestId || dateStr!==getSelectedDateISO()) return;
+    state.availabilityRefreshing=false;
+    reportAvailability({page:"customer",selectedDate:dateStr,requestId,loadMs:Date.now()-startedAt,availabilityError:e?.code||"availability-failed"});
     console.error("Load slots error:",e);
     updateDebugTelemetry({requestId,availabilityError:e?.code||e?.message||String(e)});
     if(cached){
@@ -2800,6 +2810,7 @@ async function hardRetryBookingAvailability(dateStr){
 }
 
 function renderTimes() {
+  updateBookingConfirmBtn();
   const grid=$("timeGrid"); grid.innerHTML="";
   const selectedDate=getSelectedDateISO();
   if(state.availabilityDate!==selectedDate || state.availabilityStatus==="idle" || state.availabilityStatus==="loading"){
@@ -2820,6 +2831,18 @@ function renderTimes() {
     retry.addEventListener("click",()=>hardRetryBookingAvailability(selectedDate));
     box.appendChild(retry);
     grid.appendChild(box);
+    return;
+  }
+  if(state.availabilityRawCount===0){
+    if(state.availabilityRefreshing){
+      $("slotsText").textContent=currentLang==="th"?"กำลังตรวจสอบตารางเวลา...":"Refreshing schedule...";
+      grid.innerHTML=`<p class="tloading">${$("slotsText").textContent}</p>`;
+      return;
+    }
+    $("slotsText").textContent=currentLang==="th"?"ยังไม่มีตารางเวลาสำหรับวันนี้":"No schedule for this date";
+    grid.innerHTML=`<p class="tloading">${currentLang==="th"?"ยังไม่มีข้อมูลตารางเวลา กรุณาลองใหม่หรือติดต่อร้าน":"No schedule data. Retry or contact us."}</p>`;
+    if(state.availabilityStale) $("slotsText").textContent=currentLang==="th"?"รีเฟรชตารางเวลาไม่สำเร็จ":"Could not refresh schedule";
+    const retry=document.createElement("button"); retry.type="button"; retry.textContent=currentLang==="th"?"ลองใหม่":"Retry"; retry.onclick=()=>hardRetryBookingAvailability(selectedDate); grid.append(retry);
     return;
   }
   let avail=0;
@@ -2849,7 +2872,7 @@ function renderTimes() {
       const btn=document.createElement("button");
       btn.className=`tbtn${inRange?" on":""}`;
       btn.title=reason||t("available");
-      btn.disabled=Boolean(reason)&&!inRange;
+      btn.disabled=!canUseAvailability(state,selectedDate)||(Boolean(reason)&&!inRange);
       if(isLN){
         // 🌙 badge below time — visible only when slot is open
         btn.innerHTML=`${time}<br><span style="font-size:.58rem;color:#a855f7;font-weight:800;white-space:nowrap;line-height:1">🌙 Late Night</span>`;
@@ -2859,6 +2882,7 @@ function renderTimes() {
         btn.textContent=time;
       }
       btn.addEventListener("click",()=>{
+        if(!canUseAvailability(state,getSelectedDateISO())) { loadSlotsAndRender(getSelectedDateISO()); return; }
         if(getDisabledReasonRange(cellMin)){ return; }   // continuation tile of the old range
         state.time=time;
 
@@ -2876,15 +2900,17 @@ function renderTimes() {
       if(!reason) avail++;
     }
   }
-  $("slotsText").textContent=state.availabilityStale
+  $("slotsText").textContent=state.availabilityRefreshing ? (currentLang==="th"?"กำลังตรวจสอบเวลาว่างล่าสุด...":"Refreshing availability...") : state.availabilityStale
     ? (currentLang==="th"?"รีเฟรชไม่สำเร็จ · แสดงข้อมูลล่าสุด":"Refresh failed · showing last result")
     : (avail ? t("slotsAvailable",{count:avail}) : t("noAvailableSlots"));
+  if(state.availabilityStale){ const retry=document.createElement("button"); retry.type="button"; retry.textContent=currentLang==="th"?"ลองใหม่":"Retry"; retry.onclick=()=>hardRetryBookingAvailability(selectedDate); grid.prepend(retry); }
 }
 
 // Safari/WebView may restore the page from its back-forward cache without
 // re-running startup. Refresh availability when the booking screen resumes or
 // when the last authoritative result is old; no need to leave and re-enter.
 function refreshAvailabilityOnResume(force=false){
+  if(state.bookingSubmitting) return;
   const bookingView=$("viewBooking");
   if(!bookingView || bookingView.style.display==="none") return;
   const old=Date.now()-(state.availabilityLoadedAt||0)>60_000;
@@ -2893,6 +2919,7 @@ function refreshAvailabilityOnResume(force=false){
   }
 }
 window.addEventListener("pageshow",event=>refreshAvailabilityOnResume(event.persisted===true));
+setInterval(()=>{ if(document.visibilityState==="visible" && !state.availabilityRefreshing) refreshAvailabilityOnResume(false); },15_000);
 document.addEventListener("visibilitychange",()=>{
   if(document.visibilityState==="visible") refreshAvailabilityOnResume(false);
 });
@@ -3258,6 +3285,8 @@ function updateBookingPriceNote(){
 function updateBookingConfirmBtn() {
   const btn = $("confirmBkBtn");
   if(!btn) return;
+  if(state.bookingSubmitting) { btn.disabled=true; btn.textContent=t("saving"); return; }
+  if(!canUseAvailability(state,getSelectedDateISO())) { btn.disabled=true; btn.textContent=currentLang==="th"?"รอตรวจสอบเวลาว่าง":"Waiting for availability"; return; }
   if(state.coachAddonV2?.enabled&&state.coachAddonV2.active){
     const ca=state.coachAddonV2;
     btn.disabled=!state.time||ca.loading||!ca.selectedCoach||!ca.quote;
@@ -3470,11 +3499,14 @@ async function tryCoachAddonV2Create({dateISO,name,phone,note}){
 
 // ── CONFIRM BOOKING ─────────────────────────────────────────────
 $("confirmBkBtn").addEventListener("click", async()=>{
+  if(state.bookingSubmitting) return;
   const name=$("bkName").value.trim(), phone=$("bkPhone").value.trim();
   $("bkName").classList.toggle("invalid",!name);
   $("bkPhone").classList.toggle("invalid",!phone);
   if(!name){ $("bkName").focus(); showToast(t("nameRequired"),true); return; }
   if(!phone){ $("bkPhone").focus(); showToast(t("phoneRequired"),true); return; }
+  if(!canUseAvailability(state,getSelectedDateISO())) { showToast(currentLang==="th"?"กำลังตรวจสอบเวลาว่าง กรุณาเลือกเวลาอีกครั้ง":"Refreshing availability. Please select a time again.",true); await loadSlotsAndRender(getSelectedDateISO()); return; }
+  if(state.time && getDisabledReasonRange(toMinB(state.time))) { state.time=null; renderTimes(); }
   if(!state.time){ showToast(t("selectTime"),true); return; }
 
   const payType = state.bookingPaymentType;
@@ -3491,6 +3523,7 @@ $("confirmBkBtn").addEventListener("click", async()=>{
   if(payType==="offpeak" && !state.eligibility.offpeakPkg) { showToast(t("noOffpeak"),true); return; }
   if(payType==="event"   && !state.eligibility.eventPkg)   { showToast("ไม่มี MONSTR Event Pass ที่ใช้ได้",true); return; }
 
+  state.bookingSubmitting=true;
   const btn=$("confirmBkBtn"); btn.disabled=true; btn.textContent=t("saving");
   try {
     if(state.coachAddonV2?.enabled&&state.coachAddonV2.active){
@@ -3512,7 +3545,8 @@ $("confirmBkBtn").addEventListener("click", async()=>{
   } catch(e){
     console.error(e); showToast(e.message||t("bookingFailed"),true);
   } finally {
-    btn.disabled=false; updateBookingConfirmBtn();   // restore dynamic price/label
+    state.bookingSubmitting=false;
+    updateBookingConfirmBtn();   // restore dynamic price/label
   }
 });
 

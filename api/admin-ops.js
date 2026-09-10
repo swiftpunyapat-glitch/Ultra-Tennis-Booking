@@ -1,3 +1,4 @@
+import { closeRoomSlots } from './_lib/close-room-slots.js';
 // ════════════════════════════════════════════════════════════════════
 // POST /api/admin-ops — Partner Studio operations (Phase 2A)
 // ════════════════════════════════════════════════════════════════════
@@ -113,7 +114,7 @@ function isLiveBookedSlot(slotData, nowMs = Date.now()) {
   if (slotData.bookingStatus === 'pending_payment') {
     const exp = slotData.expiresAt;
     const expMs = exp && typeof exp.toMillis === 'function' ? exp.toMillis() : null;
-    return expMs !== null && expMs > nowMs;
+    return expMs === null || expMs > nowMs;
   }
   return false;
 }
@@ -951,6 +952,18 @@ async function handleSlotBulkSet(res, session, body) {
     }
     if (!targets.length) return res.status(200).json({ ok: true, count: 0 });
 
+    if (op === 'close') {
+      const targetById = new Map(targets.map(t=>[t.id,t]));
+      const result = await closeRoomSlots(db, targets.map(t=>db.collection('available_slots').doc(t.id)), isLiveBookedSlot,
+        {closedAt:now,closedBy:session.name}, ref=>{
+          const target=targetById.get(ref.id);
+          return {resourceId:SLOT_RESOURCE_ID,branchId:DEFAULT_BRANCH_ID,date:target.date,
+            startTime:slotStartStr(target.h),endTime:slotEndStr(target.h),openedAt:null,openedBy:null};
+        });
+      await writeAuditLog(db,{actor:session.name,actorRole:session.role,branchId:DEFAULT_BRANCH_ID,action:'slot_bulk_set',targetId:dates.join(','),after:{op,count:result.closed,skipped:result.skipped}});
+      return res.status(200).json({ok:true,count:result.closed,skipped:result.skipped});
+    }
+
     // Chunk to stay under Firestore's 500-write batch limit.
     let written = 0;
     for (let i = 0; i < targets.length; i += 450) {
@@ -991,30 +1004,9 @@ async function handleSlotCloseUnbooked(res, session, body) {
 
   const db = getDbOr500(res); if (!db) return;
   try {
-    const [avSnap, bkSnap] = await Promise.all([
-      db.collection('available_slots')
-        .where('date', '==', date).where('resourceId', '==', SLOT_RESOURCE_ID).where('status', '==', 'open').get(),
-      db.collection('booking_slots')
-        .where('date', '==', date).where('resourceId', '==', SLOT_RESOURCE_ID).get(),
-    ]);
-
-    const nowMs = Date.now();
-    const booked = new Set();
-    bkSnap.forEach(d => { const bd = d.data(); if (isLiveBookedSlot(bd, nowMs)) booked.add(bd.hour); });
-
-    const toClose = avSnap.docs.filter(d => !booked.has(d.data().startTime));
-    if (!toClose.length) return res.status(200).json({ ok: true, count: 0 });
-
-    const now = FieldValue.serverTimestamp();
-    let written = 0;
-    for (let i = 0; i < toClose.length; i += 450) {
-      const batch = db.batch();
-      for (const d of toClose.slice(i, i + 450)) {
-        batch.update(d.ref, { status: 'closed', closedAt: now, closedBy: session.name });
-        written++;
-      }
-      await batch.commit();
-    }
+    const avSnap = await db.collection('available_slots').where('date','==',date).where('resourceId','==',SLOT_RESOURCE_ID).where('status','==','open').get();
+    const result = await closeRoomSlots(db,avSnap.docs.map(d=>d.ref),isLiveBookedSlot,{closedAt:FieldValue.serverTimestamp(),closedBy:session.name});
+    const written = result.closed;
 
     await writeAuditLog(db, {
       actor: session.name, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
@@ -1058,13 +1050,10 @@ async function handleSlotToggle(res, session, body) {
         status: 'open', openedAt: now, openedBy: session.name, closedAt: null, closedBy: null,
       });
     } else {
-      const bkSnap = await db.collection('booking_slots').doc(id).get();
-      if (bkSnap.exists && isLiveBookedSlot(bkSnap.data(), Date.now())) {
-        return res.status(409).json({ ok: false, error: 'Cannot close a slot with a live booking' });
-      }
-      const avSnap = await ref.get();
-      if (!avSnap.exists) return res.status(404).json({ ok: false, error: 'Slot not found' });
-      await ref.update({ status: 'closed', closedAt: now, closedBy: session.name });
+      const result = await closeRoomSlots(db,[ref],isLiveBookedSlot,{closedAt:now,closedBy:session.name});
+      if(result.skipped) return res.status(409).json({ok:false,error:'Cannot close a slot with a live booking'});
+      if(result.missing) return res.status(404).json({ok:false,error:'Slot not found'});
+
     }
 
     await writeAuditLog(db, {

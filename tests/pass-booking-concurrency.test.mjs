@@ -78,7 +78,8 @@ async function wipe() {
     lineUserId: UID, packageType: 'ultra_pass_10', packageName: 'Ultra Pass 10 Hours',
     customerName: 'Concurrency Tester', customerPhone: '0810000009',
     remainingMinutes: 600, totalMinutes: 600, status: 'active',
-    validUntil: new Date(Date.now() + 90 * 24 * 3600 * 1000),
+    // This fixture books DATE, which may be more than 90 days from today.
+    validUntil: new Date(Date.parse(`${DATE}T00:00:00+07:00`) + 90 * 24 * 3600 * 1000),
   });
   await db.collection('available_slots').doc(`room1_${DATE}_1000`).set({
     resourceId: 'room1', date: DATE, startTime: START, endTime: '11:00', status: 'open',
