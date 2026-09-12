@@ -110,6 +110,17 @@ export function resolveVoucherDefinition(voucher, campaign = null) {
     discountPercent: number(firstDefined(voucher.discountPercent, campaign?.discountPercent), 0),
     maxDiscountAmount: number(firstDefined(voucher.maxDiscountAmount, campaign?.maxDiscountAmount), 0),
     minFinalPrice: Math.max(0, number(firstDefined(voucher.minFinalPrice, campaign?.minFinalPrice), 0)),
+    // Free court time given for promotion is a barter cost, not a sale. A
+    // campaign opts in here and the booking route books the slot's notional
+    // value as a Marketing expense. Default false so existing campaigns keep
+    // their current books.
+    marketingExpense: firstDefined(voucher.marketingExpense, campaign?.marketingExpense, false) === true,
+    // Groups the spend in Finance. Falls back to the campaign name so a
+    // giveaway is at least attributable to the campaign that gave it away.
+    expenseVendor: firstDefined(voucher.expenseVendor, campaign?.expenseVendor,
+      campaign?.name, campaign?.campaignName, null),
+    // 0 means value the slot at what it would have sold for.
+    expenseHourlyRate: Math.max(0, number(firstDefined(voucher.expenseHourlyRate, campaign?.expenseHourlyRate), 0)),
   };
 }
 
@@ -206,6 +217,9 @@ export function evaluateVoucher(input = {}) {
     finalPrice,
     discountAmount,
     isFree: def.voucherType === VOUCHER_TYPES.FREE_BOOKING && finalPrice === 0,
+    marketingExpense: def.marketingExpense,
+    expenseVendor: def.expenseVendor,
+    expenseHourlyRate: def.expenseHourlyRate,
     definition: def,
   };
 }
@@ -230,6 +244,9 @@ export function applyVoucherToQuote(baseQuote, result) {
     voucherKeyword: result.keyword,
     discountAmount: result.discountAmount,
     isFreeVoucher: result.isFree,
+    voucherMarketingExpense: result.isFree === true && result.marketingExpense === true,
+    voucherExpenseVendor: result.expenseVendor || null,
+    voucherExpenseHourlyRate: result.expenseHourlyRate || 0,
   };
 }
 

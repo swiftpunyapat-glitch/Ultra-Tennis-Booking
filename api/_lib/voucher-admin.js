@@ -146,6 +146,20 @@ export function normalizeCampaignInput(input = {}) {
       discountPercent,
       maxDiscountAmount,
       minFinalPrice,
+      // Marketing-expense policy for free-slot giveaways. Campaigns are
+      // saved with { merge: true }, so these are emitted only when the
+      // caller actually sends them: a client that does not know about the
+      // policy (the current Voucher tab) must not silently clear an opt-in
+      // that was set elsewhere.
+      ...(input.marketingExpense === undefined ? {} : {
+        marketingExpense: input.marketingExpense === true,
+      }),
+      ...(input.expenseVendor === undefined ? {} : {
+        expenseVendor: clean(input.expenseVendor, 200) || null,
+      }),
+      ...(input.expenseHourlyRate === undefined ? {} : {
+        expenseHourlyRate: Math.max(0, Number(input.expenseHourlyRate) || 0),
+      }),
     },
   };
 }

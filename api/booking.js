@@ -29,6 +29,11 @@ import {
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { normalizeCustomVoucherCode } from './_lib/voucher-admin.js';
+import {
+  buildCreatorExpenseDoc,
+  buildCreatorExpenseNote,
+  resolveCreatorExpenseAmount,
+} from './_lib/creator-expense.js';
 import { eventPassBookingError } from './_lib/event-pass-policy.js';
 import {
   COACH_ADDON_V2_FLAG,
@@ -979,6 +984,22 @@ async function handleCreate(req, res, body) {
   ]);
   const availRefs   = touchedHours.map(H => db.collection('available_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:00`)));
   const voucherRef  = quote.voucherApplied ? db.collection('vouchers').doc(voucherCode) : null;
+  // A free slot given for promotion costs a sellable court hour even though
+  // no cash moves. Booked as a Marketing expense in the same transaction that
+  // confirms the booking, so the giveaway can never land in the books without
+  // its cost. Opt-in per campaign; admin reclassification writes the same
+  // document shape through the same helper.
+  const creatorExpense    = freeVoucher && quote.voucherMarketingExpense === true;
+  const creatorExpenseRef = creatorExpense ? db.collection('finance_expenses').doc() : null;
+  // A campaign rate overrides; otherwise the slot is worth what it would
+  // have sold for, so an off-peak giveaway is not costed at a peak rate.
+  const creatorExpenseAmount = creatorExpense
+    ? resolveCreatorExpenseAmount({
+        storedValue:   quote.voucherExpenseHourlyRate > 0 ? null : quote.originalPrice,
+        durationHours: durationMinutes / 60,
+        hourlyRate:    quote.voucherExpenseHourlyRate,
+      })
+    : 0;
   const campaignRef = quote.voucherApplied && voucherBundle.campaignRef ? voucherBundle.campaignRef : null;
   const bookingEndMs = Date.parse(`${date}T${endTime}:00+07:00`);
   const guestAccess = lineUserId === 'guest'
@@ -1082,6 +1103,15 @@ async function handleCreate(req, res, body) {
         slipUrl: null, slipUploadedAt: null, cancelReason: null,
         createdVia: freeVoucher ? 'server_voucher' : 'server',
         ...(freeVoucher ? { confirmedAt: FieldValue.serverTimestamp(), paymentMethod: 'voucher' } : {}),
+        // Mirrors the admin "Influencer Free Slot" shape so the existing
+        // accounting editor and its reversal path operate on these bookings
+        // unchanged — and so a later manual edit updates this expense
+        // instead of stacking a second one.
+        ...(creatorExpenseRef ? {
+          isInfluencerBooking:     true,
+          influencerExpenseAmount: creatorExpenseAmount,
+          influencerExpenseId:     creatorExpenseRef.id,
+        } : {}),
         createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
       });
       // Routed through writeSlotDoc so the public slot contract (SL-02) is
@@ -1096,6 +1126,22 @@ async function handleCreate(req, res, body) {
           expiresAt: paymentExpiresAt,
         }, { bookingId: bookingRef.id, bookingCode });
       });
+      if (creatorExpenseRef) {
+        t.create(creatorExpenseRef, buildCreatorExpenseDoc({
+          amount:      creatorExpenseAmount,
+          note:        buildCreatorExpenseNote({
+            bookingCode, bookingId: bookingRef.id,
+            customerName, customerPhone, date, startTime, endTime,
+          }),
+          date,
+          bookingId:   bookingRef.id,
+          vendor:      quote.voucherExpenseVendor || undefined,
+          createdBy:   'system:voucher',
+          campaignId:  quote.voucherCampaignId || null,
+          voucherCode: quote.voucherCode || null,
+          timestamp:   FieldValue.serverTimestamp(),
+        }));
+      }
       if (guestAccessRef) t.create(guestAccessRef, guestAccess.record);
     });
   } catch (e) {

@@ -950,6 +950,15 @@
           <div class="smf"><label>Minimum Final Price</label><input id="vcMinFinal" type="number" min="0" step="1" value="0"/></div>
         </div>
 
+        <div id="vcMarketingFields" style="display:none">
+          <div style="font-size:.7rem;font-weight:900;color:var(--g);text-transform:uppercase;margin:12px 0 7px">Marketing Cost <span style="color:var(--m);text-transform:none;font-weight:600">(free court time is a barter cost, not a sale)</span></div>
+          <label style="display:block;font-size:.78rem;margin-bottom:9px"><input id="vcMarketingExpense" type="checkbox"/> Book each free slot as a Marketing expense</label>
+          <div class="smrow" style="margin-bottom:10px">
+            <div class="smf" style="flex:2"><label>Expense Vendor <span style="color:var(--m);font-weight:600">(blank = campaign name)</span></label><input id="vcExpenseVendor" maxlength="200" placeholder="e.g. Creator - Ploy"/></div>
+            <div class="smf"><label>Notional Rate / Hour <span style="color:var(--m);font-weight:600">(0 = slot price)</span></label><input id="vcExpenseRate" type="number" min="0" step="1" value="0"/></div>
+          </div>
+        </div>
+
         <div style="display:flex;gap:14px;flex-wrap:wrap;margin:13px 0;font-size:.78rem">
           <label><input id="vcActive" type="checkbox" checked/> Campaign active</label>
           <label><input id="vcExcludeHolidays" type="checkbox" checked/> Exclude holidays</label>
@@ -5861,6 +5870,7 @@ function updateVoucherTypeFields(){
   $("vcPercentWrap").style.display=type==="discount_percent"?"block":"none";
   $("vcMaxDiscountWrap").style.display=type==="discount_percent"?"block":"none";
   $("vcEventApprovalWrap").style.display=type==="event_pass"?"flex":"none";
+  $("vcMarketingFields").style.display=type==="free_booking"?"block":"none";
 }
 
 function setVoucherEndTime(value){
@@ -5884,6 +5894,7 @@ function resetVoucherCampaignForm(){
   document.querySelectorAll("[data-vday]").forEach(el=>el.checked=[1,2,3,4,5].includes(Number(el.dataset.vday)));
   document.querySelectorAll("[data-vpricing]").forEach(el=>el.checked=false);
   $("vcDiscountAmount").value="50";$("vcDiscountPercent").value="10";$("vcMaxDiscount").value="0";$("vcMinFinal").value="0";
+  $("vcMarketingExpense").checked=false;$("vcExpenseVendor").value="";$("vcExpenseRate").value="0";
   updateVoucherTypeFields();
 }
 
@@ -5901,6 +5912,7 @@ function editVoucherCampaign(campaignId){
   document.querySelectorAll("[data-vday]").forEach(el=>el.checked=(c.allowedDays||[]).includes(Number(el.dataset.vday)));
   document.querySelectorAll("[data-vpricing]").forEach(el=>el.checked=(c.allowedPricingTypes||[]).includes(el.dataset.vpricing));
   $("vcDiscountAmount").value=c.discountAmount??50;$("vcDiscountPercent").value=c.discountPercent??10;$("vcMaxDiscount").value=c.maxDiscountAmount??0;$("vcMinFinal").value=c.minFinalPrice??0;
+  $("vcMarketingExpense").checked=c.marketingExpense===true;$("vcExpenseVendor").value=c.expenseVendor||"";$("vcExpenseRate").value=Number(c.expenseHourlyRate)||0;
   updateVoucherTypeFields();
   $("tabVouchers").scrollIntoView({behavior:"smooth",block:"start"});
 }
@@ -5916,7 +5928,7 @@ function renderVoucherCampaigns(){
         <div><strong>${esc(c.name)}</strong> <span style="font-size:.66rem;color:var(--m)">${esc(c.id)}</span><br><span style="font-size:.7rem;color:var(--m)">${esc(voucherTypeLabel(c.voucherType))}${c.voucherType==="event_pass"?` · ${c.eventPassApprovalMode==="manual"?"Manual Approval":"Auto Approval"}`:""} · ${esc(c.codePrefix||"No prefix")} · ${esc(dateRange)}</span></div>
         <div><span style="display:inline-block;border:1px solid ${c.active?"var(--success)":"var(--m)"};color:${c.active?"var(--success)":"var(--m)"};border-radius:999px;padding:2px 7px;font-size:.65rem;font-weight:800">${c.active?"Active":"Inactive"}</span></div>
       </div>
-      <div style="font-size:.68rem;color:var(--m);margin-top:7px">${esc(days)} · ${esc(c.startTime)}–${esc(c.endTime)} · Holiday ${c.excludeHolidays?"excluded":"allowed"} · Restore ${Number(c.maxCancellationRestores)||0}</div>
+      <div style="font-size:.68rem;color:var(--m);margin-top:7px">${esc(days)} · ${esc(c.startTime)}–${esc(c.endTime)} · Holiday ${c.excludeHolidays?"excluded":"allowed"} · Restore ${Number(c.maxCancellationRestores)||0}${c.marketingExpense?` · <span style="color:var(--g);font-weight:800">Marketing cost ${c.expenseHourlyRate?`฿${Number(c.expenseHourlyRate)}/hr`:"at slot price"}</span>`:""}</div>
       <div class="qbtns" style="margin-top:9px;gap:6px"><button class="smbtn smgr" data-vcampaign-edit="${esc(c.id)}">Edit</button><button class="smbtn ${c.active?"":"smg"}" data-vcampaign-toggle="${esc(c.id)}" data-next-active="${c.active?"false":"true"}">${c.active?"Deactivate":"Activate"}</button><button class="smbtn smgr" data-vcampaign-codes="${esc(c.id)}">View Codes</button></div>
     </div>`;
   }).join("");
@@ -6008,6 +6020,8 @@ function voucherCampaignPayload(){
     allowedPricingTypes:[...document.querySelectorAll("[data-vpricing]:checked")].map(el=>el.dataset.vpricing),
     discountAmount:Number($("vcDiscountAmount").value),discountPercent:Number($("vcDiscountPercent").value),
     maxDiscountAmount:Number($("vcMaxDiscount").value),minFinalPrice:Number($("vcMinFinal").value),
+    marketingExpense:$("vcMarketingExpense").checked,expenseVendor:$("vcExpenseVendor").value.trim(),
+    expenseHourlyRate:Number($("vcExpenseRate").value),
   };
 }
 

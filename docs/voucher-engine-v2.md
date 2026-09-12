@@ -88,6 +88,7 @@ Campaigns with `voucherType: event_pass` use a separate entitlement flow and nev
 4. The customer selects an eligible slot and the normal server pass-booking transaction confirms it immediately.
 
 Event Pass bookings are exactly 60 minutes, Monday-Friday, exclude holidays, and the service date must not exceed the pass expiry. They cannot be rescheduled. Cancellation releases the court but forfeits the pass. The owner-only test reset may return a code after its booking is terminal; it refuses to reset a code with an active booking.
+
 ## Empty restriction lists mean no restriction
 
 `allowedPricingTypes`, `allowedDays` and `allowedDurations` each restrict a
@@ -108,3 +109,44 @@ reads like a bad code rather than a broken setting.
 `scripts/audit-voucher-restriction-lists.js` reports which campaigns and
 codes hold an empty list. It is read-only; no stored document needs
 repairing, because `[]` now means what it was always meant to mean.
+
+## Marketing expense for free slots
+
+Free court time given to a creator is barter, not a sale. No cash arrives,
+but a sellable hour is spent, and recording it only as `price: 0` makes it
+vanish from the books: it is not revenue (that filter wants
+`paymentStatus: "paid"`), and it is not package usage (that filter wants an
+Ultra Pass `packageType`), so nothing in the P&L ever sees it.
+
+A campaign opts in and the booking route books the slot's notional value to
+`finance_expenses` as a `Marketing` expense, inside the same transaction that
+confirms the booking. Three optional campaign fields control it:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `marketingExpense` | `false` | Opt in. Only ever acts on `free_booking` redemptions. |
+| `expenseVendor` | campaign name | Groups the spend in Finance. Set it to the creator's name to see spend per creator. |
+| `expenseHourlyRate` | `0` | `0` values the slot at what it would have sold for, so an off-peak giveaway is not costed at a peak rate. |
+
+`api/_lib/creator-expense.js` owns the document shape. Both writers use it —
+the free-voucher booking route and the Art-only `influencer_free` accounting
+edit — so a giveaway looks identical in Finance however it was recorded. The
+booking carries `isInfluencerBooking`, `influencerExpenseAmount` and
+`influencerExpenseId`, which is what makes the existing accounting editor
+operate on voucher bookings unchanged and makes a later manual edit update
+that expense instead of stacking a second one.
+
+Cancelling a confirmed free-voucher booking soft-deletes the expense and
+clears the booking's pointer: the court comes back, so the cost does too. A
+missing expense row never blocks the cancellation.
+
+The Voucher tab carries the controls under **Marketing Cost**, shown only for
+`free_booking` campaigns because they are the only ones that give a court
+away. The form loads the stored policy and sends it back on save, and the
+campaign list marks a campaign that spends money.
+
+Campaigns save with `{ merge: true }`, so the admin normalizer emits these
+three only when a caller actually supplies them, and `projectVoucherCampaign`
+returns them so the form has something to load. Both halves are required: if
+the read side dropped them the form would show `false` and the next save of
+an unrelated field would silently switch the cost back off.

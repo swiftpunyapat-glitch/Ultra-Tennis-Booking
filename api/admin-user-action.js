@@ -993,6 +993,11 @@ function projectVoucherCampaign(doc) {
     discountPercent: data.discountPercent ?? null,
     maxDiscountAmount: data.maxDiscountAmount ?? null,
     minFinalPrice: data.minFinalPrice ?? 0,
+    // The Voucher tab round-trips these: without them every save would
+    // read back false and silently clear the campaign's opt-in.
+    marketingExpense: data.marketingExpense === true,
+    expenseVendor: data.expenseVendor || '',
+    expenseHourlyRate: Number(data.expenseHourlyRate) || 0,
     createdAt: voucherTimestampIso(data.createdAt),
     updatedAt: voucherTimestampIso(data.updatedAt),
   };

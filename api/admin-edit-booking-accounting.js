@@ -63,6 +63,13 @@ import { getAdminDb, getAdminAuth, writeAuditLog, revokeGuestAccess } from './_l
 import { FieldValue }          from 'firebase-admin/firestore';
 import { computeQuote }        from './_lib/pricing.js';
 import { redeemVoucherUpdate, releaseVoucherUpdate } from './_lib/voucher-engine.js';
+import {
+  buildCreatorExpenseDelete,
+  buildCreatorExpenseDoc,
+  buildCreatorExpenseNote,
+  buildCreatorExpenseUpdate,
+  resolveCreatorExpenseAmount,
+} from './_lib/creator-expense.js';
 import { isCoachAddonV2Booking } from './_lib/coach-addon-v2.js';
 import { confirmCoachAddonV2Payment, releaseCoachAddonV2Hold } from './_lib/coach-addon-v2-store.js';
 
@@ -779,8 +786,11 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
   const storedValue   = [booking.basePrice, booking.originalPrice, booking.price]
                           .map(Number).find(n => Number.isFinite(n) && n > 0) || null;
   const price         = (rawPrice != null) ? Math.max(0, Number(rawPrice)) : (storedValue ?? 350);
-  const influencerAmt = (rawInfluencerAmt != null) ? Math.max(1, Number(rawInfluencerAmt))
-                                                   : Math.max(1, Math.ceil(storedValue ?? dur * 350));
+  const influencerAmt = resolveCreatorExpenseAmount({
+    explicitAmount: rawInfluencerAmt,
+    storedValue,
+    durationHours: dur,
+  });
 
   // ── Build accounting fields per type ──────────────────────────────
   let accountingFields = {};
@@ -888,49 +898,42 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
 
   if (!isNowInfluencer && wasInfluencer && existingExpId) {
     const expRef = db.collection('finance_expenses').doc(existingExpId);
-    batch.update(expRef, {
-      deleted:   true,
-      deletedAt: FieldValue.serverTimestamp(),
-      deletedBy: adminName,
-    });
+    batch.update(expRef, buildCreatorExpenseDelete({
+      adminName,
+      timestamp: FieldValue.serverTimestamp(),
+    }));
     expIdUpdate = { influencerExpenseId: null };
     console.log(`[acct-edit] soft-deleted influencer expense: ${existingExpId}`);
   } else if (isNowInfluencer) {
-    const expNote = [
-      `Auto: ${booking.bookingCode || bookingId}`,
-      booking.customerName  ? `- ${booking.customerName}`  : '',
-      booking.customerPhone ? `(${booking.customerPhone})` : '',
-      booking.date          ? `plays ${booking.date}`      : '',
-      (booking.startTime && booking.endTime) ? `${booking.startTime}–${booking.endTime}` : '',
-    ].filter(Boolean).join(' ').slice(0, 400);
+    const expNote = buildCreatorExpenseNote({
+      bookingCode:   booking.bookingCode,
+      bookingId,
+      customerName:  booking.customerName,
+      customerPhone: booking.customerPhone,
+      date:          booking.date,
+      startTime:     booking.startTime,
+      endTime:       booking.endTime,
+    });
 
     if (existingExpId) {
       const expRef = db.collection('finance_expenses').doc(existingExpId);
-      batch.update(expRef, {
-        amount:         influencerAmt,
-        note:           expNote,
-        updatedByAdmin: adminName,
-        updatedAt:      FieldValue.serverTimestamp(),
-      });
+      batch.update(expRef, buildCreatorExpenseUpdate({
+        amount:    influencerAmt,
+        note:      expNote,
+        adminName,
+        timestamp: FieldValue.serverTimestamp(),
+      }));
       console.log(`[acct-edit] updated influencer expense: ${existingExpId}`);
     } else {
       const expRef = db.collection('finance_expenses').doc();
-      batch.set(expRef, {
-        businessUnit:    'ultra_tennis',
-        date:            booking.date || new Date().toISOString().slice(0, 10),
-        category:        'Marketing',
-        amount:          influencerAmt,
-        paymentMethod:   'Other',
-        vendor:          'Influencer Free Slot',
-        note:            expNote,
-        deleted:         false,
-        autoCreated:     true,
-        sourceType:      'influencer_free_slot',
-        sourceBookingId: bookingId,
-        addedByAdmin:    adminName,
-        createdAt:       FieldValue.serverTimestamp(),
-        updatedAt:       FieldValue.serverTimestamp(),
-      });
+      batch.set(expRef, buildCreatorExpenseDoc({
+        amount:     influencerAmt,
+        note:       expNote,
+        date:       booking.date,
+        bookingId,
+        createdBy:  adminName,
+        timestamp:  FieldValue.serverTimestamp(),
+      }));
       expIdUpdate = { influencerExpenseId: expRef.id };
       console.log(`[acct-edit] created influencer expense: ${expRef.id}`);
     }
@@ -1457,6 +1460,12 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
   const claimRefs = slotRefs.map(r => slotClaimRef(db, r.id));
   const pkgRef = packageId ? db.collection('customer_packages').doc(packageId) : null;
   const voucherRef = serverVoucher ? voucherRefForBooking(db, booking) : null;
+  // Cancelling gives the court hour back, so the marketing cost of the
+  // giveaway has to come back out of the P&L with it.
+  const creatorExpenseId  = String(booking.influencerExpenseId || '').trim();
+  const creatorExpenseRef = creatorExpenseId
+    ? db.collection('finance_expenses').doc(creatorExpenseId)
+    : null;
   if (serverVoucher && !voucherRef) {
     return res.status(409).json({ ok: false, error: 'Cannot cancel voucher booking: voucher reference is missing' });
   }
@@ -1475,6 +1484,7 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
         ...claimRefs.map(r => t.get(r)),
         ...(pkgRef ? [t.get(pkgRef)] : []),
         ...(voucherRef ? [t.get(voucherRef)] : []),
+        ...(creatorExpenseRef ? [t.get(creatorExpenseRef)] : []),
       ]);
       const bSnap = reads[0];
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
@@ -1487,6 +1497,11 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
       const optionalStart = 1 + slotRefs.length + claimRefs.length;
       const pkgSnap = pkgRef ? reads[optionalStart] : null;
       const voucherSnap = voucherRef ? reads[optionalStart + (pkgRef ? 1 : 0)] : null;
+      // A missing expense row must not block giving the court back: the
+      // booking is cancelled either way, the cost reversal is best-effort.
+      const creatorExpenseSnap = creatorExpenseRef
+        ? reads[optionalStart + (pkgRef ? 1 : 0) + (voucherRef ? 1 : 0)]
+        : null;
 
       if (pkgRef) {
         if (!pkgSnap.exists) throw new Error('PASS_MISSING');
@@ -1534,10 +1549,22 @@ async function handleCancelPackageBooking({ res, adminName, session, db, booking
         });
       }
 
+      const reverseCreatorExpense = !!creatorExpenseRef && creatorExpenseSnap?.exists === true;
+      if (reverseCreatorExpense) {
+        t.update(creatorExpenseRef, buildCreatorExpenseDelete({
+          adminName,
+          timestamp: FieldValue.serverTimestamp(),
+        }));
+      }
+
       t.update(bookingRef, {
         bookingStatus: 'cancelled', status: 'cancelled',
         cancelReason: reason, cancelledBy: adminName,
         cancelledAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+        ...(reverseCreatorExpense ? {
+          influencerExpenseId: null,
+          influencerExpenseReversedAt: FieldValue.serverTimestamp(),
+        } : {}),
         ...(restored ? {
           packageMinutesRestored: restored.used,
           packageRestoredAt: FieldValue.serverTimestamp(),
