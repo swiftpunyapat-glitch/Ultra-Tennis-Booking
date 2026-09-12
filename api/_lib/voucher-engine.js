@@ -145,8 +145,13 @@ export function evaluateVoucher(input = {}) {
   if (def.issuedTo && def.lifecycleMode === 'legacy_used_count' && def.issuedTo !== lineUserId) return { ok: false, reason: 'wrong_owner' };
   if (def.requiresLineLogin && (!lineUserId || lineUserId === 'guest')) return { ok: false, reason: 'line_login_required' };
 
+  // Every "allowed X" list below is a restriction only when it has entries.
+  // An empty array means no restriction: that is what the Voucher tab
+  // promises ("none selected = every 1-hour rate") and what it sends when no
+  // box is ticked, and [] is truthy, so a bare truthiness guard here rejects
+  // every redemption instead of allowing every one.
   const dow = dayOfWeek(date);
-  if (def.allowedDays && !def.allowedDays.includes(dow)) return { ok: false, reason: 'day_not_allowed' };
+  if (def.allowedDays?.length && !def.allowedDays.includes(dow)) return { ok: false, reason: 'day_not_allowed' };
   if (def.excludeHolidays && isHoliday) return { ok: false, reason: 'holiday_not_allowed' };
 
   const start = minuteOfDay(startTime);
@@ -156,13 +161,13 @@ export function evaluateVoucher(input = {}) {
   if (windowStart !== null && (start === null || start < windowStart)) return { ok: false, reason: 'time_not_allowed' };
   if (windowEnd !== null && (end === null || end > windowEnd)) return { ok: false, reason: 'time_not_allowed' };
   if (def.exactDurationMinutes > 0 && Number(durationMinutes) !== def.exactDurationMinutes) return { ok: false, reason: 'duration_not_allowed' };
-  if (def.allowedDurations && !def.allowedDurations.includes(Number(durationMinutes))) return { ok: false, reason: 'duration_not_allowed' };
+  if (def.allowedDurations?.length && !def.allowedDurations.includes(Number(durationMinutes))) return { ok: false, reason: 'duration_not_allowed' };
   if (def.branchId && def.branchId !== branchId) return { ok: false, reason: 'branch_not_allowed' };
   if (def.resourceId && def.resourceId !== resourceId) return { ok: false, reason: 'resource_not_allowed' };
 
   const originalPrice = Math.max(0, number(baseQuote?.finalPrice, number(baseQuote?.originalPrice, 0)));
   const pricingType = baseQuote?.pricingType || 'standard';
-  if (def.allowedPricingTypes && !def.allowedPricingTypes.includes(pricingType)) return { ok: false, reason: 'not_applicable' };
+  if (def.allowedPricingTypes?.length && !def.allowedPricingTypes.includes(pricingType)) return { ok: false, reason: 'not_applicable' };
 
   // Legacy compatibility: the old 350 marker means “the current standard
   // price”, while non-default or explicit exact values remain pinned.
