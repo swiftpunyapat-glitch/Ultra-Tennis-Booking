@@ -88,3 +88,23 @@ Campaigns with `voucherType: event_pass` use a separate entitlement flow and nev
 4. The customer selects an eligible slot and the normal server pass-booking transaction confirms it immediately.
 
 Event Pass bookings are exactly 60 minutes, Monday-Friday, exclude holidays, and the service date must not exceed the pass expiry. They cannot be rescheduled. Cancellation releases the court but forfeits the pass. The owner-only test reset may return a code after its booking is terminal; it refuses to reset a code with an active booking.
+## Empty restriction lists mean no restriction
+
+`allowedPricingTypes`, `allowedDays` and `allowedDurations` each restrict a
+redemption only when they have entries. An empty array means no restriction.
+
+This is easy to get wrong because `[]` is truthy in JavaScript while
+`[].includes(anything)` is always false, so a bare `if (list && !list.includes(x))`
+guard rejects every redemption instead of allowing every one. All three
+guards test `list?.length` for that reason.
+
+It matters most for `allowedPricingTypes`, which the Voucher tab sends as
+`[]` whenever no pricing box is ticked — the form's default, labelled "none
+selected = every 1-hour rate". A campaign stored without the field is
+projected to the form as `[]`, so opening a working campaign and pressing
+Save was enough to write `[]` onto it. The customer then saw a message that
+reads like a bad code rather than a broken setting.
+
+`scripts/audit-voucher-restriction-lists.js` reports which campaigns and
+codes hold an empty list. It is read-only; no stored document needs
+repairing, because `[]` now means what it was always meant to mean.

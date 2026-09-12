@@ -107,3 +107,44 @@ describe('campaign voucher engine', () => {
     expect(legacy).toMatchObject({ ok: true, lifecycleMode: 'legacy_used_count', finalPrice: 340, discountAmount: 50 });
   });
 });
+
+// An empty array is truthy, so a bare truthiness guard turns "no restriction"
+// into "nothing is allowed". The Voucher tab sends [] for pricing types when
+// no box is ticked and labels it "none selected = every 1-hour rate", so this
+// rejected every code for every campaign saved from that form.
+describe('empty restriction lists mean no restriction', () => {
+  // The campaign field name is not always the definition's name: durations
+  // are configured as `durationMinutes`. 2026-08-12 is a Wednesday (dow 3).
+  test.each([
+    ['allowedPricingTypes', 'not_applicable', ['late_night'], ['morning_weekday']],
+    ['allowedDays', 'day_not_allowed', [0], [3]],
+    ['durationMinutes', 'duration_not_allowed', [30], [60]],
+  ])('%s', (field, reason, excluding, including) => {
+    // Absent: unrestricted.
+    expect(evaluate()).toMatchObject({ ok: true, isFree: true });
+    // Empty: unrestricted too, not "nothing allowed".
+    expect(evaluate({ campaign: { ...campaign, [field]: [] } }))
+      .toMatchObject({ ok: true, isFree: true });
+    // Populated: still a real restriction in both directions.
+    expect(evaluate({ campaign: { ...campaign, [field]: excluding } }))
+      .toMatchObject({ ok: false, reason });
+    expect(evaluate({ campaign: { ...campaign, [field]: including } }))
+      .toMatchObject({ ok: true });
+  });
+
+  test('a campaign whose lists are all empty still redeems', () => {
+    expect(evaluate({ campaign: {
+      ...campaign, allowedPricingTypes: [], allowedDays: [], durationMinutes: [],
+    } })).toMatchObject({ ok: true, isFree: true, finalPrice: 0 });
+  });
+
+  // A campaign saved before a list existed comes back from the admin
+  // projection as [], so opening it in the Voucher tab and pressing Save
+  // wrote [] onto a campaign that had been working.
+  test('a per-code override list behaves the same way', () => {
+    expect(evaluate({ voucher: { ...voucher, allowedPricingTypes: [] } }))
+      .toMatchObject({ ok: true, isFree: true });
+    expect(evaluate({ voucher: { ...voucher, allowedDays: [] } }))
+      .toMatchObject({ ok: true, isFree: true });
+  });
+});
