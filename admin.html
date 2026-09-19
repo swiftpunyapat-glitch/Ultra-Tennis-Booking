@@ -5406,8 +5406,8 @@ function calcBookingDuration(b){
 
 function inferAccountingType(b){
   if(b.isInfluencerBooking)                                             return "influencer_free";
-  if(b.paymentStatus==="package"&&b.packageType==="ultra_10")           return "ultra_pass_1";
-  if(b.paymentStatus==="package"&&b.packageType==="ultra_20")           return "ultra_pass_2";
+  if(b.paymentStatus==="package"&&["ultra_pass_10","ultra_10"].includes(b.packageType)) return "ultra_pass_1";
+  if(b.paymentStatus==="package"&&["ultra_pass_20","ultra_20"].includes(b.packageType)) return "ultra_pass_2";
   if(b.paymentStatus==="paid")                                          return "normal_paid";
   if(b.paymentStatus==="unpaid")                                        return "normal_unpaid";
   if(b.paymentStatus==="pending_review")                                return "pending_review";
