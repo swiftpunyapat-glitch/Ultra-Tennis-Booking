@@ -66,6 +66,7 @@ import { redeemVoucherUpdate, releaseVoucherUpdate } from './_lib/voucher-engine
 import { isCoachAddonV2Booking } from './_lib/coach-addon-v2.js';
 import { samePackageType }      from './_lib/package-type.js';
 import { belongsToTestSession } from './_lib/test-session.js';
+import { revertTestVoucherRedemption } from './_lib/test-voucher.js';
 import { confirmCoachAddonV2Payment, releaseCoachAddonV2Hold } from './_lib/coach-addon-v2-store.js';
 
 // ── Shared constants ──────────────────────────────────────────────
@@ -1775,17 +1776,12 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
 
 const PURGE_RESOLVED = new Set(['deleted', 'restored', 'already_clean', 'not_present', 'no_action']);
 
-// What stops a session being called 'purged'. A booking can be deleted and
-// still leave something behind — a voucher the engine would not hand back —
-// so a warning counts as unresolved even though its own status looks fine.
+// What stops a session being called 'purged'. A booking whose package or
+// voucher could not be given back is never deleted, so it stays in the
+// manifest as a failure rather than disappearing with the debt unpaid.
 function manifestUnresolved(manifest) {
-  const entries = [...manifest.bookings, ...manifest.slots, ...manifest.slipRegistry];
-  return [
-    ...entries.filter(entry => !PURGE_RESOLVED.has(entry.status)),
-    ...manifest.bookings
-      .filter(entry => entry.voucherWarning)
-      .map(entry => ({ id: entry.id, status: 'voucher_not_restored', reason: entry.voucherWarning })),
-  ];
+  return [...manifest.bookings, ...manifest.slots, ...manifest.slipRegistry]
+    .filter(entry => !PURGE_RESOLVED.has(entry.status));
 }
 
 function purgeFinalState(manifest) {
@@ -1874,33 +1870,30 @@ async function purgeOneBooking({ db, session, testSessionId, bookingId }) {
       }
 
       // ── Voucher ──────────────────────────────────────────────────
-      // delete_booking never restored vouchers; a purge must, or a test would
-      // consume a real code permanently. The state check is the idempotency
-      // guard: a voucher already released names a different booking, or none.
-      if (voucherRef && voucherSnap?.exists) {
-        const voucher = voucherSnap.data();
-        if (voucher.state === 'redeemed' && voucher.redeemedBookingId === bookingId) {
-          // countRestore gives the use back, which a purge must do, but it also
-          // spends one of the voucher's cancellationRestoreCount allowances.
-          // A test must not cost a real code one of those, so the counter is
-          // put back to what it was: to the voucher, this never happened.
-          const allowanceBefore = Number(voucher.cancellationRestoreCount) || 0;
-          const released = releaseVoucherUpdate(voucher, {
-            bookingId, reason: 'test_session_purge',
-            timestamp: FieldValue.serverTimestamp(), countRestore: true,
-          });
-          if (released.restored) {
-            t.update(voucherRef, { ...released.update, cancellationRestoreCount: allowanceBefore });
-            outcome.voucherRestored = true;
-          } else {
-            // The voucher had already spent its allowance, so the engine will
-            // not hand the use back. Say so rather than reaching into its
-            // internals — an unrestored voucher is exactly the kind of thing
-            // that must keep the session out of the 'purged' state.
-            outcome.voucherRestored = false;
-            outcome.voucherWarning = 'Voucher use could not be restored: cancellation allowance exhausted';
-          }
-        }
+      // ── Voucher ──────────────────────────────────────────────────
+      // delete_booking never restored vouchers at all; a purge must, or a test
+      // would consume a real code for good. Not a cancellation either:
+      // revertTestVoucherRedemption inverts exactly the mutation the booking
+      // made, carries its own marker for idempotency, and never reads or
+      // writes the cancellation quota.
+      // A failure here throws, so the booking and its slot claims survive and
+      // a rerun starts from the same source data — deleting the booking would
+      // destroy the only record of what still needs giving back.
+      if (voucherRef) {
+        if (!voucherSnap?.exists) throw new Error('VOUCHER_MISSING');
+        const reverted = revertTestVoucherRedemption(voucherSnap.data(), {
+          booking: bNow, bookingId, bookingCode: bNow.bookingCode,
+          testSessionId, timestamp: FieldValue.serverTimestamp(),
+        });
+        if (!reverted.ok) throw new Error(`VOUCHER_REVERT_${reverted.reason}`);
+        if (reverted.update) t.update(voucherRef, reverted.update);
+        outcome.voucherRestored = !reverted.alreadyReverted;
+      } else if (bNow.voucherCode) {
+        // The booking used a voucher this purge has no way to revert — a
+        // legacy redemption that voucherRefForBooking does not resolve. Fixing
+        // that belongs to the legacy voucher path, not here; what matters now
+        // is not deleting the booking and quietly keeping the use.
+        throw new Error('VOUCHER_REVERT_unsupported_legacy_lifecycle');
       }
 
       // ── Slots and claims ─────────────────────────────────────────

@@ -58,13 +58,12 @@ describe('a session is only called purged when nothing is left behind', () => {
     }))).toBe('purge_failed');
   });
 
-  test('a deleted booking that left a voucher behind still blocks purged', () => {
-    // The booking's own status is resolved; the leftover is what matters.
-    const m = manifest({ bookings: [{ id: 'b1', status: 'deleted', voucherWarning: 'allowance exhausted' }] });
-    expect(purgeFinalState(m)).toBe('purged_with_warnings');
-    expect(manifestUnresolved(m)).toEqual([
-      { id: 'b1', status: 'voucher_not_restored', reason: 'allowance exhausted' },
-    ]);
+  test('a booking whose voucher could not be given back never reaches deleted', () => {
+    // The rollback throws before the delete, so the debt cannot be left behind
+    // by a booking that is already gone — it shows up as a failure instead.
+    const m = manifest({ bookings: [{ id: 'b1', status: 'failed', reason: 'VOUCHER_REVERT_voucher_redeemed_by_another_booking' }] });
+    expect(purgeFinalState(m)).toBe('purge_failed');
+    expect(manifestUnresolved(m).map(e => e.id)).toEqual(['b1']);
   });
 
   test('every unresolved entry is reported, not just counted', () => {
@@ -120,8 +119,12 @@ describe('order and preconditions', () => {
 
   test('restores happen before the booking is deleted, since the booking says what to give back', () => {
     const fn = source.slice(source.indexOf('async function purgeOneBooking'), source.indexOf('// Put available_slots back'));
-    expect(fn.indexOf('passRestoreMutation(pkg, bNow)')).toBeLessThan(fn.indexOf('t.delete(bookingRef)'));
-    expect(fn.indexOf('releaseVoucherUpdate(voucher')).toBeLessThan(fn.indexOf('t.delete(bookingRef)'));
+    // Guard against a vacuous ordering check: indexOf returns -1 for a string
+    // that is absent, which would satisfy any "comes before" assertion.
+    for (const marker of ['passRestoreMutation(pkg, bNow)', 'revertTestVoucherRedemption']) {
+      expect(fn.indexOf(marker)).toBeGreaterThan(-1);
+      expect(fn.indexOf(marker)).toBeLessThan(fn.indexOf('t.delete(bookingRef)'));
+    }
   });
 
   test('slots are restored only once every booking is gone', () => {
