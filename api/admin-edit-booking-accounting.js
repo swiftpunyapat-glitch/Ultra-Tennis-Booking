@@ -65,6 +65,7 @@ import { computeQuote }        from './_lib/pricing.js';
 import { redeemVoucherUpdate, releaseVoucherUpdate } from './_lib/voucher-engine.js';
 import { isCoachAddonV2Booking } from './_lib/coach-addon-v2.js';
 import { samePackageType }      from './_lib/package-type.js';
+import { belongsToTestSession } from './_lib/test-session.js';
 import { confirmCoachAddonV2Payment, releaseCoachAddonV2Hold } from './_lib/coach-addon-v2-store.js';
 
 // ── Shared constants ──────────────────────────────────────────────
@@ -418,7 +419,7 @@ export default async function handler(req, res) {
   // ── Route by operation ────────────────────────────────────────────
   const operation = body.operation || 'accounting_edit';
 
-  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach', 'coach_lesson_update', 'coach_payout_paid', 'manual_create', 'calendar_sync_fields'];
+  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach', 'coach_lesson_update', 'coach_payout_paid', 'manual_create', 'calendar_sync_fields', 'test_session_purge'];
   if (!VALID_OPERATIONS.includes(operation)) {
     return res.status(400).json({ ok: false, error: `Invalid operation. Must be one of: ${VALID_OPERATIONS.join(', ')}.` });
   }
@@ -502,6 +503,15 @@ export default async function handler(req, res) {
       return res.status(403).json({ ok:false, error:'Role cannot create manual bookings' });
     }
     return handleManualCreate({ res, adminName, session, body });
+  }
+
+  // Acts on a test session, not a booking, so it dispatches before the
+  // bookingId gate below.
+  if (operation === 'test_session_purge') {
+    let purgeDb;
+    try { purgeDb = getAdminDb(); }
+    catch (e) { console.error('[test_session_purge] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Database not available' }); }
+    return handleTestSessionPurge({ res, adminName, session, db: purgeDb, body });
   }
 
   if (operation === 'calendar_sync_fields' &&
@@ -1729,6 +1739,368 @@ async function handleRejectPayment({ res, adminName, session, db, booking, booki
 // What is NOT deleted: customer profile, customer_packages,
 // notification_logs, unrelated bookings/slots, available_slots.
 // Use case: test data cleanup / mistaken booking records.
+// ════════════════════════════════════════════════════════════════════
+// handleTestSessionPurge — End Test & Purge (owner-only)
+// ════════════════════════════════════════════════════════════════════
+// Undoes a test session: restores what its bookings consumed, deletes the
+// records it owns, and puts the reserved slots back the way they were.
+//
+// Three properties this has to hold, in order of how badly each one bites:
+//
+//   Ownership. A record is in scope only when it NAMES this session. The
+//     isTest flag alone never authorises a delete, so a stray flag on a real
+//     booking cannot widen a purge into live data. Slots, claims, vouchers and
+//     registry entries are each re-checked against the booking that claims
+//     them before anything is removed.
+//
+//   Idempotency by check-then-act. Every step reads current state and decides,
+//     rather than trusting a record of what a previous run did. Re-running a
+//     half-finished purge is therefore a no-op over the parts that completed.
+//     Nothing here depends on a cursor being accurate.
+//
+//   Honest completion. A session becomes 'purged' only when the manifest has
+//     no unresolved entry. Anything skipped or failed leaves it as
+//     'purged_with_warnings' or 'purge_failed' — both re-runnable, neither
+//     claiming the data is gone.
+//
+// Order is load-bearing. Package minutes and vouchers are restored BEFORE the
+// booking is deleted, because the booking is what says how much to give back.
+// available_slots are restored only AFTER every booking on them is gone, or
+// the purge would put an occupied slot back on public sale.
+//
+// Not in scope, by decision: notification_logs are kept as the test audit —
+// nothing reads that collection for business reporting — and registered_users
+// are never touched, since Test Mode creates none and a dedicated tester
+// identity is used instead.
+
+const PURGE_RESOLVED = new Set(['deleted', 'restored', 'already_clean', 'not_present', 'no_action']);
+
+// What stops a session being called 'purged'. A booking can be deleted and
+// still leave something behind — a voucher the engine would not hand back —
+// so a warning counts as unresolved even though its own status looks fine.
+function manifestUnresolved(manifest) {
+  const entries = [...manifest.bookings, ...manifest.slots, ...manifest.slipRegistry];
+  return [
+    ...entries.filter(entry => !PURGE_RESOLVED.has(entry.status)),
+    ...manifest.bookings
+      .filter(entry => entry.voucherWarning)
+      .map(entry => ({ id: entry.id, status: 'voucher_not_restored', reason: entry.voucherWarning })),
+  ];
+}
+
+function purgeFinalState(manifest) {
+  const unresolved = manifestUnresolved(manifest);
+  if (unresolved.some(e => e.status === 'failed')) return 'purge_failed';
+  if (unresolved.length) return 'purged_with_warnings';
+  return 'purged';
+}
+
+// One booking, one transaction: restore, then delete what belongs to it.
+async function purgeOneBooking({ db, session, testSessionId, bookingId }) {
+  const bookingRef = db.collection('bookings').doc(bookingId);
+  const preSnap = await bookingRef.get();
+  if (!preSnap.exists) return { id: bookingId, status: 'not_present' };
+
+  const pre = preSnap.data();
+  // Ownership gate #1, before anything external happens.
+  if (!belongsToTestSession(pre, testSessionId)) {
+    return { id: bookingId, bookingCode: pre.bookingCode || null, status: 'skipped_ownership', reason: 'Booking does not name this test session' };
+  }
+
+  // A test booking should never have reached the calendar — /api/gcal
+  // suppresses it — but if one did, it has to go before the record that
+  // remembers its id does, or the event is orphaned with nothing pointing at it.
+  if (pre.googleCalendarEventId) {
+    const calOk = await deleteCalendarEvent(pre.googleCalendarEventId);
+    if (!calOk) {
+      return { id: bookingId, bookingCode: pre.bookingCode || null, status: 'failed', reason: 'Calendar event could not be deleted' };
+    }
+  }
+
+  const slotRefs = bookingSlotIds(pre).map(id => db.collection('booking_slots').doc(id));
+  const claimRefs = slotRefs.map(r => slotClaimRef(db, r.id));
+  const packageId = String(pre.packageId || pre.usedPackageId || '').trim();
+  const pkgRef = packageId ? db.collection('customer_packages').doc(packageId) : null;
+  const logRef = pkgRef ? db.collection('customer_package_logs').doc() : null;
+  const voucherRef = voucherRefForBooking(db, pre);
+
+  const outcome = { id: bookingId, bookingCode: pre.bookingCode || null, packageRestored: false, voucherRestored: false };
+
+  try {
+    await db.runTransaction(async (t) => {
+      const reads = await Promise.all([
+        t.get(bookingRef),
+        ...slotRefs.map(r => t.get(r)),
+        ...claimRefs.map(r => t.get(r)),
+        ...(pkgRef ? [t.get(pkgRef)] : []),
+        ...(voucherRef ? [t.get(voucherRef)] : []),
+      ]);
+      const bSnap = reads[0];
+      if (!bSnap.exists) return; // a concurrent run already removed it
+      const bNow = bSnap.data();
+      // Ownership gate #2, inside the transaction: the booking could have been
+      // rewritten between the read above and here.
+      if (!belongsToTestSession(bNow, testSessionId)) throw new Error('OWNERSHIP_CHANGED');
+
+      const slotSnaps = reads.slice(1, 1 + slotRefs.length);
+      const claimSnaps = reads.slice(1 + slotRefs.length, 1 + slotRefs.length + claimRefs.length);
+      const optionalStart = 1 + slotRefs.length + claimRefs.length;
+      const pkgSnap = pkgRef ? reads[optionalStart] : null;
+      const voucherSnap = voucherRef ? reads[optionalStart + (pkgRef ? 1 : 0)] : null;
+
+      // ── Package minutes ──────────────────────────────────────────
+      // packageRestoredAt is the idempotency marker, and it is written in this
+      // same transaction as the balance change so the two cannot diverge.
+      if (pkgRef && bNow.paymentStatus === 'package' && !bNow.packageRestoredAt) {
+        if (!pkgSnap?.exists) throw new Error('PASS_MISSING');
+        const pkg = pkgSnap.data();
+        if (pkg.lineUserId && bNow.lineUserId && pkg.lineUserId !== bNow.lineUserId) throw new Error('PASS_RESTORE_MISMATCH');
+        const restored = passRestoreMutation(pkg, bNow);
+        if (restored) {
+          t.update(pkgRef, restored.update);
+          t.set(logRef, {
+            packageId, lineUserId: bNow.lineUserId || '',
+            customerName: bNow.customerName || '', customerPhone: bNow.customerPhone || '',
+            packageType: restored.type, packageName: bNow.packageName || '',
+            action: 'restore_minutes', oldRemainingMinutes: restored.oldRemaining,
+            newRemainingMinutes: restored.oldRemaining === null ? null : restored.oldRemaining + restored.used,
+            deltaMinutes: restored.used,
+            reason: `test session purge ${testSessionId} (${bNow.bookingCode || bookingId})`,
+            isTest: true, testSessionId,
+            createdAt: FieldValue.serverTimestamp(),
+          });
+          outcome.packageRestored = true;
+        }
+      }
+
+      // ── Voucher ──────────────────────────────────────────────────
+      // delete_booking never restored vouchers; a purge must, or a test would
+      // consume a real code permanently. The state check is the idempotency
+      // guard: a voucher already released names a different booking, or none.
+      if (voucherRef && voucherSnap?.exists) {
+        const voucher = voucherSnap.data();
+        if (voucher.state === 'redeemed' && voucher.redeemedBookingId === bookingId) {
+          // countRestore gives the use back, which a purge must do, but it also
+          // spends one of the voucher's cancellationRestoreCount allowances.
+          // A test must not cost a real code one of those, so the counter is
+          // put back to what it was: to the voucher, this never happened.
+          const allowanceBefore = Number(voucher.cancellationRestoreCount) || 0;
+          const released = releaseVoucherUpdate(voucher, {
+            bookingId, reason: 'test_session_purge',
+            timestamp: FieldValue.serverTimestamp(), countRestore: true,
+          });
+          if (released.restored) {
+            t.update(voucherRef, { ...released.update, cancellationRestoreCount: allowanceBefore });
+            outcome.voucherRestored = true;
+          } else {
+            // The voucher had already spent its allowance, so the engine will
+            // not hand the use back. Say so rather than reaching into its
+            // internals — an unrestored voucher is exactly the kind of thing
+            // that must keep the session out of the 'purged' state.
+            outcome.voucherRestored = false;
+            outcome.voucherWarning = 'Voucher use could not be restored: cancellation allowance exhausted';
+          }
+        }
+      }
+
+      // ── Slots and claims ─────────────────────────────────────────
+      slotSnaps.forEach((slotSnap, i) => {
+        if (!slotSnap.exists) return;
+        const sd = slotSnap.data();
+        const owns = claimOwnsBooking(claimSnaps[i], sd, bookingId, bNow.bookingCode);
+        // Someone else's live booking on this slot is not ours to remove.
+        if (!owns && isLiveBookedSlot(sd)) throw new Error('SLOT_OWNERSHIP_MISMATCH');
+        if (owns || !claimSnaps[i]?.exists) t.delete(slotRefs[i]);
+        if (owns && claimSnaps[i]?.exists) t.delete(claimRefs[i]);
+      });
+
+      t.delete(bookingRef);
+    });
+  } catch (e) {
+    return { ...outcome, status: 'failed', reason: e.message };
+  }
+
+  return { ...outcome, status: 'deleted' };
+}
+
+// Put available_slots back exactly as start found them. Runs only once every
+// booking is gone, so nothing is being resold out from under a live record.
+async function restoreReservedSlots({ db, testSessionId, slotRestore }) {
+  const results = [];
+  for (const previous of slotRestore) {
+    const ref = db.collection('available_slots').doc(previous.id);
+    try {
+      const status = await db.runTransaction(async (t) => {
+        const snap = await t.get(ref);
+        if (!snap.exists) {
+          // Nothing to restore to. If the slot never existed before the test
+          // either, that is the correct end state.
+          if (!previous.existed) return 'already_clean';
+          t.set(ref, {
+            resourceId: RESOURCE_ID, date: previous.id.split('_')[1] || null,
+            status: previous.status ?? 'open',
+            openedAt: previous.openedAt ?? null, openedBy: previous.openedBy ?? null,
+            closedAt: previous.closedAt ?? null, closedBy: previous.closedBy ?? null,
+            restoredFromTestAt: FieldValue.serverTimestamp(),
+          }, { merge: true });
+          return 'restored';
+        }
+        const data = snap.data();
+        // Ownership: only a slot still held by THIS session may be rewritten.
+        // If it is open again, a previous run already restored it; if another
+        // session or an admin holds it, leave it alone and say so.
+        if (data.status !== 'test_reserved') return 'already_clean';
+        if (String(data.testSessionId || '') !== testSessionId) return 'skipped_ownership';
+        if (isLiveBookedSlot(data)) return 'skipped_live_booking';
+
+        if (!previous.existed) {
+          t.delete(ref);
+          return 'deleted';
+        }
+        t.set(ref, {
+          status: previous.status ?? 'open',
+          openedAt: previous.openedAt ?? null, openedBy: previous.openedBy ?? null,
+          closedAt: previous.closedAt ?? null, closedBy: previous.closedBy ?? null,
+          testSessionId: FieldValue.delete(),
+          testReservedAt: FieldValue.delete(),
+          testReservedBy: FieldValue.delete(),
+          restoredFromTestAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+        return 'restored';
+      });
+      results.push({ id: previous.id, status });
+    } catch (e) {
+      results.push({ id: previous.id, status: 'failed', reason: e.message });
+    }
+  }
+  return results;
+}
+
+// Defensive only. /api/slip-verify refuses test bookings outright, so a test
+// should never have seeded slip_registry. If one did, the entry has to go or a
+// real slip with that hash is permanently marked as already used — and the
+// registry is shared with pass purchases, so the damage would not stay local.
+// An entry pointing anywhere other than this session's bookings is left alone.
+async function purgeSlipRegistry({ db, testSessionId, bookingIds }) {
+  if (!bookingIds.length) return [];
+  const results = [];
+  for (const bookingId of bookingIds) {
+    let snap;
+    try {
+      snap = await db.collection('slip_registry').where('bookingId', '==', bookingId).limit(5).get();
+    } catch (e) {
+      results.push({ id: bookingId, status: 'failed', reason: `registry lookup failed: ${e.message}` });
+      continue;
+    }
+    if (snap.empty) { results.push({ id: bookingId, status: 'not_present' }); continue; }
+    for (const doc of snap.docs) {
+      try {
+        await db.runTransaction(async (t) => {
+          const fresh = await t.get(doc.ref);
+          if (!fresh.exists) return;
+          if (String(fresh.data().bookingId || '') !== bookingId) throw new Error('REGISTRY_OWNERSHIP_CHANGED');
+          t.delete(doc.ref);
+        });
+        results.push({ id: doc.id, status: 'deleted', testSessionId });
+      } catch (e) {
+        results.push({ id: doc.id, status: 'failed', reason: e.message });
+      }
+    }
+  }
+  return results;
+}
+
+async function handleTestSessionPurge({ res, adminName, session, db, body }) {
+  if (!requireRole(session, 'owner')) {
+    return res.status(403).json({ ok: false, error: 'Only the owner can purge a test session' });
+  }
+  const testSessionId = typeof body.testSessionId === 'string' ? body.testSessionId.trim() : '';
+  if (!testSessionId) return res.status(400).json({ ok: false, error: 'testSessionId is required' });
+
+  const sessionRef = db.collection('test_sessions').doc(testSessionId);
+  const sessionSnap = await sessionRef.get();
+  if (!sessionSnap.exists) return res.status(404).json({ ok: false, error: 'Test session not found' });
+  const sessionData = sessionSnap.data();
+
+  // An active session can still be creating bookings. Ending it first is what
+  // makes the set of records to purge stop moving.
+  if (sessionData.status === 'active') {
+    return res.status(409).json({ ok: false, code: 'SESSION_ACTIVE', error: 'End the test session before purging it' });
+  }
+  if (sessionData.status === 'purged') {
+    return res.status(200).json({ ok: true, testSessionId, status: 'purged', alreadyPurged: true, manifest: sessionData.purgeManifest ?? null });
+  }
+
+  await sessionRef.update({ status: 'purging', purgeStartedAt: FieldValue.serverTimestamp(), purgeStartedBy: adminName });
+
+  // Every booking that names this session — the flag alone is never the query.
+  let bookingIds = [];
+  try {
+    const snap = await db.collection('bookings').where('testSessionId', '==', testSessionId).get();
+    bookingIds = snap.docs.map(d => d.id);
+  } catch (e) {
+    console.error('[test_session_purge] booking query:', e.message);
+    await sessionRef.update({ status: 'purge_failed', purgeError: `booking query failed: ${e.message}` });
+    return res.status(500).json({ ok: false, status: 'purge_failed', error: 'Could not list the session bookings' });
+  }
+
+  const manifest = { bookings: [], slots: [], slipRegistry: [], startedAt: new Date().toISOString() };
+
+  for (const bookingId of bookingIds) {
+    manifest.bookings.push(await purgeOneBooking({ db, session, testSessionId, bookingId }));
+  }
+
+  manifest.slipRegistry = await purgeSlipRegistry({ db, testSessionId, bookingIds });
+
+  // Slots come last, and only if every booking is actually gone. Restoring a
+  // slot that still carries a booking would offer an occupied hour for sale.
+  const bookingsCleared = manifest.bookings.every(b => PURGE_RESOLVED.has(b.status));
+  if (bookingsCleared) {
+    manifest.slots = await restoreReservedSlots({
+      db, testSessionId, slotRestore: Array.isArray(sessionData.slotRestore) ? sessionData.slotRestore : [],
+    });
+  } else {
+    manifest.slots = (Array.isArray(sessionData.slotRestore) ? sessionData.slotRestore : []).map(p => ({
+      id: p.id, status: 'blocked', reason: 'Bookings on this session are not fully purged yet',
+    }));
+  }
+
+  const status = purgeFinalState(manifest);
+  const unresolved = manifestUnresolved(manifest);
+  manifest.finishedAt = new Date().toISOString();
+  manifest.unresolvedCount = unresolved.length;
+
+  await sessionRef.update({
+    status,
+    purgeManifest: manifest,
+    purgedAt: FieldValue.serverTimestamp(),
+    purgedBy: adminName,
+    ...(status === 'purged' ? { purgeError: null } : {}),
+  });
+
+  await writeAuditLog(db, {
+    actor: adminName, actorRole: session.role, branchId: resolveBranchId(sessionData),
+    action: 'test_session_purge', targetId: testSessionId,
+    after: {
+      status,
+      bookings: manifest.bookings.length,
+      slots: manifest.slots.length,
+      slipRegistry: manifest.slipRegistry.length,
+      unresolved: unresolved.length,
+    },
+  });
+
+  console.log(`[test_session_purge] ${testSessionId} → ${status} (${unresolved.length} unresolved)`);
+  return res.status(status === 'purge_failed' ? 500 : 200).json({
+    ok: status !== 'purge_failed',
+    testSessionId,
+    status,
+    rerunnable: status !== 'purged',
+    unresolved,
+    manifest,
+  });
+}
+
 async function handleDeleteBooking({ res, adminName, session, db, booking, bookingRef, bookingId }) {
   if (isCoachAddonV2Booking(booking) && !['cancelled', 'expired'].includes(booking.bookingState)) {
     return res.status(409).json({ ok: false, code: 'COACH_ADDON_V2_ACTIVE', error: 'Cancel the Coach Add-on v2 booking before deleting it' });
