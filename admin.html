@@ -1218,6 +1218,7 @@
       <div class="mfield">
         <label>Payment / Accounting Type</label>
         <select id="acctType">
+          <option value="" disabled>— Select accounting type —</option>
           <option value="normal_paid">Normal Paid (paymentStatus: paid)</option>
           <option value="normal_unpaid">Normal Unpaid (paymentStatus: unpaid)</option>
           <option value="pending_review">Pending Review</option>
@@ -1226,6 +1227,7 @@
           <option value="ultra_pass_2">Ultra Pass 2 Usage — 295 THB/hr</option>
           <option value="influencer_free">Influencer Free Slot</option>
         </select>
+        <p id="acctUnmappedWarn" style="display:none;font-size:.7rem;color:var(--dan);margin-top:4px"></p>
       </div>
       <div class="mfield" id="acctPriceField">
         <label id="acctPriceLabel">Price / Amount (฿)</label>
@@ -5415,9 +5417,24 @@ function inferAccountingType(b){
   return "normal_unpaid";
 }
 
-function syncAcctModal(){
+// Package products that have a dedicated accounting option. Anything else
+// funded by a package — the other products, voucher bookings — has no option
+// that describes it, and inferAccountingType falls back to normal_unpaid.
+// Pre-selecting that would let a plain Save bill a settled customer again and
+// clear the packageType, so the modal makes the admin choose instead.
+const ACCOUNTED_PACKAGE_TYPES=["ultra_pass_10","ultra_10","ultra_pass_20","ultra_20"];
+
+function hasAccountingOption(b){
+  if(b.paymentStatus!=="package"||b.isInfluencerBooking) return true;
+  return ACCOUNTED_PACKAGE_TYPES.includes(b.packageType);
+}
+
+// applyStatusDefault is off when the modal opens so the booking's own status
+// survives; it only applies once the admin picks a type themselves.
+function syncAcctModal(applyStatusDefault){
   if(!acctBooking) return;
   const type=$("acctType").value;
+  if(type) $("acctUnmappedWarn").style.display="none";
   const dur=calcBookingDuration(acctBooking);
   const priceField=$("acctPriceField"),infField=$("acctInfluencerField");
 
@@ -5443,9 +5460,10 @@ function syncAcctModal(){
   const bsDefaults={normal_paid:"confirmed",normal_unpaid:"confirmed",
     ultra_pass_1:"confirmed",ultra_pass_2:"confirmed",
     influencer_free:"confirmed",rejected:"cancelled"};
-  if(bsDefaults[type]) $("acctBookingStatus").value=bsDefaults[type];
+  if(applyStatusDefault&&bsDefaults[type]) $("acctBookingStatus").value=bsDefaults[type];
 
   $("acctPreview").textContent=buildAcctPreview(type,dur);
+  $("acctConfirm").disabled=!type;
 }
 
 function buildAcctPreview(type,dur){
@@ -5467,30 +5485,34 @@ function openAcctModal(b){
   $("acctCustInfo").textContent=`${esc(b.customerName||"—")} · ${esc(b.customerPhone||"—")} · Play: ${esc(b.date||"—")} ${esc(b.startTime||"—")}–${esc(b.endTime||"—")}`;
   $("acctCurrentState").textContent=`Current: bookingStatus=${b.bookingStatus||"—"} · paymentStatus=${b.paymentStatus||"—"} · type=${b.bookingType||"—"} · ฿${Number(b.price)||0}`;
   $("acctBookingStatus").value=b.bookingStatus||"confirmed";
-  $("acctType").value=inferAccountingType(b);
+  const mapped=hasAccountingOption(b);
+  $("acctType").value=mapped?inferAccountingType(b):"";
+  $("acctUnmappedWarn").textContent=mapped?"":`No accounting option covers ${b.packageType||"this package booking"} — choose one explicitly. Saving it as Normal Unpaid would clear the package and bill the customer again.`;
+  $("acctUnmappedWarn").style.display=mapped?"none":"";
   $("acctPrice").value=Number(b.price)||Math.round(calcBookingDuration(b)*bookingHourlyRate(b));
   $("acctInfluencerAmt").value=Number(b.influencerExpenseAmount)||Math.round(calcBookingDuration(b)*bookingHourlyRate(b));
   $("acctReason").value="";
   $("acctPreview").textContent="";
   $("acctConfirm").disabled=false;
   $("acctConfirm").textContent="Save Changes";
-  syncAcctModal();
+  syncAcctModal(false);
   $("acctModal").style.display="flex";
 }
 function closeAcctModal(){$("acctModal").style.display="none";acctBooking=null;}
 $("acctClose").addEventListener("click",closeAcctModal);
 $("acctCancel").addEventListener("click",closeAcctModal);
 $("acctModal").addEventListener("click",e=>{if(e.target===$("acctModal"))closeAcctModal();});
-$("acctType").addEventListener("change",syncAcctModal);
+$("acctType").addEventListener("change",()=>syncAcctModal(true));
 $("acctBookingStatus").addEventListener("change",()=>{$("acctPreview").textContent=buildAcctPreview($("acctType").value,calcBookingDuration(acctBooking));});
 $("acctPrice").addEventListener("input",()=>{$("acctPreview").textContent=buildAcctPreview($("acctType").value,calcBookingDuration(acctBooking));});
 $("acctInfluencerAmt").addEventListener("input",()=>{$("acctPreview").textContent=buildAcctPreview($("acctType").value,calcBookingDuration(acctBooking));});
 
 $("acctConfirm").addEventListener("click",async()=>{
   if(!acctBooking) return;
+  const type=$("acctType").value;
+  if(!type){showToast("Select an accounting type first.",true);$("acctType").focus();return;}
   const reason=$("acctReason").value.trim();
   if(!reason){showToast("Reason is required.",true);$("acctReason").focus();return;}
-  const type=$("acctType").value;
   const bookingStatus=$("acctBookingStatus").value;
   const price=Number($("acctPrice").value)||0;
   const influencerExpenseAmount=Number($("acctInfluencerAmt").value)||350;
