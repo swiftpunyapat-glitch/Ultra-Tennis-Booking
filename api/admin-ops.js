@@ -34,6 +34,7 @@ import {
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { randomUUID } from 'node:crypto';
 import { buildCustomerIdentityDryRun } from './_lib/customer-identity.js';
+import { ultraPassUsageValue } from '../package-usage.js';
 import {
   parseCoachProfilePhotoDataUrl,
   coachProfilePhotoObjectPath,
@@ -792,7 +793,7 @@ async function handleDashboard(res, session, body) {
       if (bk.paymentStatus === 'pending_review') b.pendingReviewCount++;
       if (bk.paymentStatus === 'package') {
         b.packageCount++;
-        b.packageValue += Number(bk.packageUsageValueTotal) || 0;
+        b.packageValue += ultraPassUsageValue(bk);
       }
       if (bk.refundStatus) b.refundTotal += Number(bk.refundAmount) || 0;
       if (bk.bookingStatus === 'confirmed') resBucket(b, bk.resourceId).bookedHours += Number(bk.durationHours) || 1;

@@ -41,3 +41,31 @@ export function ultraPassLabel(b) {
   const tier = ultraPassTier(b);
   return tier ? `Ultra Pass ${tier}` : "";
 }
+
+// Hours a booking consumed. Bookings carry durationMinutes and durationHours;
+// the start/end fallback covers records written before those fields existed,
+// and an hour is the smallest slot that was ever bookable.
+export function bookingHours(b) {
+  const minutes = Number(b?.durationMinutes);
+  if (Number.isFinite(minutes) && minutes > 0) return minutes / 60;
+  const hours = Number(b?.durationHours);
+  if (Number.isFinite(hours) && hours > 0) return hours;
+  const at = value => {
+    const m = String(value || "").match(/^(\d{2}):(\d{2})$/);
+    return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+  };
+  const start = at(b?.startTime), end = at(b?.endTime);
+  return start !== null && end !== null && end > start ? (end - start) / 60 : 1;
+}
+
+// What a pass booking is worth in the reports. api/booking.js does not stamp
+// packageUsageValueTotal — only an accounting edit does — so the value has to
+// be derived for every booking a customer made with their own pass. Anything
+// that is not an Ultra Pass is worth 0 here: the other products have their own
+// economics and no rate to apply.
+export function ultraPassUsageValue(b, hours = bookingHours(b)) {
+  const stored = Number(b?.packageUsageValueTotal);
+  if (stored) return stored;
+  const rate = Number(b?.packageUsageValuePerHour) || ultraPassRate(b);
+  return (Number(hours) || 0) * rate;
+}

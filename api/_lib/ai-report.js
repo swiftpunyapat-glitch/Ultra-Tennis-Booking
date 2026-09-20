@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { ultraPassUsageValue } from '../../package-usage.js';
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{40,128}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -194,7 +195,7 @@ export function buildAiBookingReport(records = [], range, { details = false, pag
       metrics.packageBookingCount++;
       metrics.packageUsageValue += isCoachV2
         ? Number(booking.packageUsageValueAmount) || 0
-        : Number(booking.packageUsageValueTotal) || 0;
+        : ultraPassUsageValue(booking, minutes / 60);
     }
   }
   metrics.paidRevenue = Math.round(metrics.paidRevenue * 100) / 100;

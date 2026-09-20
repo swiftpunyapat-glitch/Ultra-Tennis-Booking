@@ -1,10 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { isUltraPassUsage, ultraPassLabel, ultraPassRate, ultraPassTier } from '../package-usage.js';
+import {
+  bookingHours, isUltraPassUsage, ultraPassLabel, ultraPassRate, ultraPassTier, ultraPassUsageValue,
+} from '../package-usage.js';
+import { buildAiBookingReport } from '../api/_lib/ai-report.js';
 
 const adminHtml = readFileSync(new URL('../admin.html', import.meta.url), 'utf8');
 const financeHtml = readFileSync(new URL('../ultra-finance.html', import.meta.url), 'utf8');
 const serverCatalog = readFileSync(new URL('../api/admin-user-action.js', import.meta.url), 'utf8');
+const adminOps = readFileSync(new URL('../api/admin-ops.js', import.meta.url), 'utf8');
 
 const pkgBooking = extra => ({ paymentStatus: 'package', ...extra });
 
@@ -76,5 +80,86 @@ describe('the reports and the pass catalog cannot drift apart again', () => {
       expect(html).toContain('isUltraPassUsage');
       expect(html).not.toMatch(/bookingType\s*===?\s*"Ultra Pass [12]"/);
     }
+  });
+});
+
+describe('valuing a pass booking', () => {
+  test.each([
+    [{ durationMinutes: 90 }, 1.5],
+    [{ durationHours: 2 }, 2],
+    [{ startTime: '10:00', endTime: '11:30' }, 1.5],
+    [{}, 1],
+  ])('%o is %s hours', (booking, hours) => {
+    expect(bookingHours(booking)).toBe(hours);
+  });
+
+  test('a stored total always wins, whatever the current rate is', () => {
+    const booking = { paymentStatus: 'package', packageType: 'ultra_pass_10', durationHours: 2, packageUsageValueTotal: 999 };
+    expect(ultraPassUsageValue(booking)).toBe(999);
+  });
+
+  test('a stored per-hour rate is preferred over the catalog rate', () => {
+    const booking = { paymentStatus: 'package', packageType: 'ultra_pass_10', durationHours: 2, packageUsageValuePerHour: 300 };
+    expect(ultraPassUsageValue(booking)).toBe(600);
+  });
+
+  test.each([
+    [{ packageType: 'ultra_pass_10', durationHours: 1 }, 310],
+    [{ packageType: 'ultra_pass_20', durationHours: 2 }, 590],
+    [{ packageType: 'ultra_10', durationMinutes: 90 }, 465],
+    [{ bookingType: 'Ultra Pass 2', durationHours: 1 }, 295],
+  ])('%o falls back to the catalog rate — %s', (booking, expected) => {
+    expect(ultraPassUsageValue(booking)).toBe(expected);
+  });
+
+  test.each(['ultra_starter_3', 'beginner_coaching_5', 'coach_at_ultra_10', 'offpeak', 'monstr_event_pass'])(
+    '%s is worth 0 because it has no Ultra Pass rate to apply', packageType => {
+      expect(ultraPassUsageValue({ paymentStatus: 'package', packageType, durationHours: 2 })).toBe(0);
+    });
+});
+
+describe('server reports count pass bookings the customer made themselves', () => {
+  const range = { from: '2026-08-01', to: '2026-08-31' };
+  const pass = (id, extra) => ({ id, data: {
+    date: '2026-08-11', startTime: '10:00', endTime: '11:00',
+    bookingStatus: 'confirmed', paymentStatus: 'package', ...extra,
+  } });
+
+  test('the AI report values a booking api/booking.js wrote, which stamps no total', () => {
+    // packageUsageValueTotal is written only by an accounting edit, so summing
+    // that field alone reported every one of these bookings as zero.
+    const report = buildAiBookingReport([
+      pass('own-pass', { packageType: 'ultra_pass_10', bookingType: 'Ultra Pass 10 Hours' }),
+    ], range);
+    expect(report.metrics.packageBookingCount).toBe(1);
+    expect(report.metrics.packageUsageValue).toBe(310);
+  });
+
+  test('a stored total is still trusted over a recomputed one', () => {
+    const report = buildAiBookingReport([pass('edited', { packageType: 'ultra_pass_10', packageUsageValueTotal: 350 })], range);
+    expect(report.metrics.packageUsageValue).toBe(350);
+  });
+
+  test('mixed funding sources add up', () => {
+    const report = buildAiBookingReport([
+      pass('p1', { packageType: 'ultra_pass_10', bookingType: 'Ultra Pass 10 Hours' }),
+      pass('p2', { packageType: 'ultra_pass_20', startTime: '12:00', endTime: '14:00', durationHours: 2 }),
+      pass('offpeak', { packageType: 'offpeak' }),
+      { id: 'cash', data: { date: '2026-08-12', startTime: '09:00', endTime: '10:00', bookingStatus: 'confirmed', paymentStatus: 'paid', price: 390 } },
+    ], range);
+    expect(report.metrics.packageBookingCount).toBe(3);
+    expect(report.metrics.packageUsageValue).toBe(310 + 590);
+    expect(report.metrics.paidRevenue).toBe(390);
+  });
+
+  test('a cancelled pass booking is still excluded', () => {
+    const report = buildAiBookingReport([pass('gone', { packageType: 'ultra_pass_10', bookingStatus: 'cancelled' })], range);
+    expect(report.metrics.packageUsageValue).toBe(0);
+  });
+
+  test('the branch report values bookings through the same helper', () => {
+    expect(adminOps).toContain("import { ultraPassUsageValue } from '../package-usage.js'");
+    expect(adminOps).toContain('b.packageValue += ultraPassUsageValue(bk)');
+    expect(adminOps).not.toContain('b.packageValue += Number(bk.packageUsageValueTotal)');
   });
 });
