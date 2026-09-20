@@ -16,6 +16,16 @@
 // ════════════════════════════════════════════════════════════════════
 
 import { verifySessionCookie } from './_lib/admin-auth.js';
+import { getAdminDb } from './_lib/firebase-admin.js';
+import { testSessionIdForBookingCode } from './_lib/test-session.js';
+
+// A test booking must never reach the real calendar. The booking record is the
+// only trustworthy source here, and a lookup failure suppresses rather than
+// creates — an unwanted calendar event has to be deleted by hand.
+async function testSessionFor(bookingCode) {
+  try { return await testSessionIdForBookingCode(getAdminDb(), bookingCode); }
+  catch (e) { console.error('[gcal] test lookup failed:', e.message); return 'unknown'; }
+}
 
 function parseBody(req) {
   if (req.body && typeof req.body === 'object') return req.body;
@@ -239,6 +249,17 @@ export default async function handler(req, res) {
   if (action === 'create') {
     const validationError = validateBooking(booking);
     if (validationError) return res.status(400).json({ ok: false, error: validationError });
+
+    // This route takes the event fields from the request body and never reads
+    // the booking, so the caller could otherwise put a test booking on the real
+    // calendar. Ask the stored record instead. Reported as ok so the admin flow
+    // that fires this is not derailed by a booking it was never meant to sync.
+    const testSessionId = await testSessionFor(booking.bookingCode);
+    if (testSessionId) {
+      console.log(`[gcal] suppressed test booking — admin:${adminName} booking:${booking.bookingCode} session:${testSessionId}`);
+      return res.status(200).json({ ok: true, suppressed: 'test_mode', testSessionId, eventId: null, htmlLink: null });
+    }
+
     try {
       const result = await createCalendarEvent(booking);
       console.log(`[gcal] created — admin:${adminName} booking:${booking.bookingCode} eventId:${result.eventId}`);

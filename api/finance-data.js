@@ -6,6 +6,7 @@
 import { verifySession, requireRole, DEFAULT_BRANCH_ID } from './_lib/admin-auth.js';
 import { getAdminDb, serializeFsDoc } from './_lib/firebase-admin.js';
 import { FieldValue } from 'firebase-admin/firestore';
+import { isLiveBooking } from '../test-booking.js';
 
 const BUSINESS_UNIT = 'ultra_tennis';
 const COMPANY_PROFILE = {
@@ -170,7 +171,10 @@ export default async function handler(req, res) {
           .get(),
       ]);
 
-      const bookings = bookSnap.docs.map(d => {
+      // ultra-finance.html reads bookings only from here, and the projection
+      // below deliberately does not carry the test fields — so this filter is
+      // the single point that keeps Test Mode out of every figure on that page.
+      const bookings = bookSnap.docs.filter(d => isLiveBooking(d.data())).map(d => {
         const b = d.data();
         return {
           id:                       d.id,

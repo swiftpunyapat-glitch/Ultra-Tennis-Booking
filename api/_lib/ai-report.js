@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { ultraPassUsageValue } from '../../package-usage.js';
+import { isLiveBooking } from '../../test-booking.js';
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{40,128}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -139,6 +140,10 @@ export function sanitizeAiBooking(id, booking = {}) {
 export function buildAiBookingReport(records = [], range, { details = false, page = 1, limit = 200 } = {}) {
   const bookings = records
     .map(record => ({ ...record.data, id: record.id }))
+    // Test Mode records ran the real booking path and look like any other
+    // booking, so they are dropped here rather than anywhere downstream: every
+    // metric and breakdown below reads from this one list.
+    .filter(isLiveBooking)
     .filter(booking => validDate(booking.date) && booking.date >= range.from && booking.date <= range.to)
     .sort((a, b) => `${a.date} ${a.startTime || ''} ${a.id}`.localeCompare(`${b.date} ${b.startTime || ''} ${b.id}`));
 

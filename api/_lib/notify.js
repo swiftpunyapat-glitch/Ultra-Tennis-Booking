@@ -441,6 +441,7 @@ export async function sendAndLog({
   lineUserId,
   bookingCode,
   payload,       // raw fields used to build the message
+  testSessionId, // set ⇒ Test Mode: build the message, never send it (Guard 3)
 }) {
   const db = getDb();
   const logRef = db.collection("notification_logs").doc(eventId);
@@ -488,6 +489,26 @@ export async function sendAndLog({
   const preview = (messages[0] && typeof messages[0].text === "string")
     ? messages[0].text.slice(0, 120)
     : null;
+
+  // Guard 3: Test Mode. The template was built above on purpose — a test needs
+  // to see that the right message WOULD have been produced — but nothing is
+  // sent to LINE and the log records why. This is the last gate before the
+  // only outbound call in this function, so no caller can route around it.
+  if (testSessionId) {
+    await logRef.set({
+      eventId, type, targetType, lineUserId,
+      bookingCode: bookingCode || null,
+      status: "suppressed_test",
+      messagePreview: preview,
+      lineApiStatus: null,
+      lineApiError: null,
+      requestId: null,
+      isTest: true,
+      testSessionId,
+      createdAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { ok: true, status: "suppressed_test", testSessionId };
+  }
 
   const result = await callLinePush({ to: lineUserId, messages });
 

@@ -27,6 +27,11 @@ import {
   redeemVoucherUpdate, releaseVoucherUpdate, reserveVoucherUpdate,
 } from './_lib/voucher-engine.js';
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
+import {
+  assertNoClientTestFlags, attachTestSession, readTestSessionToken, resolveTestSession,
+  slotsWithinTestSession, testSessionOf, testStamp, isTestBooking, belongsToTestSession,
+  availableToSession,
+} from './_lib/test-session.js';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { normalizeCustomVoucherCode } from './_lib/voucher-admin.js';
 import { eventPassBookingError } from './_lib/event-pass-policy.js';
@@ -466,10 +471,41 @@ async function handleGuestBooking(req, res, body) {
   }
 }
 
+// Actions that understand Test Mode. A test session reaching anything else
+// must fail rather than fall through, because falling through would create a
+// real, billable booking out of a test — the one outcome Test Mode exists to
+// prevent. Read-only actions are listed because they create nothing.
+const TEST_MODE_ACTIONS = new Set([
+  'create', 'create_pass_booking', 'test_simulate_payment',
+  'price_quote', 'features', 'pass_catalog', 'coach_options', 'coach_slots',
+  'availability_diagnostic', 'event_pass_status',
+  'coach_addon_v2_options', 'coach_addon_v2_quote',
+]);
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' });
   const body = parseBody(req);
   if (!body) return res.status(400).json({ ok: false, error: 'Invalid request body' });
+
+  // ── Test Mode gate ────────────────────────────────────────────────
+  // Whether this is a test is decided here and nowhere else. The caller may
+  // present a token; it may not present a verdict.
+  const clientFlagError = assertNoClientTestFlags(body);
+  if (clientFlagError) return res.status(400).json({ ok: false, code: 'TEST_FLAG_REJECTED', error: clientFlagError });
+
+  if (readTestSessionToken(req, body)) {
+    let testDb;
+    try { testDb = getAdminDb(); }
+    catch (e) { console.error('[booking] test session DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+    const resolved = await resolveTestSession(req, testDb, Date.now(), body);
+    if (!resolved?.ok) {
+      return res.status(403).json({ ok: false, code: 'TEST_SESSION_INVALID', error: `Test session rejected: ${resolved?.reason || 'unknown'}` });
+    }
+    if (!TEST_MODE_ACTIONS.has(body.action)) {
+      return res.status(501).json({ ok: false, code: 'TEST_MODE_UNSUPPORTED', error: `Action "${body.action}" cannot run inside a test session yet` });
+    }
+    attachTestSession(body, resolved.session);
+  }
 
   // Guest capability token (Security Hotfix 2026-08-04)
   if (body.action === 'guest_booking') return handleGuestBooking(req, res, body);
@@ -494,6 +530,7 @@ export default async function handler(req, res) {
   // RB-01: handleCancelPending needs `req` for the rate limiter's client IP.
   // The first version referenced `req` without it being in scope, which threw
   // a ReferenceError on every guest cancellation.
+  if (body.action === 'test_simulate_payment') return handleTestSimulatePayment(res, body);
   if (body.action === 'cancel_pending') return handleCancelPending(req, res, body);
   if (body.action === 'features')      return handleFeatures(res);
   // Coach lesson booking (Stage 3) — customer-facing, feature-flagged OFF by
@@ -973,6 +1010,21 @@ async function handleCreate(req, res, body) {
 
   const bookingRef  = db.collection('bookings').doc();
   const segRefs     = segs.map(x => db.collection('booking_slots').doc(slotIdOf(date, x.start)));
+
+  // A test session books real slots through the real claim path, so it may
+  // only book the slots it took out of public sale when it started. Checked
+  // before the transaction: this is about which inventory the session owns,
+  // not about whether the slot is free, which the transaction decides.
+  const testSession = testSessionOf(body);
+  if (testSession) {
+    const scope = slotsWithinTestSession(testSession, segRefs.map(r => r.id));
+    if (!scope.ok) {
+      return res.status(403).json({
+        ok: false, code: 'TEST_SLOT_OUT_OF_SCOPE',
+        error: `Test session ${testSession.testSessionId} has not reserved: ${scope.outside.join(', ') || '(no slots requested)'}`,
+      });
+    }
+  }
   const cellRefs    = touchedHours.flatMap(H => [
     db.collection('booking_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:00`)),
     db.collection('booking_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:30`)),
@@ -1002,7 +1054,7 @@ async function handleCreate(req, res, body) {
 
       // ── Room-open guard: every touched hour must be admin-open ────────
       for (const availSnap of availSnaps) {
-        if (!availSnap.exists || availSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
+        if (!availSnap.exists || !availableToSession(availSnap.data(), testSession)) throw new Error('SLOT_NOT_OPEN');
       }
       // ── Double-booking guard on EVERY covered 30-min cell ─────────────
       cellSnaps.forEach((snap, i) => {
@@ -1052,6 +1104,7 @@ async function handleCreate(req, res, body) {
 
       // ── Write booking (server price) + one slot lock per segment ─────
       t.set(bookingRef, {
+        ...testStamp(testSession),
         bookingCode, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
         bookingSlotIds: segRefs.map(r => r.id),
         bookingType,
@@ -1390,6 +1443,10 @@ async function handleCancelPending(req, res, body) {
           targetType: 'admin',
           lineUserId: a.lineUserId,
           bookingCode,
+          // Derived from the stored booking, not from the request: this action
+          // acts on a booking that already exists, so whether it is a test was
+          // settled when it was created and no caller can revise that here.
+          testSessionId: isTestBooking(booking) ? (booking.testSessionId || 'unknown') : null,
           payload: {
             bookingCode,
             customerName:  booking.customerName,
@@ -1404,6 +1461,86 @@ async function handleCancelPending(req, res, body) {
   }
 
   return res.status(200).json({ ok: true });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// test_simulate_payment — the default way a test booking gets paid
+// ════════════════════════════════════════════════════════════════════
+// Settling a test booking through the real slip route would write into
+// slip_registry, which is shared with pass purchases and never expires, so a
+// test would permanently burn a real slip hash. This route reaches the same
+// end state — paid + confirmed — without an upload, an external call or a
+// notification, and marks how it got there.
+//
+// Authority is the test session, twice over: the dispatcher resolved it before
+// this runs, and the booking must name that same session. A live booking can
+// never be settled here, whatever is sent.
+async function handleTestSimulatePayment(res, body) {
+  const session = testSessionOf(body);
+  if (!session) {
+    return res.status(403).json({ ok: false, code: 'TEST_SESSION_REQUIRED', error: 'A test session is required' });
+  }
+  const bookingId = typeof body.bookingId === 'string' ? body.bookingId.trim() : '';
+  if (!bookingId) return res.status(400).json({ ok: false, code: 'VALIDATION', error: 'bookingId is required' });
+
+  const amountOverride = Number(body.amount);
+  const hasOverride = Number.isFinite(amountOverride) && amountOverride >= 0;
+
+  let db;
+  try { db = getAdminDb(); }
+  catch (e) { console.error('[test_simulate_payment] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
+
+  const bookingRef = db.collection('bookings').doc(bookingId);
+  try {
+    const result = await db.runTransaction(async (t) => {
+      const snap = await t.get(bookingRef);
+      if (!snap.exists) throw new Error('BOOKING_MISSING');
+      const b = snap.data();
+      // The booking itself has to claim this session. isTest alone is not
+      // enough: one session must not be able to settle another's bookings.
+      if (!belongsToTestSession(b, session.testSessionId)) throw new Error('NOT_THIS_SESSION');
+      if (b.bookingStatus === 'cancelled') throw new Error('CANCELLED');
+      if (b.paymentStatus === 'paid') {
+        return { alreadyPaid: true, bookingCode: b.bookingCode || null, price: Number(b.price) || 0 };
+      }
+      if (b.paymentStatus === 'package') throw new Error('PACKAGE_BOOKING');
+
+      const price = hasOverride ? Math.round(amountOverride) : (Number(b.price) || 0);
+      t.update(bookingRef, {
+        paymentStatus: 'paid',
+        bookingStatus: 'confirmed',
+        status: 'confirmed',
+        price, amount: price, finalPrice: price,
+        paymentSimulated: true,
+        paymentSimulatedAt: FieldValue.serverTimestamp(),
+        paymentSimulatedBy: session.createdBy || null,
+        // Deliberately NOT paymentVerification: nothing was verified, and a
+        // report or an admin screen reading that field should not be told a
+        // slip was checked when none existed.
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return { alreadyPaid: false, bookingCode: b.bookingCode || null, price };
+    });
+
+    console.log(`[test_simulate_payment] ${result.bookingCode} session:${session.testSessionId} paid:${result.price}`);
+    return res.status(200).json({
+      ok: true,
+      simulated: true,
+      testSessionId: session.testSessionId,
+      alreadyPaid: result.alreadyPaid,
+      booking: { id: bookingId, bookingCode: result.bookingCode, paymentStatus: 'paid', bookingStatus: 'confirmed', price: result.price },
+    });
+  } catch (e) {
+    const map = {
+      BOOKING_MISSING: [404, 'Booking not found'],
+      NOT_THIS_SESSION: [403, 'Booking does not belong to this test session'],
+      CANCELLED: [409, 'Booking is cancelled'],
+      PACKAGE_BOOKING: [409, 'Package bookings are already settled by their pass'],
+    };
+    const [status, error] = map[e.message] || [500, 'Could not simulate payment'];
+    if (status === 500) console.error('[test_simulate_payment]', e.message);
+    return res.status(status).json({ ok: false, code: e.message, error });
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1618,6 +1755,20 @@ async function handleCreatePassBooking(res, body) {
 
   const bookingRef = db.collection('bookings').doc();
   const segRefs    = segs.map(x => db.collection('booking_slots').doc(slotIdOf(date, x.start)));
+
+  // Same inventory rule as the single-use path: a test session spends real
+  // package minutes against real slot claims, but only within the slots it
+  // reserved out of public sale.
+  const testSession = testSessionOf(body);
+  if (testSession) {
+    const scope = slotsWithinTestSession(testSession, segRefs.map(r => r.id));
+    if (!scope.ok) {
+      return res.status(403).json({
+        ok: false, code: 'TEST_SLOT_OUT_OF_SCOPE',
+        error: `Test session ${testSession.testSessionId} has not reserved: ${scope.outside.join(', ') || '(no slots requested)'}`,
+      });
+    }
+  }
   const cellRefs   = touchedHours.flatMap(H => [
     db.collection('booking_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:00`)),
     db.collection('booking_slots').doc(slotIdOf(date, `${String(H).padStart(2, '0')}:30`)),
@@ -1653,7 +1804,7 @@ async function handleCreatePassBooking(res, body) {
       const pkgSnap   = snaps[snaps.length - 1];
 
       for (const a of availSnaps) {
-        if (!a.exists || a.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
+        if (!a.exists || !availableToSession(a.data(), testSession)) throw new Error('SLOT_NOT_OPEN');
       }
       // Same cell-level conflict model as handleCreate: legacy docs with no
       // slotSpanMinutes are full-hour by definition.
@@ -1692,6 +1843,7 @@ async function handleCreatePassBooking(res, body) {
       });
 
       t.set(bookingRef, {
+        ...testStamp(testSession),
         bookingCode, resourceId: RESOURCE_ID, branchId: DEFAULT_BRANCH_ID,
         bookingSlotIds: segRefs.map(r => r.id),
         bookingType: pkg.packageName || 'Package Booking',

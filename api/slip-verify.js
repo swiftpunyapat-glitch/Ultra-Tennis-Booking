@@ -47,6 +47,7 @@ import {
   GUEST_BOOKING_ID_MAX_LENGTH, GUEST_TOKEN_MAX_LENGTH, isValidIdempotencyKey,
 } from './_lib/firebase-admin.js';
 import { sendAndLog, loadActiveAdmins, loadNotificationFlags } from './_lib/notify.js';
+import { isTestBooking } from './_lib/test-session.js';
 import { FieldValue } from 'firebase-admin/firestore';
 import { isCoachAddonV2Booking } from './_lib/coach-addon-v2.js';
 import { releaseCoachAddonV2Hold } from './_lib/coach-addon-v2-store.js';
@@ -573,6 +574,18 @@ export default async function handler(req, res) {
 
   if (booking.bookingCode !== bookingCode) {
     return res.status(403).json({ ok: false, error: 'bookingCode mismatch' });
+  }
+  // Test Mode uses the simulated payment path. Verifying a slip here would
+  // write the slip's hash into slip_registry, which is shared with pass
+  // purchases and has no expiry — a test would permanently mark a real slip as
+  // already used. Exercising this route for real is an integration test run
+  // against the emulator, not something a test session does against live data.
+  if (isTestBooking(booking)) {
+    return res.status(409).json({
+      ok: false, code: 'TEST_MODE_SLIP_BLOCKED',
+      testSessionId: booking.testSessionId || null,
+      error: 'Test bookings settle through the simulated payment path; slip verification is excluded to keep slip_registry clean',
+    });
   }
   if (booking.bookingStatus === 'cancelled') {
     return res.status(200).json({ ok: true, skipped: 'cancelled' });

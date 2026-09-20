@@ -27,6 +27,16 @@
 // ════════════════════════════════════════════════════════════════════
 
 import { checkInternalSecret, sendAndLog, loadActiveAdmins, loadNotificationFlags, VALID_TYPES } from "./_lib/notify.js";
+import { getAdminDb } from "./_lib/firebase-admin.js";
+import { testSessionIdForBookingCode } from "./_lib/test-session.js";
+
+// This route is reachable from a page, so nothing it is handed can say
+// whether a booking is a test. The stored booking decides, and a lookup
+// failure suppresses rather than sends — see testSessionIdForBookingCode.
+async function testSessionFor(bookingCode) {
+  try { return await testSessionIdForBookingCode(getAdminDb(), bookingCode); }
+  catch (e) { console.error("[/api/line-notify] test lookup failed:", e); return null; }
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -70,6 +80,7 @@ async function pushToUser(res, body) {
       lineUserId,
       bookingCode,
       payload: body,
+      testSessionId: await testSessionFor(bookingCode),
     });
     return res.status(200).json(result);
   } catch (e) {
@@ -152,6 +163,9 @@ async function notifyAdmins(res, body) {
   const safeSuffix = eventSuffix
     ? `_${String(eventSuffix).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 30)}`
     : '';
+  // Resolved once for the whole fan-out: every recipient is being told about
+  // the same booking, so one lookup settles it for all of them.
+  const broadcastTestSessionId = await testSessionFor(bookingCode);
   const results = await Promise.all(admins.map(async (admin) => {
     const eventId = `${bookingCode}_${type}_${admin.lineUserId}${safeSuffix}`;
     try {
@@ -162,6 +176,7 @@ async function notifyAdmins(res, body) {
         lineUserId: admin.lineUserId,
         bookingCode,
         payload: body,
+        testSessionId: broadcastTestSessionId,
       });
       return {
         adminLineUserId: admin.lineUserId,

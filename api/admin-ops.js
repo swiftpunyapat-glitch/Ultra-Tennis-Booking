@@ -35,6 +35,11 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { randomUUID } from 'node:crypto';
 import { buildCustomerIdentityDryRun } from './_lib/customer-identity.js';
 import { ultraPassUsageValue } from '../package-usage.js';
+import { isLiveBooking } from '../test-booking.js';
+import {
+  createTestSessionToken, newTestSessionId, testSessionTtlHours,
+  TEST_SESSION_COLLECTION, TEST_SLOT_STATUS,
+} from './_lib/test-session.js';
 import {
   parseCoachProfilePhotoDataUrl,
   coachProfilePhotoObjectPath,
@@ -55,6 +60,7 @@ const VALID_ACTIONS = [
   'coach_availability_get', 'coach_availability_set', 'coach_availability_batch_set', 'coach_update_rates',
   'shop_open_days', 'coach_delete',
   'admin_read', 'identity_dry_run',
+  'test_session_start', 'test_session_end', 'test_session_list',
 ];
 
 // Coach V2: actions a coach may call with a LINE-derived Firebase ID token
@@ -271,6 +277,9 @@ export default async function handler(req, res) {
     case 'coach_delete':           return handleCoachDelete(res, session, body);
     case 'admin_read':             return handleAdminRead(res, session, body);
     case 'identity_dry_run':       return handleIdentityDryRun(res, session, body);
+    case 'test_session_start':     return handleTestSessionStart(res, session, body);
+    case 'test_session_end':       return handleTestSessionEnd(res, session, body);
+    case 'test_session_list':      return handleTestSessionList(res, session);
     default:
       // Unreachable (VALID_ACTIONS gate above) — defensive.
       return res.status(400).json({ ok: false, error: `Unknown action "${action}"` });
@@ -784,6 +793,10 @@ async function handleDashboard(res, session, body) {
 
     bkSnap.docs.forEach(d => {
       const bk = d.data();
+      // Test Mode bookings hold real slots and are meant to stay visible in the
+      // operational lists, but they are not business activity — no count, no
+      // revenue, and no effect on utilization.
+      if (!isLiveBooking(bk)) return;
       const b  = bucket(resolveBranchId(bk));
       if (bk.bookingStatus === 'cancelled') { b.cancelledCount++; return; }
       b.bookingsTotal++;
@@ -1023,6 +1036,193 @@ async function handleSlotCloseUnbooked(res, session, body) {
 // slot_toggle — open / reopen / close a single slot. Closing a slot that holds
 // a live booking is refused (409): the grid disables it, and a direct API call
 // must never strand a booking by hiding its availability config.
+// ════════════════════════════════════════════════════════════════════
+// Test Mode — session lifecycle (owner only)
+// ════════════════════════════════════════════════════════════════════
+// Starting a session takes real slots out of public sale and hands back a
+// signed token. Everything else about Test Mode keys off that: a booking is a
+// test because a request carried this token and the session behind it was
+// still active, never because anyone said so.
+//
+// The pre-test state of every slot is snapshotted into the session document
+// here, because it cannot be reconstructed later — once the status has been
+// overwritten there is no record of whether the slot was open, closed, or had
+// never existed. Purge restores from this snapshot.
+function testSlotIdsForHour(date, hour) {
+  const hh = slotPad(hour);
+  return [`${SLOT_RESOURCE_ID}_${date}_${hh}00`, `${SLOT_RESOURCE_ID}_${date}_${hh}30`];
+}
+
+async function handleTestSessionStart(res, session, body) {
+  if (!requireRole(session, 'owner')) {
+    return res.status(403).json({ ok: false, error: 'Only the owner can start a test session' });
+  }
+  const date = typeof body.date === 'string' ? body.date.trim() : '';
+  if (!DATE_RE.test(date)) return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
+
+  const hours = Array.isArray(body.hours) ? [...new Set(body.hours.map(Number))] : [];
+  if (!hours.length || hours.some(h => !Number.isInteger(h) || h < 0 || h > 23)) {
+    return res.status(400).json({ ok: false, error: 'hours must be a non-empty array of integers 0-23' });
+  }
+  if (hours.length > 8) return res.status(400).json({ ok: false, error: 'A test session may reserve at most 8 hours' });
+
+  const db = getDbOr500(res); if (!db) return;
+  const testSessionId = newTestSessionId();
+  const ttlHours = testSessionTtlHours(body.ttlHours);
+  const expiresAtMs = Date.now() + ttlHours * 3_600_000;
+  const slotRefs = hours.map(h => db.collection('available_slots').doc(slotDocId(date, h)));
+  const sessionRef = db.collection(TEST_SESSION_COLLECTION).doc(testSessionId);
+  const reservedSlotIds = hours.flatMap(h => testSlotIdsForHour(date, h));
+
+  let reservedCount;
+  try {
+    reservedCount = await db.runTransaction(async (t) => {
+      const snaps = await Promise.all(slotRefs.map(r => t.get(r)));
+      const previous = [];
+
+      snaps.forEach((snap, i) => {
+        const id = slotRefs[i].id;
+        const data = snap.exists ? snap.data() : null;
+        // Never take a slot a real customer already holds: the test would sit
+        // on top of a live booking and purge could not put that back.
+        if (data && isLiveBookedSlot(data)) throw new Error(`SLOT_LIVE:${id}`);
+        if (data?.status === TEST_SLOT_STATUS) throw new Error(`SLOT_ALREADY_TEST:${id}`);
+        previous.push({
+          id,
+          existed: snap.exists,
+          status: data?.status ?? null,
+          openedAt: data?.openedAt ?? null,
+          openedBy: data?.openedBy ?? null,
+          closedAt: data?.closedAt ?? null,
+          closedBy: data?.closedBy ?? null,
+        });
+      });
+
+      snaps.forEach((snap, i) => {
+        const hour = hours[i];
+        t.set(slotRefs[i], {
+          resourceId: SLOT_RESOURCE_ID, branchId: DEFAULT_BRANCH_ID, date,
+          startTime: slotStartStr(hour), endTime: slotEndStr(hour),
+          status: TEST_SLOT_STATUS,
+          testSessionId,
+          testReservedAt: FieldValue.serverTimestamp(),
+          testReservedBy: session.name,
+        }, { merge: true });
+      });
+
+      t.set(sessionRef, {
+        status: 'active',
+        createdBy: session.name,
+        createdAt: FieldValue.serverTimestamp(),
+        expiresAt: Timestamp.fromMillis(expiresAtMs),
+        expiresAtMs,
+        branchId: DEFAULT_BRANCH_ID,
+        resourceId: SLOT_RESOURCE_ID,
+        date, hours,
+        // What a booking request may claim: both half-hour ids of every
+        // reserved hour, so 30- and 60-minute bookings are each in scope.
+        reservedSlotIds,
+        availableSlotIds: slotRefs.map(r => r.id),
+        slotRestore: previous,
+        simulatePayments: body.simulatePayments !== false,
+        note: typeof body.note === 'string' ? body.note.slice(0, 300) : '',
+      });
+
+      return previous.length;
+    });
+  } catch (e) {
+    const [code, id] = String(e.message).split(':');
+    if (code === 'SLOT_LIVE') return res.status(409).json({ ok: false, code, error: `Slot ${id} has a live booking` });
+    if (code === 'SLOT_ALREADY_TEST') return res.status(409).json({ ok: false, code, error: `Slot ${id} is already held by another test session` });
+    console.error('[test_session_start]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to start test session' });
+  }
+
+  await writeAuditLog(db, {
+    actor: session.name, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+    action: 'test_session_start', targetId: testSessionId,
+    after: { date, hours, ttlHours, reservedSlots: reservedCount },
+  });
+
+  let token;
+  try { token = createTestSessionToken(testSessionId, expiresAtMs); }
+  catch (e) {
+    console.error('[test_session_start] token:', e.message);
+    return res.status(500).json({ ok: false, error: 'Test session created but its token could not be signed' });
+  }
+
+  return res.status(200).json({ ok: true, testSessionId, token, expiresAtMs, date, hours, reservedSlotIds });
+}
+
+// Ending a session revokes it at once — resolveTestSession re-reads this
+// document on every request, so the token stops working the moment this lands.
+// The slots stay reserved on purpose: the test bookings still sit on them, and
+// returning them to public sale while occupied would resell a taken slot.
+// Purge is what restores them.
+async function handleTestSessionEnd(res, session, body) {
+  if (!requireRole(session, 'owner')) {
+    return res.status(403).json({ ok: false, error: 'Only the owner can end a test session' });
+  }
+  const testSessionId = typeof body.testSessionId === 'string' ? body.testSessionId.trim() : '';
+  if (!testSessionId) return res.status(400).json({ ok: false, error: 'testSessionId is required' });
+
+  const db = getDbOr500(res); if (!db) return;
+  const ref = db.collection(TEST_SESSION_COLLECTION).doc(testSessionId);
+
+  try {
+    const outcome = await db.runTransaction(async (t) => {
+      const snap = await t.get(ref);
+      if (!snap.exists) throw new Error('NOT_FOUND');
+      const data = snap.data();
+      if (data.status !== 'active') return { alreadyEnded: true, status: data.status };
+      t.update(ref, { status: 'ended', endedAt: FieldValue.serverTimestamp(), endedBy: session.name });
+      return { alreadyEnded: false, status: 'ended' };
+    });
+
+    await writeAuditLog(db, {
+      actor: session.name, actorRole: session.role, branchId: DEFAULT_BRANCH_ID,
+      action: 'test_session_end', targetId: testSessionId, after: outcome,
+    });
+    return res.status(200).json({
+      ok: true, testSessionId, ...outcome,
+      note: 'Slots stay reserved until the session is purged',
+    });
+  } catch (e) {
+    if (e.message === 'NOT_FOUND') return res.status(404).json({ ok: false, error: 'Test session not found' });
+    console.error('[test_session_end]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to end test session' });
+  }
+}
+
+async function handleTestSessionList(res, session) {
+  if (!requireRole(session, 'owner', 'ultra_admin')) {
+    return res.status(403).json({ ok: false, error: 'Role cannot list test sessions' });
+  }
+  const db = getDbOr500(res); if (!db) return;
+  try {
+    const snap = await db.collection(TEST_SESSION_COLLECTION).orderBy('createdAt', 'desc').limit(50).get();
+    return res.status(200).json({
+      ok: true,
+      sessions: snap.docs.map(d => {
+        const data = d.data();
+        return {
+          testSessionId: d.id,
+          status: data.status ?? null,
+          createdBy: data.createdBy ?? null,
+          date: data.date ?? null,
+          hours: data.hours ?? [],
+          reservedSlotIds: data.reservedSlotIds ?? [],
+          expiresAtMs: data.expiresAtMs ?? null,
+          note: data.note ?? '',
+        };
+      }),
+    });
+  } catch (e) {
+    console.error('[test_session_list]', e.message);
+    return res.status(500).json({ ok: false, error: 'Failed to list test sessions' });
+  }
+}
+
 async function handleSlotToggle(res, session, body) {
   if (slotGuardSent(res, session)) return;
 
