@@ -534,6 +534,8 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
+import { isUltraPassUsage, ultraPassRate } from "./package-usage.js?v=20260920-pkgusage1";
+
 const $ = id => document.getElementById(id);
 
 const ADMIN_NAMES = ["Art","Aoy","BaiMon","Ano","Stam"];
@@ -757,12 +759,7 @@ function renderSummaryCards() {
   );
   // Package Usage: Ultra Pass bookings — value is notional, NOT cash revenue.
   // Pass sales are recorded as Manual Income when the pass was sold.
-  // Include legacy bookings that have bookingType but no packageType field.
-  const pkgBookings = allBookings.filter(b =>
-    b.paymentStatus === "package" &&
-    (b.packageType === "ultra_10" || b.packageType === "ultra_20" ||
-     b.bookingType === "Ultra Pass 1" || b.bookingType === "Ultra Pass 2")
-  );
+  const pkgBookings = allBookings.filter(isUltraPassUsage);
 
   const bookRev  = paidBookings.reduce((s, b) => s + (Number(b.price) || 0), 0);
   const manInc   = allManualIncome.reduce((s, i) => s + (Number(i.amount) || 0), 0);
@@ -776,10 +773,7 @@ function renderSummaryCards() {
   // computed rate × duration for bookings set before the field was introduced.
   const pkgValue = pkgBookings.reduce((s, b) => {
     if (b.packageUsageValueTotal) return s + Number(b.packageUsageValueTotal);
-    const hrs = calcHours(b.startTime, b.endTime);
-    if (b.bookingType === "Ultra Pass 1") return s + hrs * 310;
-    if (b.bookingType === "Ultra Pass 2") return s + hrs * 295;
-    return s;
+    return s + calcHours(b.startTime, b.endTime) * ultraPassRate(b);
   }, 0);
 
   $("cRevTotal").textContent  = baht(totalRev);
@@ -854,18 +848,13 @@ function renderBookingTable() {
   // for legacy bookings that pre-date the packageUsageValueTotal field.
   function pkgUsageVal(b) {
     if (b.packageUsageValueTotal) return Number(b.packageUsageValueTotal);
-    const h = calcHours(b.startTime, b.endTime);
-    if (b.packageType === "ultra_10" || b.bookingType === "Ultra Pass 1") return h * 310;
-    if (b.packageType === "ultra_20" || b.bookingType === "Ultra Pass 2") return h * 295;
-    return 0;
+    return calcHours(b.startTime, b.endTime) * ultraPassRate(b);
   }
 
   const rows = allBookings.map(b => {
     const hrs   = calcHours(b.startTime, b.endTime);
     const isPaid = b.paymentStatus === "paid";
-    const isUltraPkg = b.paymentStatus === "package" &&
-      (b.packageType === "ultra_10" || b.packageType === "ultra_20" ||
-       b.bookingType === "Ultra Pass 1" || b.bookingType === "Ultra Pass 2");
+    const isUltraPkg = isUltraPassUsage(b);
     const ps     = b.paymentStatus || "—";
     const psBadge = `<span class="sp sp-${esc(ps)}">${esc(ps)}</span>`;
     const source = abbrevSource(b.bookingType || b.source || "—");
@@ -898,12 +887,7 @@ function renderBookingTable() {
     .reduce((s,b)=>s+calcHours(b.startTime,b.endTime),0);
 
   // Package usage rows (Ultra Pass) — notional value, not cash.
-  // Include legacy bookings using bookingType without packageType.
-  const pkgRows = allBookings.filter(b =>
-    b.paymentStatus === "package" &&
-    (b.packageType === "ultra_10" || b.packageType === "ultra_20" ||
-     b.bookingType === "Ultra Pass 1" || b.bookingType === "Ultra Pass 2")
-  );
+  const pkgRows = allBookings.filter(isUltraPassUsage);
   const pkgHrs  = pkgRows.reduce((s,b)=>s+calcHours(b.startTime,b.endTime),0);
   const pkgVal  = pkgRows.reduce((s,b)=>s+pkgUsageVal(b),0);
   const pkgFooter = pkgRows.length ? `<tr class="tot-row" style="color:#a78bfa">
@@ -1090,11 +1074,7 @@ function renderMonthlyReport() {
     (b.paymentStatus === "unpaid" || b.paymentStatus === "pending_review") &&
     b.bookingStatus !== "cancelled"
   );
-  const packageBookings = allBookings.filter(b =>
-    b.paymentStatus === "package" &&
-    (b.packageType === "ultra_10" || b.packageType === "ultra_20" ||
-     b.bookingType === "Ultra Pass 1" || b.bookingType === "Ultra Pass 2")
-  );
+  const packageBookings = allBookings.filter(isUltraPassUsage);
 
   const bookingRevenue = paidBookings.reduce((sum, b) => sum + (Number(b.price) || 0), 0);
   const manualIncome = allManualIncome.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
@@ -1105,10 +1085,7 @@ function renderMonthlyReport() {
   const unpaidAmount = unpaidBookings.reduce((sum, b) => sum + (Number(b.price) || 0), 0);
   const packageValue = packageBookings.reduce((sum, b) => {
     if (b.packageUsageValueTotal) return sum + Number(b.packageUsageValueTotal);
-    const hours = calcHours(b.startTime, b.endTime);
-    if (b.packageType === "ultra_10" || b.bookingType === "Ultra Pass 1") return sum + hours * 310;
-    if (b.packageType === "ultra_20" || b.bookingType === "Ultra Pass 2") return sum + hours * 295;
-    return sum;
+    return sum + calcHours(b.startTime, b.endTime) * ultraPassRate(b);
   }, 0);
 
   const categoryTotals = {};
