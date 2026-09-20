@@ -64,6 +64,7 @@ import { FieldValue }          from 'firebase-admin/firestore';
 import { computeQuote }        from './_lib/pricing.js';
 import { redeemVoucherUpdate, releaseVoucherUpdate } from './_lib/voucher-engine.js';
 import { isCoachAddonV2Booking } from './_lib/coach-addon-v2.js';
+import { samePackageType }      from './_lib/package-type.js';
 import { confirmCoachAddonV2Payment, releaseCoachAddonV2Hold } from './_lib/coach-addon-v2-store.js';
 
 // ── Shared constants ──────────────────────────────────────────────
@@ -208,7 +209,7 @@ function passRestoreMutation(pkg, booking) {
   const type = String(booking?.packageType || booking?.usedPackageType || pkg?.packageType || '');
   const used = packageMinutesUsed(booking);
   if (!Number.isInteger(used) || used <= 0) throw new Error('PASS_RESTORE_INVALID');
-  if (pkg?.packageType && type && String(pkg.packageType) !== type) throw new Error('PASS_RESTORE_MISMATCH');
+  if (pkg?.packageType && type && !samePackageType(pkg.packageType, type)) throw new Error('PASS_RESTORE_MISMATCH');
 
   const update = { updatedAt: FieldValue.serverTimestamp() };
   const remaining = Number(pkg?.remainingMinutes);
@@ -838,7 +839,10 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
         status:                   requestedBookingStatus || booking.bookingStatus || 'confirmed',
         paymentStatus:            'package',
         bookingType:              'Ultra Pass 1',
-        packageType:              'ultra_10',
+        // Catalog key, matching what customer_packages stores. Writing the
+        // legacy alias here used to desync the booking from its pass and made
+        // a later cancellation fail on PASS_RESTORE_MISMATCH.
+        packageType:              'ultra_pass_10',
         packageUsageValuePerHour: 310,
         packageUsageValueTotal:   dur * 310,
         price:                    0,
@@ -853,7 +857,7 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
         status:                   requestedBookingStatus || booking.bookingStatus || 'confirmed',
         paymentStatus:            'package',
         bookingType:              'Ultra Pass 2',
-        packageType:              'ultra_20',
+        packageType:              'ultra_pass_20',
         packageUsageValuePerHour: 295,
         packageUsageValueTotal:   dur * 295,
         price:                    0,
