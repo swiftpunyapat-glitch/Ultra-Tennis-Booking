@@ -558,6 +558,7 @@
       <button class="fbtn" data-filter="pending_reschedule">Pending Reschedule</button>
       <button class="fbtn" data-filter="cancelled">Cancelled</button>
       <button class="rfbtn" id="refreshBtn" style="margin-left:auto">↻ Refresh</button>
+      <button class="rfbtn" id="testHistoryBtn" style="display:none">🧪 ประวัติ Test</button>
     </div>
     <div class="filters" style="border-top:0">
       <span style="font-size:.7rem;color:var(--m);font-weight:800;text-transform:uppercase;letter-spacing:.4px;align-self:center;margin-right:2px">⬇ Export CSV</span>
@@ -1512,6 +1513,19 @@ function reviveAdminValue(value){
   return value;
 }
 async function adminRead(resource,options={}){
+  if(resource==="bookings"){
+    const items=[];let cursor;const target=options.limit||500;
+    do{
+      const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"admin_read",resource,...options,...(cursor?{cursorBookingId:cursor}:{})})});
+      const data=await res.json().catch(()=>({}));
+      if(!res.ok||!data.ok)throw new Error(data.error||`HTTP ${res.status}`);
+      items.push(...(data.items||[]));
+      const next=data.nextCursorId;
+      if(!next||next===cursor)break;
+      cursor=next;
+    }while(items.length<target);
+    return items.slice(0,target).map(reviveAdminValue);
+  }
   const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"admin_read",resource,...options})});
   const data=await res.json().catch(()=>({}));
   if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
@@ -1701,6 +1715,8 @@ $("adminModeSwitch").addEventListener("click",()=>{
   if(!canSwitchOwnerView())return;
   adminViewMode=adminViewMode==="owner"?"staff":"owner";
   storeAdminViewPreference();applyAdminViewMode();
+  renderBookings();
+  if(!canMarkBookingTest())$("testHistoryDialog")?.close();
 });
 $("adminHubBar").addEventListener("click",event=>{
   const button=event.target.closest("[data-admin-hub]");if(button)openAdminHub(button.dataset.adminHub);
@@ -1975,6 +1991,7 @@ async function refreshAdminCourts(){
 window.addEventListener("commerce-saved",refreshAdminCourts);
 
 async function loadBookings(){
+  $("testHistoryBtn").style.display=canMarkBookingTest()?"":"none";
   $("bookingsList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading...</p></div>`;
   updateAdminQueueBadges("loading");
   try{
@@ -2004,6 +2021,7 @@ function bookingStatusDisplay(b){
 }
 
 function renderBookings(){
+  $("testHistoryBtn").style.display=canMarkBookingTest()?"":"none";
   renderPendingRescheduleList();  // Pending Reschedule panel is intentionally global (all months).
   renderPaidSummary();
   // Step 1 — view mode filter applied
@@ -2036,6 +2054,7 @@ function renderBookings(){
     if(r)  r.addEventListener("click",()=>openResch(b));
     if(gr) gr.addEventListener("click",()=>retrySyncGcal(b));
     if(d)  d.addEventListener("click",()=>permanentDeleteBooking(b));
+    $("bookingsList").querySelectorAll(`[data-mark-test="${b.id}"]`).forEach(btn=>btn.addEventListener("click",()=>markBookingAsTest(b)));
     const ae=document.querySelector(`[data-acct-edit="${b.id}"]`);
     if(ae) ae.addEventListener("click",()=>openAcctModal(b));
     const rf=document.querySelector(`[data-refund="${b.id}"]`);
@@ -2617,6 +2636,7 @@ function renderPendingTab(){
           <button class="smbtn smg" data-pt-assign="${esc(b.id)}">📅 Assign New Slot</button>
           <button class="bc" style="background:#2d1e00;border-color:var(--warn);color:var(--warn)" data-pt-cancel-pending="${esc(b.id)}">✕ Cancel Pending</button>
           ${currentAdminName==="Art"?`<button class="bc" style="background:#5a0a0a" data-pt-delete="${esc(b.id)}">🗑 Delete Permanently</button>`:""}
+          ${markTestButton(b)}
         </div>
       </div>
     </div>`;
@@ -2636,6 +2656,10 @@ function renderPendingTab(){
   el.querySelectorAll("[data-pt-delete]").forEach(btn=>{
     const bk=pending.find(x=>x.id===btn.dataset.ptDelete);
     if(bk) btn.addEventListener("click",()=>permanentDeleteBooking(bk));
+  });
+  el.querySelectorAll("[data-mark-test]").forEach(btn=>{
+    const bk=pending.find(x=>x.id===btn.dataset.markTest);
+    if(bk)btn.addEventListener("click",()=>markBookingAsTest(bk));
   });
 }
 
@@ -2721,14 +2745,14 @@ function cardHTML(b){
     :"";
   const rfBtn=canRefund?`<button class="bc" style="background:#2d0a0a;border-color:var(--dan);color:var(--dan)" data-refund="${esc(b.id)}">↩ Refund</button>`:"";
   const actions=isCancelled
-    ?`<button class="bdone">✗ Cancelled</button>${rfBtn}${artAcctEdit}${artDelete}`
+    ?`<button class="bdone">✗ Cancelled</button>${rfBtn}${artAcctEdit}${artDelete}${markTestButton(b)}`
     :`${canMarkPaid?`<button class="bp" data-paid="${esc(b.id)}">✓ Mark as Paid</button>`:""}
       ${canMarkUnpaid?`<button class="bp" data-markpaid="${esc(b.id)}">บันทึกจ่ายแล้ว</button>`:""}
       ${canConfirmNoSlip?`<button class="bp" data-paid-noslip="${esc(b.id)}">✅ Confirm Paid (No Slip)</button>`:""}
       ${canResch?`<button class="br" data-resch="${esc(b.id)}">📅 Reschedule</button>`:""}
       ${canCancel?`<button class="bc" data-cancel="${esc(b.id)}">✗ Cancel</button>`:""}
       <button class="br" data-assign-coach="${esc(b.id)}">👤 ${b.coachName?`Coach: ${esc(b.coachName)}`:"Assign Coach"}</button>
-      ${rfBtn}${artAcctEdit}${artDelete}`;
+      ${rfBtn}${artAcctEdit}${artDelete}${markTestButton(b)}`;
 
   // ── Package usage value row ───────────────────────────────────────
   const isUltraPkg=isUltraPassUsage(b);
@@ -2935,6 +2959,46 @@ async function cancelBooking(b){
 // Deletes: Google Calendar event → booking_slot doc → booking doc.
 // Two-step confirmation required. Backend enforces the Art-only restriction
 // independently of the frontend visibility gate.
+function canMarkBookingTest(){return currentAdminName==="Art"&&currentAdminRole==="owner"&&adminViewMode==="owner";}
+function markTestButton(b){return canMarkBookingTest()?`<button class="br" data-mark-test="${esc(b.id)}">🧪 เปลี่ยนเป็น Test</button>`:"";}
+async function markBookingAsTest(b,{retry=false}={}){
+  if(!canMarkBookingTest())return;
+  const reason=retry?b.testConversion?.reason:prompt(
+    `เปลี่ยน ${b.bookingCode||b.id} เป็นรายการทดสอบ?\n${b.customerName||""} · ${b.date||""} ${b.startTime||""}–${b.endTime||""}\n\nระบบจะคืนสล็อต ตัดยอดบัญชี ยกเลิกเอกสารที่ผูกกับรายการ และไม่นับในหน้า Admin ปกติ\nคืนสิทธิ์คูปอง/แพ็กเกจที่ใช้ พร้อมเก็บประวัติไว้\nไม่มีการโอนเงินคืนจริง และไม่สามารถเปลี่ยนกลับจากหน้านี้\n\nระบุเหตุผลเพื่อยืนยัน:`,"ทดสอบระบบ");
+  if(!reason?.trim())return;
+  const buttons=[...document.querySelectorAll(`[data-mark-test="${b.id}"], [data-test-retry="${b.id}"]`)];
+  buttons.forEach(btn=>btn.disabled=true);
+  try{
+    const res=await courtFetch("/api/admin-edit-booking-accounting",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operation:"mark_booking_test",bookingId:b.id,reason})});
+    const data=await res.json();
+    if(!res.ok||!data.ok)throw new Error(data.error||"เปลี่ยนเป็น Test ไม่สำเร็จ");
+    showToast(data.calendarPending?"เปลี่ยนเป็น Test แล้ว แต่ลบ Calendar ยังไม่สำเร็จ — กดลองใหม่ได้ในประวัติ Test":"เปลี่ยนเป็น Test แล้ว คืนสล็อตและตัดออกจากยอดปกติเรียบร้อย",data.calendarPending);
+    await loadBookings();
+    if($("tabPending").style.display!=="none")renderPendingTab();
+    await Promise.allSettled([loadDailyView(),...($("viewDate").value?[loadSlotGrid($("viewDate").value)]:[])]);
+    if(retry)await showTestHistory();
+  }catch(e){showToast(e.message||"เชื่อมต่อไม่สำเร็จ กรุณาลองใหม่",true);}
+  finally{buttons.forEach(btn=>btn.disabled=false);}
+}
+async function showTestHistory(){
+  if(!canMarkBookingTest())return;
+  let dialog=$("testHistoryDialog");
+  if(!dialog){
+    dialog=document.createElement("dialog");dialog.id="testHistoryDialog";
+    dialog.style.cssText="background:var(--bg,#10151c);color:var(--tx,#eee);border:1px solid #555;border-radius:12px;width:min(720px,90vw);max-height:80vh";
+    document.body.appendChild(dialog);
+  }
+  dialog.innerHTML='<button class="rfbtn" data-close-test>ปิด</button><h3>🧪 ประวัติ Test</h3><p>รายการเหล่านี้ไม่นับในยอดจองและบัญชีปกติ</p><div data-test-items>กำลังโหลด...</div>';
+  dialog.querySelector('[data-close-test]').onclick=()=>dialog.close();
+  if(!dialog.open)dialog.showModal();
+  try{
+    const items=await adminRead("bookings",{limit:500,testsOnly:true});
+    dialog.querySelector('[data-test-items]').innerHTML=items.length?items.map(b=>`<div style="border-top:1px solid #555;padding:12px 0"><strong>${esc(b.bookingCode||b.id)}</strong> · ${esc(b.customerName||"—")}<br>${esc(b.date||"")} ${esc(b.startTime||"")}–${esc(b.endTime||"")}<br>${esc(b.testConversion?.reason||"Test session")} · ${esc(b.testConversion?.actor||"—")}${b.testCalendarCleanup==="pending"?`<br><button class="br" data-test-retry="${esc(b.id)}">ลองลบ Calendar อีกครั้ง</button>`:""}</div>`).join(""):"ยังไม่มีรายการทดสอบ";
+    dialog.querySelectorAll('[data-test-retry]').forEach(btn=>btn.onclick=()=>markBookingAsTest(items.find(b=>b.id===btn.dataset.testRetry),{retry:true}));
+  }catch(e){dialog.querySelector('[data-test-items]').textContent=e.message;}
+}
+$("testHistoryBtn").addEventListener("click",showTestHistory);
+
 async function permanentDeleteBooking(b){
   if(currentAdminName!=="Art") return; // frontend guard — backend also enforces
   const step1=confirm(

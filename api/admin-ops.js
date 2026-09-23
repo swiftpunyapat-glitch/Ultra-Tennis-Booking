@@ -305,6 +305,7 @@ const BOOKING_READ_FIELDS = [
   'pendingReschedule','pendingRescheduleStatus','pendingRescheduleFromDate','pendingRescheduleFromStartTime','pendingRescheduleFromEndTime',
   'previousDate','previousStartTime','previousEndTime','cancelReason','cancelledAt','cancelledBy',
   'refundStatus','refundAmount','refundReason','refundMode','accountingType','createdAt','updatedAt','paidAt','confirmedAt',
+  'isTest','testSessionId','testConversion','testCalendarCleanup',
 ];
 const PACKAGE_READ_FIELDS = [
   'branchId','resourceId','lineUserId','lineDisplayName','customerName','customerPhone','customerPhoneNormalized',
@@ -337,17 +338,28 @@ async function handleAdminRead(res, session, body) {
   const db = getDbOr500(res); if (!db) return;
   try {
     if (resource === 'bookings') {
+      const testsOnly = body.testsOnly === true;
+      if (testsOnly && (session.name !== 'Art' || session.role !== 'owner')) {
+        return res.status(403).json({ ok:false, error:'Only Art can view test booking history' });
+      }
       let q = db.collection('bookings').orderBy('createdAt', 'desc');
-      if (typeof body.cursorCreatedAt === 'string') {
+      if (typeof body.cursorBookingId === 'string') {
+        if (!body.cursorBookingId || body.cursorBookingId.includes('/')) return res.status(400).json({ ok:false, error:'Invalid cursorBookingId' });
+        const cursor = await db.collection('bookings').doc(body.cursorBookingId).get();
+        if (!cursor.exists || !cursor.data().createdAt) return res.status(409).json({ ok:false, error:'Booking list changed. Refresh and try again.' });
+        q = q.startAfter(cursor);
+      } else if (typeof body.cursorCreatedAt === 'string') {
         const cursor = new Date(body.cursorCreatedAt);
         if (!Number.isFinite(cursor.getTime())) return res.status(400).json({ ok:false, error:'Invalid cursorCreatedAt' });
         q = q.startAfter(Timestamp.fromDate(cursor));
       }
       const snap = await q.limit(limit).get();
       const scoped = filterToSessionBranches(session, snap.docs.map(d => ({ id:d.id, ...d.data() })));
-      const items = scoped.map(d => projectAdminDoc(d.id, d, BOOKING_READ_FIELDS, { pii, slip }));
+      const items = scoped.filter(d => testsOnly ? !isLiveBooking(d) : isLiveBooking(d))
+        .map(d => projectAdminDoc(d.id, d, BOOKING_READ_FIELDS, { pii, slip }));
       const last = snap.docs.at(-1)?.data()?.createdAt?.toDate?.()?.toISOString?.() ?? null;
-      return res.status(200).json({ ok:true, items, nextCursor: snap.size === limit ? last : null, limit });
+      return res.status(200).json({ ok:true, items, nextCursor: snap.size === limit ? last : null,
+        nextCursorId: snap.size === limit ? snap.docs.at(-1)?.id : null, limit });
     }
     if (resource === 'packages') {
       const snap = await db.collection('customer_packages').limit(limit).get();

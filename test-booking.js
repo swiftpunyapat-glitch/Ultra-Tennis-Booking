@@ -2,8 +2,8 @@
 //
 // A test booking goes through the real booking, transaction and slot-claim
 // path, so it is a booking record like any other and every report would pick
-// it up. Two fields mark it, both written by the server from a verified test
-// session and never from anything a client sent:
+// it up. Two fields mark it, written only by the server from a verified test
+// session or Art's owner-only retrospective action, never public client flags:
 //
 //   isTest: true          — the flag the reports filter on
 //   testSessionId: "..."  — which session owns it, so a purge knows its scope

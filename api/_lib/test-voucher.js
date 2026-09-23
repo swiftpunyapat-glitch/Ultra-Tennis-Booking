@@ -54,6 +54,21 @@ export function revertTestVoucherRedemption(voucher, { booking, bookingId, booki
   if (!belongsToTestSession(booking, sessionId)) {
     return { ok: false, reason: 'booking_not_in_test_session' };
   }
+  return revertOwnedRedemption(voucher, { id, bookingCode, sessionId, timestamp });
+}
+
+// Separate authority from session purging: only the authenticated Art owner
+// may retrospectively reclassify a booking. This does not create a test session.
+export function revertOwnerTestVoucher(voucher, { session, bookingId, bookingCode, timestamp } = {}) {
+  if (session?.name !== 'Art' || session?.role !== 'owner') return { ok: false, reason: 'owner_required' };
+  const id = str(bookingId);
+  if (!id) return { ok: false, reason: 'booking_id_required' };
+  const result = revertOwnedRedemption(voucher, { id, bookingCode, sessionId: null, timestamp });
+  if (result.update) result.update.testRevertedByOwner = session.name;
+  return result;
+}
+
+function revertOwnedRedemption(voucher, { id, bookingCode, sessionId, timestamp }) {
   if (!voucher) return { ok: false, reason: 'voucher_missing' };
 
   // Idempotency, before any state reasoning. A rerun after a successful revert

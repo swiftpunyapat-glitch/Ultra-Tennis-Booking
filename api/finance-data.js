@@ -66,6 +66,7 @@ function documentLockId(docType, linkedType, linkedId) {
 }
 
 function buildDocumentSource(docType, linkedType, linkedId, source) {
+  if (!isLiveBooking(source)) throw httpError(409, 'Cannot issue a document for a test record');
   const amount = Number(source.price ?? source.amount);
   if (!isPositiveNumber(amount)) {
     throw httpError(409, 'Source record must have a positive amount');

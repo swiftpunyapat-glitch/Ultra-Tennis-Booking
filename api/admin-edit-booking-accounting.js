@@ -72,6 +72,7 @@ import { samePackageType }      from './_lib/package-type.js';
 import { belongsToTestSession } from './_lib/test-session.js';
 import { revertTestVoucherRedemption } from './_lib/test-voucher.js';
 import { confirmCoachAddonV2Payment, releaseCoachAddonV2Hold } from './_lib/coach-addon-v2-store.js';
+import { markBookingTest } from './_lib/mark-booking-test.js';
 
 // ── Shared constants ──────────────────────────────────────────────
 const RESOURCE_ID = 'room1';
@@ -352,7 +353,7 @@ async function getCalendarAccessToken() {
 // Returns false on token failure or any other API error.
 // Caller treats false as a hard stop — see handleDeleteBooking Step 1.
 // sendUpdates=all — notifies BaiMon of cancellation.
-async function deleteCalendarEvent(eventId) {
+async function deleteCalendarEvent(eventId, sendUpdates = 'all') {
   const calendarId = process.env.GOOGLE_CALENDAR_ID;
   if (!calendarId || !eventId) return true; // nothing to delete
 
@@ -362,7 +363,7 @@ async function deleteCalendarEvent(eventId) {
     return false;
   }
 
-  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=all`;
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=${sendUpdates}`;
   try {
     const res = await fetch(url, {
       method:  'DELETE',
@@ -439,7 +440,7 @@ export default async function handler(req, res) {
   // ── Route by operation ────────────────────────────────────────────
   const operation = body.operation || 'accounting_edit';
 
-  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach', 'coach_lesson_update', 'coach_payout_paid', 'manual_create', 'manual_quote', 'calendar_sync_fields', 'test_session_purge'];
+  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach', 'coach_lesson_update', 'coach_payout_paid', 'manual_create', 'manual_quote', 'calendar_sync_fields', 'test_session_purge', 'mark_booking_test'];
   if (!VALID_OPERATIONS.includes(operation)) {
     return res.status(400).json({ ok: false, error: `Invalid operation. Must be one of: ${VALID_OPERATIONS.join(', ')}.` });
   }
@@ -457,6 +458,10 @@ export default async function handler(req, res) {
   if (!session) session = verifySession(req);
   if (!session) return res.status(401).json({ ok: false, error: 'Unauthorized' });
   const adminName = session.name;
+
+  if (operation === 'mark_booking_test' && (session.name !== 'Art' || session.role !== 'owner')) {
+    return res.status(403).json({ ok: false, error: 'Only Art (owner) can mark a booking as test' });
+  }
 
   const financialApprovalOperations = new Set([
     'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'coach_payout_paid',
@@ -570,6 +575,30 @@ export default async function handler(req, res) {
   }
 
   // ── Dispatch ──────────────────────────────────────────────────────
+  if (operation === 'mark_booking_test') {
+    try {
+      const result = await markBookingTest(db, { bookingId: bookingRef.id, session, reason: body.reason, bookingSlotIds, passRestoreMutation });
+      // External calendar cleanup is retryable and never rolls back the local
+      // slot/accounting commit. A repeat call only retries this cleanup.
+      let calendarPending = false;
+      if (result.calendarEventId) {
+        try {
+          const removed = Boolean(process.env.GOOGLE_CALENDAR_ID) && await deleteCalendarEvent(result.calendarEventId, 'none');
+          calendarPending = !removed;
+          await bookingRef.update({ testCalendarCleanup: removed ? 'done' : 'pending', ...(removed ? {
+            googleCalendarEventId: null, googleCalendarHtmlLink: null, googleCalendarSyncStatus: 'deleted',
+          } : {}) });
+        } catch { calendarPending = true; }
+      }
+      return res.status(200).json({ ok: true, ...result, calendarPending });
+    } catch (e) {
+      console.error('[mark_booking_test]', e.message);
+      return res.status(e.status || 500).json({ ok: false, error: e.message || 'Failed to mark booking as test' });
+    }
+  }
+  if (booking.testConversion) {
+    return res.status(409).json({ ok: false, error: 'This booking was closed as a test and cannot be edited' });
+  }
   if (operation === 'accounting_edit') {
     return handleAccountingEdit({ req, res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId: bookingId.trim(), body });
   }
@@ -595,16 +624,16 @@ export default async function handler(req, res) {
     return handleRescheduleCancel({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim() });
   }
   if (operation === 'assign_coach') {
-    return handleAssignCoach({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+    return handleAssignCoach({ res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId: bookingId.trim(), body });
   }
   if (operation === 'coach_lesson_update') {
-    return handleCoachLessonUpdate({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+    return handleCoachLessonUpdate({ res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId: bookingId.trim(), body });
   }
   if (operation === 'coach_payout_paid') {
-    return handleCoachPayoutPaid({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+    return handleCoachPayoutPaid({ res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId: bookingId.trim(), body });
   }
   if (operation === 'calendar_sync_fields') {
-    return handleCalendarSyncFields({ res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
+    return handleCalendarSyncFields({ res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId: bookingId.trim(), body });
   }
   return handleMarkPaid({ req, res, adminName, session, db, booking, bookingRef, bookingId: bookingId.trim(), body });
 }
@@ -752,7 +781,7 @@ const CALENDAR_SYNC_STATUSES = new Set([
   'pending_reschedule_removed', 'cancelled',
 ]);
 
-async function handleCalendarSyncFields({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+async function handleCalendarSyncFields({ res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId, body }) {
   const branchId = resolveBranchId(booking);
   if (!hasBranchAccess(session, branchId)) {
     return res.status(403).json({ ok:false, error:'No access to this branch' });
@@ -788,7 +817,7 @@ async function handleCalendarSyncFields({ res, adminName, session, db, booking, 
     ...(hasSyncError ? { googleCalendarSyncError:syncError } : {}),
   };
   try {
-    await bookingRef.update(fields);
+    await bookingRef.update(fields, { lastUpdateTime: bookingSnapshot.updateTime });
     await writeAuditLog(db, {
       actor:adminName, actorRole:session.role, branchId,
       action:'calendar_sync_state_updated', targetId:bookingId,
@@ -2751,7 +2780,7 @@ async function handleRescheduleCancel({ res, adminName, session, db, booking, bo
 // bookingStatus/paymentStatus. Coach actions on the lesson come later via
 // coach.html → coach_lesson_update (Coach Phase 2).
 // ════════════════════════════════════════════════════════════════════
-async function handleAssignCoach({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+async function handleAssignCoach({ res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId, body }) {
   // Admin only — coaches cannot assign themselves.
   if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
     return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
@@ -2783,7 +2812,7 @@ async function handleAssignCoach({ res, adminName, session, db, booking, booking
         coachAssignedBy: null,
         lessonUpdatedAt: FieldValue.serverTimestamp(),
         updatedAt:       FieldValue.serverTimestamp(),
-      });
+      }, { lastUpdateTime: bookingSnapshot.updateTime });
     } catch (e) {
       console.error('[assign_coach] unassign:', e.message);
       return res.status(500).json({ ok: false, error: 'Failed to unassign coach' });
@@ -2824,7 +2853,7 @@ async function handleAssignCoach({ res, adminName, session, db, booking, booking
       coachAssignedBy: adminName,
       lessonUpdatedAt: FieldValue.serverTimestamp(),
       updatedAt:       FieldValue.serverTimestamp(),
-    });
+    }, { lastUpdateTime: bookingSnapshot.updateTime });
   } catch (e) {
     console.error('[assign_coach] write:', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to assign coach' });
@@ -2844,7 +2873,7 @@ async function handleAssignCoach({ res, adminName, session, db, booking, booking
 // lesson lifecycle: check_in / complete / no_show / note. Tracks a SEPARATE
 // `lessonStatus` field — NEVER touches bookingStatus/paymentStatus.
 // ════════════════════════════════════════════════════════════════════
-async function handleCoachLessonUpdate({ res, session, db, booking, bookingRef, bookingId, body }) {
+async function handleCoachLessonUpdate({ res, session, db, booking, bookingSnapshot, bookingRef, bookingId, body }) {
   const isCoach = session.role === 'coach';
   const isAdmin = requireRole(session, 'owner', 'ultra_admin', 'branch_manager', 'branch_staff');
   if (!isCoach && !isAdmin) {
@@ -2905,7 +2934,7 @@ async function handleCoachLessonUpdate({ res, session, db, booking, bookingRef, 
   }
 
   try {
-    await bookingRef.update(update);
+    await bookingRef.update(update, { lastUpdateTime: bookingSnapshot.updateTime });
   } catch (e) {
     console.error('[coach_lesson_update] write:', e.message);
     return res.status(500).json({ ok: false, error: 'Failed to update lesson' });
@@ -2926,7 +2955,7 @@ async function handleCoachLessonUpdate({ res, session, db, booking, bookingRef, 
 // created in Finance on today's Bangkok date (idempotent via payoutExpenseId,
 // same pattern as refunds). Never touches booking price/paymentStatus.
 // ════════════════════════════════════════════════════════════════════
-async function handleCoachPayoutPaid({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+async function handleCoachPayoutPaid({ res, adminName, session, db, booking, bookingSnapshot, bookingRef, bookingId, body }) {
   if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager')) {
     return res.status(403).json({ ok: false, error: 'Requires branch_manager or above' });
   }
@@ -2955,7 +2984,7 @@ async function handleCoachPayoutPaid({ res, adminName, session, db, booking, boo
     note ? `| ${note}` : '',
   ].filter(Boolean).join(' ').slice(0, 400);
 
-  const batch = db.batch();
+  const batch = checkedWriteBatch(db, [bookingSnapshot]);
   const existingExpId = booking.payoutExpenseId || null;
   let expId = existingExpId;
   if (existingExpId) {
@@ -2998,6 +3027,7 @@ async function handleCoachPayoutPaid({ res, adminName, session, db, booking, boo
     await batch.commit();
   } catch (e) {
     console.error('[coach_payout_paid] commit:', e.message);
+    if (e.code === 'ADMIN_DATA_CHANGED') return res.status(409).json({ ok: false, error: e.message });
     return res.status(500).json({ ok: false, error: 'Failed to record payout' });
   }
 
