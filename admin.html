@@ -826,9 +826,10 @@
   <!-- PROMO TAB -->
   <div id="tabPromo" style="display:none">
     <div class="main">
+      <div class="smcard" id="commerceEditor"></div>
       <div class="smcard">
         <h2>Store Pricing &amp; Special Promotion</h2>
-        <p style="font-size:.78rem;color:var(--m);margin-bottom:15px">Art-only controls. Changes apply to new User quotes and bookings immediately; existing bookings keep their stamped price.</p>
+        <p style="font-size:.78rem;color:var(--m);margin-bottom:15px">Owner controls. Changes apply to new User quotes and bookings immediately; existing bookings keep their stamped price.</p>
 
         <div style="font-size:.72rem;font-weight:900;color:var(--g);text-transform:uppercase;letter-spacing:.5px;margin:4px 0 10px">Store Base Rates</div>
         <div class="smrow" style="margin-bottom:12px">
@@ -929,7 +930,7 @@
         <div class="smrow" style="margin-bottom:10px">
           <div class="smf"><label>Allowed From</label><input id="vcStartTime" type="time" value="06:00"/></div>
           <div class="smf"><label>Allowed Until</label><select id="vcEndTime"><option value="24:00">24:00</option><option value="23:00">23:00</option><option value="22:00">22:00</option><option value="18:00">18:00</option><option value="15:00">15:00</option><option value="12:00">12:00</option></select></div>
-          <div class="smf"><label>Duration</label><input value="60 minutes (current system)" disabled/></div>
+          <div class="smf"><label>คอร์ต</label><select id="vcResource"><option value="room1">Ultra Tennis</option><option value="">ทุกคอร์ต</option></select></div><div class="smf"><label>Duration</label><select id="vcDuration"><option value="60">60 นาที</option><option value="0">ทุกระยะเวลา</option><option value="30">30 นาที</option><option value="90">90 นาที</option><option value="120">120 นาที</option><option value="150">150 นาที</option><option value="180">180 นาที</option></select></div>
           <div class="smf"><label>Cancellation Restores</label><input id="vcRestores" type="number" min="0" max="10" step="1" value="0"/></div>
         </div>
 
@@ -938,9 +939,9 @@
           <label><input type="checkbox" data-vday="1" checked/> Mon</label><label><input type="checkbox" data-vday="2" checked/> Tue</label><label><input type="checkbox" data-vday="3" checked/> Wed</label><label><input type="checkbox" data-vday="4" checked/> Thu</label><label><input type="checkbox" data-vday="5" checked/> Fri</label><label><input type="checkbox" data-vday="6"/> Sat</label><label><input type="checkbox" data-vday="0"/> Sun</label>
         </div>
 
-        <div style="font-size:.7rem;font-weight:900;color:var(--g);text-transform:uppercase;margin:12px 0 7px">Allowed Base Pricing <span style="color:var(--m);text-transform:none;font-weight:600">(none selected = every 1-hour rate)</span></div>
+        <div style="font-size:.7rem;font-weight:900;color:var(--g);text-transform:uppercase;margin:12px 0 7px">Allowed Base Pricing <span style="color:var(--m);text-transform:none;font-weight:600">(none selected = every eligible rate)</span></div>
         <div id="vcPricingTypes" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;font-size:.75rem">
-          <label><input type="checkbox" data-vpricing="standard"/> Standard</label><label><input type="checkbox" data-vpricing="morning_weekday"/> Morning</label><label><input type="checkbox" data-vpricing="morning_weekday_advance"/> Morning Advance</label><label><input type="checkbox" data-vpricing="late_night"/> Late Night</label><label><input type="checkbox" data-vpricing="special_promotion"/> Special Promo</label>
+          <label><input type="checkbox" data-vpricing="custom_rate"/> Custom rate</label><label><input type="checkbox" data-vpricing="multi_rate"/> Multi-rate</label><label><input type="checkbox" data-vpricing="half_hour"/> Half-hour</label><label><input type="checkbox" data-vpricing="standard"/> Standard</label><label><input type="checkbox" data-vpricing="morning_weekday"/> Morning</label><label><input type="checkbox" data-vpricing="morning_weekday_advance"/> Morning Advance</label><label><input type="checkbox" data-vpricing="late_night"/> Late Night</label><label><input type="checkbox" data-vpricing="special_promotion"/> Special Promo</label>
         </div>
 
         <div id="vcDiscountFields" class="smrow" style="display:none;margin-bottom:10px">
@@ -1068,6 +1069,7 @@
     <div class="mhdr"><h2>📅 Reschedule Booking</h2><button class="mclose" id="mClose">✕</button></div>
     <div class="mbody">
       <div class="minfo"><strong id="rCode">—</strong><span id="rOldTime">Current: —</span><span id="rCust" style="display:block;margin-top:3px;font-size:.75rem">—</span></div>
+      <div class="mfield"><label>คอร์ตปลายทาง (คงยอดเดิม)</label><select id="rCourt"></select></div>
       <div class="mfield"><label>New Date</label><input type="date" id="rDate"/></div>
       <div class="mfield" id="rAssignDurationWrap" style="display:none">
         <label>Assign Duration Now</label>
@@ -1162,7 +1164,7 @@
       </div>
       <div class="mfield">
         <label>Price (฿) <span id="manPriceHint" style="font-weight:400;color:var(--m)"></span></label>
-        <input type="number" id="manPrice" min="0" step="1" placeholder="Auto-quoted from pricing rules"/>
+        <input type="number" id="manPrice" readonly min="0" step="1" placeholder="Auto-quoted from pricing rules"/>
       </div>
       <div class="mfield"><label>Note (optional)</label><input type="text" id="manNote" maxlength="500" placeholder="Any extra info"/></div>
       <p id="manHint" style="font-size:.72rem;color:var(--m);margin-top:4px"></p>
@@ -1356,6 +1358,9 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
+import { mountCommerceEditor } from "./commerce-admin.js";
+import { courtRequest, loadCourtSelector } from "./court-selector.js";
+
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
 import {
   getFirestore,collection,doc,getDocs,getDoc,
@@ -1369,7 +1374,8 @@ import { isUltraPassUsage, ultraPassRate, ultraPassLabel } from "./package-usage
 const ADMIN_NAMES = ["Art", "Aoy", "BaiMon", "Ano", "Stam"];
 let currentAdminName = null;  // set by checkSession / login; never stored in sessionStorage
 let currentAdminRole = null;
-const RESOURCE_ID="room1";
+let RESOURCE_ID="room1";
+const courtFetch = (url, options) => courtRequest(RESOURCE_ID, url, options);
 // Must match DEFAULT_BRANCH_ID in api/_lib/admin-auth.js and index.html.
 // Stamped on new bookings/slots; legacy docs without it resolve to this branch.
 const DEFAULT_BRANCH_ID="ladprao1";
@@ -1506,12 +1512,13 @@ function reviveAdminValue(value){
   return value;
 }
 async function adminRead(resource,options={}){
-  const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"admin_read",resource,...options})});
+  const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"admin_read",resource,...options})});
   const data=await res.json().catch(()=>({}));
   if(!res.ok||!data.ok) throw new Error(data.error||`HTTP ${res.status}`);
   return Array.isArray(data.items)?data.items.map(reviveAdminValue):[];
 }
 function showApp(n){
+  refreshAdminCourts();
   $("loginScreen").style.display="none";
   $("mainApp").style.display="block";
   $("adminBadge").textContent=n;
@@ -1821,7 +1828,7 @@ function updateActivityTabAccess(){
 }
 
 function canManageVouchers(){
-  return currentAdminName==="Art"&&currentAdminRole==="owner";
+  return currentAdminRole==="owner";
 }
 
 function updateVoucherTabAccess(){
@@ -1889,7 +1896,7 @@ async function loadActivityFeed(){
   }
   $("adminActivityFeed").innerHTML=`<div class="activity-empty">กำลังโหลด...</div>`;
   try{
-    const res=await fetch("/api/admin-ops",{
+    const res=await courtFetch("/api/admin-ops",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"audit_log_list",limit:20}),
@@ -1904,7 +1911,7 @@ async function loadActivityFeed(){
 }
 
 function reportAdminActivity({auditAction,targetId,branchId=DEFAULT_BRANCH_ID,before=null,after=null,note=""}){
-  fetch("/api/admin-ops",{
+  courtFetch("/api/admin-ops",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify({action:"audit_log_write",auditAction,targetId,branchId,before,after,note}),
@@ -1922,9 +1929,9 @@ $("activityRefreshBtn").addEventListener("click",loadActivityFeed);
 
 function getFilteredBookingsSubset() {
   if (bookingsViewMode === "daily") {
-    return allBookings.filter(b => b.date === bookingsDateFilter);
+    return allBookings.filter(b => b.date === bookingsDateFilter && (b.resourceId||"room1")===RESOURCE_ID);
   } else {
-    return allBookings.filter(isBookingInSelectedPlayMonth);
+    return allBookings.filter(b=>isBookingInSelectedPlayMonth(b) && (b.resourceId||"room1")===RESOURCE_ID);
   }
 }
 
@@ -1932,6 +1939,7 @@ async function copyConfirmedTextToClipboard(b) {
   const text = `✅ ยืนยันการจอง Ultra Tennis\n\n` +
     `ชื่อลูกค้า: ${b.customerName || "—"}\n` +
     `เบอร์โทร: ${b.customerPhone || "—"}\n` +
+    `คอร์ต: ${b.resourceId || "room1"}\n` +
     `วันที่: ${b.date || "—"}\n` +
     `เวลา: ${b.startTime || "—"}–${b.endTime || "—"}\n` +
     `รหัสการจอง: ${b.bookingCode || "—"}\n\n` +
@@ -1952,6 +1960,19 @@ async function copyConfirmedTextToClipboard(b) {
     showToast("Copied confirmation text");
   }
 }
+
+async function refreshAdminCourts(){
+  let select=$("adminCourt");
+  if(!select){
+    const label=document.createElement("label");label.textContent="คอร์ตสำหรับตารางเวลาและการจองใหม่ ";label.style.cssText="display:block;padding:12px 20px";
+    select=document.createElement("select");select.id="adminCourt";label.append(select);$("mainApp").prepend(label);
+  }
+  try { const settings=await loadCourtSelector(select,RESOURCE_ID,async id=>{RESOURCE_ID=id;closeManualModal();closeModal();updateStats();renderBookings();$("slotGrid")?.replaceChildren(); await Promise.all([loadDailyView(), loadSlotGrid($("viewDate").value)]);});
+    const old=$("vcResource").value;$("vcResource").replaceChildren(new Option("ทุกคอร์ต",""),...settings.resources.map(r=>new Option(r.name,r.id)));$("vcResource").value=old;
+  }
+  catch(e){showToast(e.message,true);}
+}
+window.addEventListener("commerce-saved",refreshAdminCourts);
 
 async function loadBookings(){
   $("bookingsList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading...</p></div>`;
@@ -2101,7 +2122,7 @@ async function prepareCoachPhotoDataUrl(file){
 }
 
 async function loadCoaches(activeOnly){
-  const res = await fetch("/api/admin-ops",{
+  const res = await courtFetch("/api/admin-ops",{
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ action:"coach_list", activeOnly: activeOnly===true })
   });
@@ -2155,7 +2176,7 @@ async function renderCoachTab(){
         if(!Number.isInteger(payoutPerHour)||payoutPerHour<500){ showToast("payout ขั้นต่ำ 500 บาท/ชม.",true); return; }
         btn.disabled=true;
         try{
-          const res = await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+          const res = await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
             body:JSON.stringify({action:"coach_update_rates",coachId,lessonPrice,payoutPerHour})});
           const data = await res.json().catch(()=>({}));
           if(!res.ok||!data.ok){ showToast(data.error||"Failed.",true); btn.disabled=false; return; }
@@ -2174,7 +2195,7 @@ async function renderCoachTab(){
         if(c.lineUserId && confirm(`${coachId} ผูก LINE อยู่แล้ว\n\nOK = ถอนการผูก (โค้ชจะล็อกอินไม่ได้)\nCancel = ผูกบัญชีใหม่แทน`)){
           btn.disabled=true;
           try{
-            const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_link_line",coachId,lineUserId:null})});
+            const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_link_line",coachId,lineUserId:null})});
             const data=await res.json().catch(()=>({}));
             if(!res.ok||!data.ok){ showToast(data.error||"Failed.",true); }
             else { showToast(`ถอน LINE ของ ${coachId} แล้ว`); renderCoachTab(); }
@@ -2206,7 +2227,7 @@ async function renderCoachTab(){
             pick=ids[idx];
           }
           if(!confirm(`ผูก LINE ของ "${cand[pick].name}"${cand[pick].lineName?` (${cand[pick].lineName})`:""} เข้ากับโค้ช ${coachId}?\n\nบัญชีนี้จะเข้า Coach Mode ได้ทันที`)){ btn.disabled=false; return; }
-          const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_link_line",coachId,lineUserId:pick})});
+          const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_link_line",coachId,lineUserId:pick})});
           const data=await res.json().catch(()=>({}));
           if(!res.ok||!data.ok){ showToast(data.error||"ผูกไม่สำเร็จ",true); btn.disabled=false; return; }
           showToast(`✓ ผูก LINE ให้ ${coachId} แล้ว`);
@@ -2220,7 +2241,7 @@ async function renderCoachTab(){
         const newActive = btn.dataset.coachActive !== "1";
         btn.disabled = true;
         try{
-          const res = await fetch("/api/admin-ops",{
+          const res = await courtFetch("/api/admin-ops",{
             method:"POST", headers:{"Content-Type":"application/json"},
             body: JSON.stringify({ action:"coach_set_active", coachId, active:newActive })
           });
@@ -2240,7 +2261,7 @@ async function renderCoachTab(){
         if(typed!==coachId){ showToast("ยกเลิก — ชื่อไม่ตรง",true); return; }
         btn.disabled=true;
         try{
-          const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_delete",coachId})});
+          const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_delete",coachId})});
           const data=await res.json().catch(()=>({}));
           if(!res.ok||!data.ok){ showToast(data.error||"ลบไม่สำเร็จ",true); btn.disabled=false; return; }
           showToast(`🗑 ลบ ${coachId} แล้ว`);
@@ -2305,7 +2326,7 @@ $("coachProfileSave").addEventListener("click",async()=>{
   try{
     const payload={action:"coach_update_profile",coachId:coachProfileDraft.coach.id,displayName,bio};
     if(coachProfileDraft.photoDataUrl) payload.photoDataUrl=coachProfileDraft.photoDataUrl;
-    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok){showToast(data.error||"บันทึก Profile ไม่สำเร็จ",true);return;}
     closeCoachProfileEditor();
@@ -2344,7 +2365,7 @@ async function renderPayoutList(){
         const note=prompt("โน้ต (ไม่บังคับ เช่น เลขอ้างอิงโอน):","")||"";
         btn.disabled=true; btn.textContent="กำลังบันทึก...";
         try{
-          const res=await fetch("/api/admin-edit-booking-accounting",{method:"POST",headers:{"Content-Type":"application/json"},
+          const res=await courtFetch("/api/admin-edit-booking-accounting",{method:"POST",headers:{"Content-Type":"application/json"},
             body:JSON.stringify({operation:"coach_payout_paid",bookingId:bk.id,note})});
           const data=await res.json().catch(()=>({}));
           if(!res.ok||!data.ok){ showToast(data.error||"บันทึกไม่สำเร็จ",true); btn.disabled=false; btn.textContent="✓ บันทึกโอนแล้ว"; return; }
@@ -2362,7 +2383,7 @@ $("coachCreateBtn").addEventListener("click", async ()=>{
   if(!name){ showToast("กรอกชื่อ coach",true); return; }
   const btn = $("coachCreateBtn"); btn.disabled = true; btn.textContent = "Adding...";
   try{
-    const res = await fetch("/api/admin-ops",{
+    const res = await courtFetch("/api/admin-ops",{
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ action:"coach_create", name, displayName: displayName||undefined })
     });
@@ -2395,7 +2416,7 @@ function ensureCavBatch(){
       const coachId=$("cavCoachSel").value, date=$("cavDate").value;
       const submitted=items.map(item=>item.id);
       try{
-        const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
           action:"coach_availability_batch_set",coachId,date,
           operations:items.map(item=>({hour:item.id,open})),
         })});
@@ -2423,7 +2444,7 @@ async function loadCavGrid(){
   if(!coachId||!date){ cavLastData=null; batch.setItems([], {preserveSelection:false}); grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">เลือกโค้ชและวันที่</div>`; return; }
   grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">Loading...</div>`;
   try{
-    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_availability_get",coachId,date})});
+    const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_availability_get",coachId,date})});
     const d=await res.json().catch(()=>({}));
     if(!res.ok||!d.ok){ grid.innerHTML=`<div class="smempty" style="grid-column:1/-1">❌ ${esc(d.error||"Failed")}</div>`; return; }
     renderCavGrid(d);
@@ -2501,7 +2522,7 @@ $("acSave").addEventListener("click", async ()=>{
   const label = $("acCoachSelect").selectedOptions[0]?.textContent || coachId;
   const btn = $("acSave"); btn.disabled = true; btn.textContent = "Saving...";
   try{
-    const res = await fetch("/api/admin-edit-booking-accounting",{
+    const res = await courtFetch("/api/admin-edit-booking-accounting",{
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ operation:"assign_coach", bookingId: assignCoachBooking.id, coachId })
     });
@@ -2572,7 +2593,7 @@ function renderPendingTab(){
     const hasPayment=b.paymentStatus==="paid"||b.paymentStatus==="package";
     return `<div class="bcard" id="ptcard-${esc(b.id)}">
       <div class="bcard-hdr">
-        <span class="bcode">${esc(b.bookingCode||"—")}</span>
+        <span class="bcode">${esc(b.bookingCode||"—")} · ${esc(b.resourceId||"room1")}</span>
         <div style="display:flex;gap:5px;align-items:center">
           ${hasPayment?`<span class="sp s-paid">✓ Paid</span>`:""}
           <span class="tbadge" style="background:#2d1e00;color:#fb923c">⏳ Pending Reschedule</span>
@@ -2780,9 +2801,10 @@ function cardHTML(b){
   `;
 
   return `<div class="bcard" id="card-${esc(b.id)}">
-    <div class="bcard-hdr"><span class="bcode">${esc(b.bookingCode||"—")}</span><div style="display:flex;gap:5px;align-items:center">${paidBadge}${refundBadge}<span class="tbadge ${tc}">${esc(b.bookingType||"—")}</span></div></div>
+    <div class="bcard-hdr"><span class="bcode">${esc(b.bookingCode||"—")} · ${esc(b.resourceId||"room1")}</span><div style="display:flex;gap:5px;align-items:center">${paidBadge}${refundBadge}<span class="tbadge ${tc}">${esc(b.bookingType||"—")}</span></div></div>
     <div class="bcard-body">
       ${screenshotBlock}
+      ${b.pricingSnapshot?`<div style="padding:10px;font-size:.8rem">ราคา ${Number(b.pricingSnapshot.subtotal)} − โปร ${Number(b.pricingSnapshot.promotionDiscount)} − Coupon ${Number(b.pricingSnapshot.couponDiscount)} = ${Number(b.pricingSnapshot.total)} บาท · ${esc(b.pricingSnapshot.promotionName||b.pricingSnapshot.voucherCampaignName||"ราคาตามกฎ")}</div>`:""}
       <div class="bfields" style="margin-top:10px">
         ${prevRow}
         ${coachLessonRow}
@@ -2809,7 +2831,7 @@ async function markPaid(b,opts={}){
   // which validates the session, branch access, slot ownership, and the legal
   // transition, and writes its own audit log. Calendar + notify stay client-side.
   try{
-    const res=await fetch("/api/admin-edit-booking-accounting",{
+    const res=await courtFetch("/api/admin-edit-booking-accounting",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({operation:"approve_slip",bookingId:b.id,withoutSlip}),
@@ -2861,7 +2883,7 @@ async function cancelBooking(b){
     // Server-side cancel (operation:reject_payment) — validates session, branch,
     // slot ownership, blocks paid bookings (refund instead), and writes its own
     // audit log. Releases the slot when this booking owns it.
-    const res=await fetch("/api/admin-edit-booking-accounting",{
+    const res=await courtFetch("/api/admin-edit-booking-accounting",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({operation:"reject_payment",bookingId:b.id}),
@@ -2927,7 +2949,7 @@ async function permanentDeleteBooking(b){
   const btn=document.querySelector(`[data-delete="${b.id}"]`) || document.querySelector(`[data-pt-delete="${b.id}"]`);
   if(btn){btn.disabled=true;btn.textContent="Deleting…";}
   try{
-    const res=await fetch("/api/admin-edit-booking-accounting",{
+    const res=await courtFetch("/api/admin-edit-booking-accounting",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({operation:"delete_booking",bookingId:b.id}),
@@ -2980,7 +3002,7 @@ async function saveCalendarSync(bookingId, fields){
   for(const key of ["googleCalendarEventId","googleCalendarHtmlLink","googleCalendarSyncStatus","googleCalendarSyncError"]){
     if(Object.prototype.hasOwnProperty.call(fields,key)) payload[key]=fields[key];
   }
-  const res=await fetch("/api/admin-edit-booking-accounting",{
+  const res=await courtFetch("/api/admin-edit-booking-accounting",{
     method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload),
   });
   const data=await res.json().catch(()=>({}));
@@ -3334,7 +3356,7 @@ async function runCustomerIdentityDryRun(){
   button.disabled=true;button.textContent="กำลังตรวจ...";download.disabled=true;
   output.innerHTML=`<div class="lstate" style="padding:18px 0"><div class="spinner"></div><p>กำลังอ่าน Booking, Customer และ Pass แบบ Read-only...</p></div>`;
   try{
-    const response=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"identity_dry_run",branchId:DEFAULT_BRANCH_ID})});
+    const response=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"identity_dry_run",branchId:DEFAULT_BRANCH_ID})});
     const report=await response.json().catch(()=>({}));
     if(!response.ok||!report.ok)throw new Error(report.error||`HTTP ${response.status}`);
     if(report.dryRun!==true||Number(report.writesPerformed)!==0)throw new Error("Server did not confirm a zero-write dry-run");
@@ -3593,7 +3615,7 @@ async function setSlots(dates,close=false,hours=null){
   // late night; otherwise normal (06:00–23:00). Throws on failure so existing
   // callers' try/catch keep working unchanged.
   const hourSet=hours?"late_night":"normal";
-  const res=await fetch("/api/admin-ops",{
+  const res=await courtFetch("/api/admin-ops",{
     method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({action:"slot_bulk_set",dates,hourSet,op:close?"close":"open"}),
   });
@@ -3681,7 +3703,7 @@ $("openAllBtn").addEventListener("click",async()=>{
   const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}
   try{
     // Server creates only the missing slots (onlyMissing) — same as before.
-    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+    const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"slot_bulk_set",dates:[d],hourSet:"normal",op:"open",onlyMissing:true})});
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok){showToast(data.error||"Failed.",true);return;}
@@ -3695,7 +3717,7 @@ $("closeUnbookedBtn").addEventListener("click",async()=>{
   const d=getViewDate();if(!d){showToast("Pick a date.",true);return;}
   if(!confirm(`Close all UNBOOKED open slots for ${d}?`))return;
   try{
-    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+    const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"slot_close_unbooked",date:d})});
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok){showToast(data.error||"Failed.",true);return;}
@@ -3705,15 +3727,18 @@ $("closeUnbookedBtn").addEventListener("click",async()=>{
   }catch(e){console.error(e);showToast(e?.message||"Failed.",true);}
 });
 
+let commerceSlotLoad=0;
 async function loadSlotGrid(dateISO){
+  const loadId=++commerceSlotLoad, selectedCourt=RESOURCE_ID;
   $("slotGrid").innerHTML=`<div class="smload"><div class="spinner"></div><p>Loading...</p></div>`;
   $("holidayBox").style.display="none";
   try{
     const[avSnap,bkSnap,holSnap]=await Promise.all([
-      getDocs(query(collection(db,"available_slots"),where("date","==",dateISO),where("resourceId","==",RESOURCE_ID))),
-      getDocs(query(collection(db,"booking_slots"),where("date","==",dateISO),where("resourceId","==",RESOURCE_ID))),
+      getDocs(query(collection(db,"available_slots"),where("date","==",dateISO),where("resourceId","==",selectedCourt))),
+      getDocs(query(collection(db,"booking_slots"),where("date","==",dateISO),where("resourceId","==",selectedCourt))),
       getDoc(doc(db,"holidays",dateISO)),
     ]);
+    if(loadId!==commerceSlotLoad || selectedCourt!==RESOURCE_ID) return;
     const avMap={};avSnap.forEach(d=>{avMap[d.data().startTime]={id:d.id,...d.data()};});
     const booked=new Set();const now=new Date();
     bkSnap.forEach(d=>{const bd=d.data();if(isLiveBookedSlot(bd,now)) booked.add(bd.hour);});
@@ -3752,7 +3777,7 @@ async function toggleSlot(btn,dateISO){
   const op=(act==="create"||act==="reopen")?"open":"close";
   btn.disabled=true;
   try{
-    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+    const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"slot_toggle",date:dateISO,hour:h,op})});
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok){showToast(data.error||"Toggle failed.",true);btn.disabled=false;return;}
@@ -3766,7 +3791,7 @@ $("holSave").addEventListener("click",async()=>{
   const d=getViewDate();if(!d){showToast("No date loaded.",true);return;}
   const isHol=$("holCheck").checked,name=$("holName").value.trim();
   try{
-    const res=await fetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
+    const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"holiday_set",date:d,isHoliday:isHol,name})});
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok){showToast(data.error||"Failed to save holiday.",true);return;}
@@ -4176,7 +4201,9 @@ function shiftDate(iso,days){
   return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}`;
 }
 
+let commerceDayLoad=0;
 async function loadDailyView(){
+  const loadId=++commerceDayLoad, selectedCourt=RESOURCE_ID;
   if(!$("dvDate").value) $("dvDate").value=todayISOString();
   const date=$("dvDate").value;
   const alertIsToday=date===todayISOString();
@@ -4191,16 +4218,17 @@ async function loadDailyView(){
 
   try{
     const [avSnap,bkSnap,serverBookings,serverPackages]=await Promise.all([
-      getDocs(query(collection(db,"available_slots"),where("date","==",date),where("resourceId","==",RESOURCE_ID))),
-      getDocs(query(collection(db,"booking_slots"),where("date","==",date),where("resourceId","==",RESOURCE_ID))),
+      getDocs(query(collection(db,"available_slots"),where("date","==",date),where("resourceId","==",selectedCourt))),
+      getDocs(query(collection(db,"booking_slots"),where("date","==",date),where("resourceId","==",selectedCourt))),
       adminRead("bookings",{limit:500}),
       adminRead("packages",{limit:500}),
     ]);
 
+    if(loadId!==commerceDayLoad || selectedCourt!==RESOURCE_ID) return;
     const avByTime={}; avSnap.forEach(d=>{ const dd=d.data(); avByTime[dd.startTime]=dd; });
     const bsByHour={}; bkSnap.forEach(d=>{ const dd=d.data(); bsByHour[dd.hour]=dd; });
     dvSlotAlertData={date,avByTime,bsByHour,loadedAt:new Date()};
-    const bookingsOnDay=serverBookings.filter(b=>b.date===date);
+    const bookingsOnDay=serverBookings.filter(b=>b.date===date && (b.resourceId||"room1")===RESOURCE_ID);
     const bookingByCode={}; bookingsOnDay.forEach(b=>{ if(b.bookingCode) bookingByCode[b.bookingCode]=b; });
     const bookingBySlotId={};
     // Pending/terminal bookings may retain historical slot metadata from
@@ -4666,27 +4694,14 @@ async function refreshManualPrice(){
   const seq=++manQuoteSeq;
   $("manPriceHint").textContent="(quoting…)";
   try{
-    const requestQuote=async(startTime,duration)=>{
-      const res=await fetch("/api/booking",{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({action:"price_quote",date,startTime,durationMinutes:duration,payType:"single"}),
-      });
-      return res.json().catch(()=>({}));
-    };
-    const crossesHour=durationMinutes===60&&time.endsWith(":30");
-    let d;
-    if(crossesHour){
-      const nextHour=`${String(Number(time.slice(0,2))+1).padStart(2,"0")}:00`;
-      const halves=await Promise.all([requestQuote(time,30),requestQuote(nextHour,30)]);
-      d=halves.every(x=>x.ok&&x.quote)
-        ?{ok:true,quote:{finalPrice:halves.reduce((sum,x)=>sum+Number(x.quote.finalPrice||0),0),pricingType:"half_hour_cross"}}
-        :halves.find(x=>!x.ok)||{};
-    }else{
-      d=await requestQuote(time,durationMinutes);
-    }
+    const response=await courtFetch("/api/admin-edit-booking-accounting",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({operation:"manual_quote",date,startTime:time,durationMinutes,bookingType:type}),
+    });
+    const d=await response.json();
     if(seq!==manQuoteSeq||manPriceDirty) return; // stale response / admin typed meanwhile
     if(d.ok&&d.quote){
-      $("manPrice").value=Number(d.quote.finalPrice)||MANUAL_PRICE[type]||350;
+      $("manPrice").value=Number(d.quote.finalPrice);
       $("manPriceHint").textContent=`(${d.quote.pricingType})`;
     }else{
       $("manPrice").value=MANUAL_PRICE[type]??350;
@@ -4770,9 +4785,9 @@ $("manConfirm").addEventListener("click",async()=>{
 
   const btn=$("manConfirm"); btn.disabled=true; btn.textContent="Saving...";
   try{
-    const res=await fetch("/api/admin-edit-booking-accounting",{
+    const res=await courtFetch("/api/admin-edit-booking-accounting",{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({operation:"manual_create",customerName:name,customerPhone:phone,customerNote:note,date,startTime:time,durationMinutes,bookingType}),
+      body:JSON.stringify({operation:"manual_create",customerName:name,customerPhone:phone,customerNote:note,date,startTime:time,durationMinutes,bookingType,expectedPrice:Number($("manPrice").value)}),
     });
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok) throw new Error(data.error||"Failed to save manual booking.");
@@ -4827,6 +4842,9 @@ function selectedReschDuration(){
   return Number($("rAssignDuration").value)||reschDurationMinutes(reschBooking);
 }
 function openResch(b){
+  $("rCourt").replaceChildren(...[...$("adminCourt").options].map(o=>new Option(o.text,o.value)));
+  $("rCourt").value=b.resourceId || "room1";
+
   reschBooking=b;reschTime=null;
   const isPending=isPendingRescheduleBooking(b);
   const totalMinutes=reschDurationMinutes(b);
@@ -4868,7 +4886,7 @@ async function moveToPendingReschedule(){
   try{
     // Server-side park (operation:reschedule_park) — releases the original slot
     // and flags the booking pending-reschedule; writes its own audit log.
-    const res=await fetch("/api/admin-edit-booking-accounting",{
+    const res=await courtFetch("/api/admin-edit-booking-accounting",{
       method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({operation:"reschedule_park",bookingId:reschBooking.id}),
     });
@@ -4927,8 +4945,8 @@ $("mLoadSlots").addEventListener("click",async()=>{
   $("rTimeGrid").innerHTML="";$("rHint").textContent="";$("mConfirm").disabled=true;reschTime=null;
   try{
     const[avSnap,bkSnap]=await Promise.all([
-      getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID),where("status","==","open"))),
-      getDocs(query(collection(db,"booking_slots"),where("date","==",d),where("resourceId","==",RESOURCE_ID)))
+      getDocs(query(collection(db,"available_slots"),where("date","==",d),where("resourceId","==",$("rCourt").value),where("status","==","open"))),
+      getDocs(query(collection(db,"booking_slots"),where("date","==",d),where("resourceId","==",$("rCourt").value)))
     ]);
     const openSet=new Set();avSnap.forEach(x=>openSet.add(x.data().startTime));
     const blockedCells=new Set(),currentSlotIds=new Set(reschBooking?.bookingSlotIds||[]),now=new Date();
@@ -4950,7 +4968,7 @@ $("mLoadSlots").addEventListener("click",async()=>{
       const fits=start+assignDuration<=1440;
       const allOpen=fits&&touchedHours.every(hour=>openSet.has(`${String(hour).padStart(2,"0")}:00`));
       const overlaps=needCells.some(m=>blockedCells.has(m));
-      const unchanged=!isPendingRescheduleBooking(reschBooking)&&time===reschBooking?.startTime&&d===reschBooking?.date&&assignDuration===reschDurationMinutes(reschBooking);
+      const unchanged=$("rCourt").value===(reschBooking.resourceId||"room1")&&!isPendingRescheduleBooking(reschBooking)&&time===reschBooking?.startTime&&d===reschBooking?.date&&assignDuration===reschDurationMinutes(reschBooking);
       const dis=!allOpen||overlaps||unchanged;
       const title=!fits?"Does not fit before midnight":!allOpen?"Every covered hour must be open":overlaps?"Booked":unchanged?"Current slot":"Available";
       return `<button class="mtbtn${dis?" disabled":""}" data-time="${time}" ${dis?"disabled":""} title="${title}">${time}</button>`;
@@ -4972,6 +4990,8 @@ $("mLoadSlots").addEventListener("click",async()=>{
   finally{btn.disabled=false;btn.textContent="Load Available Slots →";}
 });
 
+$("rCourt").addEventListener("change",()=>{reschTime=null;$("rTimeGrid").replaceChildren();$("mConfirm").disabled=true;});
+$("rDate").addEventListener("change",()=>{reschTime=null;$("rTimeGrid").replaceChildren();$("mConfirm").disabled=true;});
 $("mConfirm").addEventListener("click",async()=>{
   if(!reschBooking||!reschTime)return;
   const newDate=$("rDate").value;
@@ -4985,9 +5005,9 @@ $("mConfirm").addEventListener("click",async()=>{
   try{
     // Server-side assign (operation:reschedule_assign) — atomic slot grab; the new
     // booking_slot lock is written as "confirmed" server-side, and audit is written there.
-    const res=await fetch("/api/admin-edit-booking-accounting",{
+    const res=await courtFetch("/api/admin-edit-booking-accounting",{
       method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({operation:"reschedule_assign",bookingId:reschBooking.id,newDate,newStartTime:reschTime,assignDurationMinutes}),
+      body:JSON.stringify({operation:"reschedule_assign",bookingId:reschBooking.id,newDate,newStartTime:reschTime,assignDurationMinutes,newResourceId:$("rCourt").value}),
     });
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok){showToast(data.error||"Reschedule failed.",true);btn.disabled=false;btn.textContent=wasPendingReschedule?"Assign New Slot":"Confirm Reschedule";return;}
@@ -5095,7 +5115,7 @@ async function cancelPendingReschedule(b) {
   try {
     // Server-side cancel-pending (operation:reschedule_cancel) — best-effort atomic
     // restore to the original slot; the server audits both restored and not-restored.
-    const res = await fetch("/api/admin-edit-booking-accounting", {
+    const res = await courtFetch("/api/admin-edit-booking-accounting", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ operation: "reschedule_cancel", bookingId: b.id }),
     });
@@ -5165,7 +5185,7 @@ $("mpConfirmBtn").addEventListener("click",async()=>{
 
   const btn=$("mpConfirmBtn");btn.disabled=true;btn.textContent="Saving...";
   try{
-    const res=await fetch("/api/admin-edit-booking-accounting",{
+    const res=await courtFetch("/api/admin-edit-booking-accounting",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({operation:"mark_paid",bookingId:markPaidBooking.id,amount,paymentMethod,paymentNote}),
@@ -5515,7 +5535,7 @@ $("acctConfirm").addEventListener("click",async()=>{
   const influencerExpenseAmount=Number($("acctInfluencerAmt").value)||350;
   const btn=$("acctConfirm");btn.disabled=true;btn.textContent="Saving...";
   try{
-    const res=await fetch("/api/admin-edit-booking-accounting",{
+    const res=await courtFetch("/api/admin-edit-booking-accounting",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({operation:"accounting_edit",bookingId:acctBooking.id,accountingType:type,bookingStatus,price,influencerExpenseAmount,reason}),
@@ -5613,7 +5633,7 @@ $("rfConfirm").addEventListener("click",async()=>{
 
   const btn=$("rfConfirm");btn.disabled=true;btn.textContent="Processing...";
   try{
-    const res=await fetch("/api/admin-edit-booking-accounting",{
+    const res=await courtFetch("/api/admin-edit-booking-accounting",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({operation:"refund",bookingId:rfBooking.id,refundAmount,refundMode,refundReason,
@@ -5892,6 +5912,7 @@ function setVoucherEndTime(value){
 }
 
 function resetVoucherCampaignForm(){
+  $("vcDuration").value="60";$("vcResource").value="room1";
   voucherEditingId=null;
   $("voucherCampaignFormTitle").textContent="Create Campaign";
   $("vcCampaignId").disabled=false;
@@ -5912,7 +5933,7 @@ function editVoucherCampaign(campaignId){
   voucherEditingId=c.id;
   $("voucherCampaignFormTitle").textContent=`Edit Campaign · ${c.name}`;
   $("vcCampaignId").value=c.id;$("vcCampaignId").disabled=true;
-  $("vcName").value=c.name||"";$("vcKeyword").value=c.keyword||"";$("vcPrefix").value=c.codePrefix||"";
+  $("vcName").value=c.name||"";$("vcDuration").value=String(c.exactDurationMinutes ?? 60);$("vcResource").value=c.resourceId ?? "";$("vcKeyword").value=c.keyword||"";$("vcPrefix").value=c.codePrefix||"";
   $("vcType").value=c.voucherType||"discount_amount";$("vcValidFrom").value=voucherDateOnly(c.validFrom);$("vcExpiresAt").value=voucherDateOnly(c.expiresAt);
   $("vcStartTime").value=c.startTime||"06:00";setVoucherEndTime(c.endTime||"24:00");$("vcRestores").value=Number(c.maxCancellationRestores)||0;
   $("vcEventApprovalMode").value=c.eventPassApprovalMode==="manual"?"manual":"auto";
@@ -6019,7 +6040,7 @@ function voucherCampaignPayload(){
     campaignId:$("vcCampaignId").value.trim().toLowerCase(),name:$("vcName").value.trim(),voucherType:$("vcType").value,
     keyword:$("vcKeyword").value.trim().toUpperCase(),codePrefix:$("vcPrefix").value.trim().toUpperCase(),
     validFrom:validFrom?`${validFrom}T00:00:00+07:00`:null,expiresAt:expiresAt?`${expiresAt}T23:59:59+07:00`:null,
-    startTime:$("vcStartTime").value,endTime:$("vcEndTime").value,exactDurationMinutes:60,
+    startTime:$("vcStartTime").value,endTime:$("vcEndTime").value,exactDurationMinutes:Number($("vcDuration").value),resourceId:$("vcResource").value,
     maxCancellationRestores:Number($("vcRestores").value),active:$("vcActive").checked,
     excludeHolidays:$("vcExcludeHolidays").checked,requiresLineLogin:$("vcRequiresLine").checked,transferable:$("vcTransferable").checked,
     eventPassApprovalMode:$("vcEventApprovalMode").value,
@@ -6187,7 +6208,8 @@ $("aiReportMonth").value=voucherDateOnly(new Date()).slice(0,7);
 
 // ── SPECIAL PROMOTION MANAGEMENT (Art only) ──────────────────────
 async function loadPromoTab() {
-  const isArt = currentAdminName === "Art";
+  await mountCommerceEditor($("commerceEditor"), currentAdminRole === "owner");
+  const isArt = currentAdminRole === "owner";
   
   $("promoActive").disabled = !isArt;
   $("morningActive").disabled = !isArt;
@@ -6257,8 +6279,8 @@ function formatLocalDateTime(date) {
 }
 
 $("promoSaveBtn").addEventListener("click", async () => {
-  if (currentAdminName !== "Art") {
-    showToast("Unauthorized: Art only.", true);
+  if (currentAdminRole !== "owner") {
+    showToast("Unauthorized: Owner only.", true);
     return;
   }
 
@@ -6360,8 +6382,8 @@ $("promoSaveBtn").addEventListener("click", async () => {
 });
 
 $("promoDeactivateBtn").addEventListener("click", async () => {
-  if (currentAdminName !== "Art") {
-    showToast("Unauthorized: Art only.", true);
+  if (currentAdminRole !== "owner") {
+    showToast("Unauthorized: Owner only.", true);
     return;
   }
 

@@ -1,3 +1,4 @@
+import { money } from '../../commerce.js';
 // Voucher Engine v2. Pure business rules: no Firestore access in this module.
 //
 // Security model:
@@ -121,6 +122,7 @@ export function evaluateVoucher(input = {}) {
     date, startTime, durationMinutes = 60, isHoliday = false,
     branchId = null, resourceId = null, baseQuote = null, bookingId = null,
   } = input;
+  if (baseQuote?.allowCoupon === false) return { ok: false, reason: 'not_applicable' };
   if (!voucher) return { ok: false, reason: 'not_found' };
   if (voucher.campaignId && !campaign) return { ok: false, reason: 'campaign_not_found' };
 
@@ -147,7 +149,7 @@ export function evaluateVoucher(input = {}) {
 
   // Every "allowed X" list below is a restriction only when it has entries.
   // An empty array means no restriction: that is what the Voucher tab
-  // promises ("none selected = every 1-hour rate") and what it sends when no
+  // promises ("none selected = every eligible rate") and what it sends when no
   // box is ticked, and [] is truthy, so a bare truthiness guard here rejects
   // every redemption instead of allowing every one.
   const dow = dayOfWeek(date);
@@ -166,6 +168,7 @@ export function evaluateVoucher(input = {}) {
   if (def.resourceId && def.resourceId !== resourceId) return { ok: false, reason: 'resource_not_allowed' };
 
   const originalPrice = Math.max(0, number(baseQuote?.finalPrice, number(baseQuote?.originalPrice, 0)));
+  if (originalPrice < def.minFinalPrice) return { ok: false, reason: 'not_applicable' };
   const pricingType = baseQuote?.pricingType || 'standard';
   if (def.allowedPricingTypes?.length && !def.allowedPricingTypes.includes(pricingType)) return { ok: false, reason: 'not_applicable' };
 
@@ -185,13 +188,13 @@ export function evaluateVoucher(input = {}) {
     discountAmount = originalPrice;
   } else if (def.voucherType === VOUCHER_TYPES.DISCOUNT_PERCENT) {
     const percent = Math.min(100, Math.max(0, def.discountPercent));
-    discountAmount = Math.round(originalPrice * percent / 100);
+    discountAmount = money(originalPrice * percent / 100);
     if (def.maxDiscountAmount > 0) discountAmount = Math.min(discountAmount, def.maxDiscountAmount);
   } else {
     discountAmount = Math.max(0, def.discountAmount);
   }
   discountAmount = Math.min(discountAmount, Math.max(0, originalPrice - def.minFinalPrice));
-  const finalPrice = Math.max(def.minFinalPrice, originalPrice - discountAmount);
+  const finalPrice = money(Math.max(def.minFinalPrice, originalPrice - discountAmount));
 
   return {
     ok: true,
@@ -212,7 +215,7 @@ export function evaluateVoucher(input = {}) {
 
 export function applyVoucherToQuote(baseQuote, result) {
   if (!result?.ok) {
-    return { ...baseQuote, voucherApplied: false, voucherCode: null, discountAmount: 0, voucherReason: result?.reason || 'not_found' };
+    return { ...baseQuote, voucherApplied: false, voucherCode: null, couponDiscount: 0, discountAmount: baseQuote.promotionDiscount || 0, voucherReason: result?.reason || 'not_found' };
   }
   return {
     ...baseQuote,
@@ -228,7 +231,8 @@ export function applyVoucherToQuote(baseQuote, result) {
     voucherCampaignId: result.campaignId,
     voucherCampaignName: result.campaignName,
     voucherKeyword: result.keyword,
-    discountAmount: result.discountAmount,
+    couponDiscount: result.discountAmount,
+    discountAmount: money((baseQuote.promotionDiscount || 0) + result.discountAmount),
     isFreeVoucher: result.isFree,
   };
 }

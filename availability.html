@@ -297,6 +297,8 @@
   </main>
 
   <script type="module">
+import { loadCourtSelector } from "./court-selector.js";
+
     import { AVAILABILITY_BUILD, reportAvailability } from "./availability-state.js";
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
     import {
@@ -315,7 +317,13 @@
 
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
-    const RESOURCE_ID = "room1";
+    let RESOURCE_ID = "room1";
+    let commerceConfig=null;
+    function courtOpenAt(start,span=60){
+      const court=commerceConfig?.resources?.find(r=>r.id===RESOURCE_ID && r.active);
+      const min=t=>Number(t.slice(0,2))*60+Number(t.slice(3));
+      return !commerceConfig || !!court && min(start)>=min(court.openTime) && min(start)+span<=min(court.closeTime);
+    }
     const OPEN_HOUR = 6;
     const CLOSE_HOUR = 24;
     const BANGKOK_TZ = "Asia/Bangkok";
@@ -468,7 +476,7 @@
     }
 
     function setBookLink(){
-      $("bookNow").href = `index.html?date=${encodeURIComponent(selectedDate)}`;
+      $("bookNow").href = `index.html?date=${encodeURIComponent(selectedDate)}&court=${encodeURIComponent(RESOURCE_ID)}`;
     }
 
     function renderDateStrip(){
@@ -547,7 +555,8 @@
       const startedAt=Date.now();
       const dateAtStart=selectedDate;
       const requestId=++availabilityRequestId;
-      const cached=availabilityCache.get(dateAtStart);
+      const courtCacheKey=`${RESOURCE_ID}:${dateAtStart}`;
+      const cached=availabilityCache.get(courtCacheKey);
       if(cached) renderSlots(cached);
       else $("slots").innerHTML = `<div class="loading">กำลังโหลดเวลาว่าง...</div>`;
       if(!cached) $("availableCount").textContent = "—";
@@ -602,10 +611,15 @@
               reason = "พร้อมจอง";
             }
           }
+          if(!courtOpenAt(start)){
+            status="closed";
+            reason=courtOpenAt(start,30)||courtOpenAt(`${String(h).padStart(2,"0")}:30`,30)
+              ? "เปิดบางช่วง · เช็กครึ่งชั่วโมงในหน้าจอง" : "นอกเวลาเปิดของคอร์ต";
+          }
           rows.push({start,end,status,reason});
         }
         if(requestId!==availabilityRequestId || dateAtStart!==selectedDate) return;
-        availabilityCache.set(dateAtStart,rows);
+        availabilityCache.set(courtCacheKey,rows);
         availabilityLoadedAt=Date.now();
         updateDebugTelemetry({
           requestId,
@@ -705,7 +719,9 @@
       });
     }
 
+    let weeklyLoadSequence=0;
     async function loadWeeklySnapshot() {
+      const sequence=++weeklyLoadSequence, courtAtStart=RESOURCE_ID;
       const container = $("weeklySnapshotContainer");
       container.innerHTML = `<div class="loading">กำลังโหลดภาพรวมเวลาว่าง 7 วัน...</div>`;
       try {
@@ -714,8 +730,8 @@
         
         const results = await Promise.all(dates.map(async (dateISO) => {
           const [avSnap, bkSnap] = await Promise.all([
-            getDocsFromServer(query(collection(db, "available_slots"), where("date", "==", dateISO), where("resourceId", "==", RESOURCE_ID))),
-            getDocsFromServer(query(collection(db, "booking_slots"), where("date", "==", dateISO), where("resourceId", "==", RESOURCE_ID)))
+            getDocsFromServer(query(collection(db, "available_slots"), where("date", "==", dateISO), where("resourceId", "==", courtAtStart))),
+            getDocsFromServer(query(collection(db, "booking_slots"), where("date", "==", dateISO), where("resourceId", "==", courtAtStart)))
           ]);
           
           const avByTime = {};
@@ -745,7 +761,7 @@
             const bs = bsByTime[start] || bsByTime[slotId(dateISO, h)];
             const past = isPastSlot(dateISO, h);
             
-            if (av?.status === "open") {
+            if (av?.status === "open" && courtOpenAt(start)) {
               openCount++;
               if (!past && !isBlockingSlot(bs, now)) {
                 availableTimes.push(start);
@@ -760,6 +776,7 @@
           };
         });
         
+        if(sequence!==weeklyLoadSequence || courtAtStart!==RESOURCE_ID) return;
         renderWeeklySnapshot(weeklyData);
       } catch (e) {
         console.error(e);
@@ -784,6 +801,9 @@
     $("datePicker").addEventListener("change",()=>setDate($("datePicker").value));
     $("refreshBtn").addEventListener("click",refreshAll);
 
+    const courtSelect=document.createElement("select");courtSelect.id="publicCourt";courtSelect.setAttribute("aria-label","คอร์ต");
+    $("slots").before(courtSelect);
+    try { commerceConfig=await loadCourtSelector(courtSelect,RESOURCE_ID,id=>{RESOURCE_ID=id;return refreshAll();}); } catch(e){$("summaryText").textContent=e.message;}
     const params = new URLSearchParams(location.search);
     setDate(params.get("date") || todayISO());
     loadWeeklySnapshot();

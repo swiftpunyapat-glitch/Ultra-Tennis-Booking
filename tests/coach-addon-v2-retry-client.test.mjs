@@ -9,7 +9,7 @@ function client(fetch, storage = new Map()) {
   const sessionStorage = { getItem: k => storage.get(k) || null, setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k) };
   const noop = () => {};
   const context = vm.createContext({
-    fetch, sessionStorage, localStorage: sessionStorage, crypto: { randomUUID }, window: {},
+    fetch, courtFetch:fetch, RESOURCE_ID:"room1", sessionStorage, localStorage: sessionStorage, crypto: { randomUUID }, window: {},
     state: { coachAddonV2: { active: true, selectedCoach: { id: 'c1' }, quote: {}, fundingMode: 'cash', studentCount: 1 }, time: '10:00', durationMinutes: 60, lineProfile: { userId: 'guest', displayName: 'Guest' } },
     coachAddonV2AuthFields: async () => ({}), protectedIdToken: async () => null,
     showToast: noop, t: x => x, refreshCoachAddonV2Options: noop, checkEligibility: noop,

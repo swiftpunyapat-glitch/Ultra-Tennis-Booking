@@ -1,3 +1,4 @@
+import { manualPaymentApproval } from './payment-verification.js';
 import { FieldValue } from 'firebase-admin/firestore';
 import { isCoachAddonV2Booking, coachClaimCellStarts, coachClaimId, coachAddonV2PackageKind } from './coach-addon-v2.js';
 
@@ -273,6 +274,7 @@ export async function confirmCoachAddonV2Payment(db, bookingId, {
       'priceBreakdown.cashPaidAmount': Number(booking.cashDueAmount) || 0,
       ...(booking.packageUsageState === 'reserved' ? { packageUsageState: 'consumed', packageConsumedAt: FieldValue.serverTimestamp() } : {}),
       bookingStatus: 'confirmed', paymentStatus: 'paid', status: 'confirmed',
+      ...manualPaymentApproval(actor, FieldValue.serverTimestamp()),
       paidBy: actor, paidAt: FieldValue.serverTimestamp(), confirmedAt: FieldValue.serverTimestamp(),
       adminReviewedAt: FieldValue.serverTimestamp(),
       ...(manualPayment ? { paymentMethod: manualPayment.paymentMethod, paymentNote: manualPayment.paymentNote } : {}),

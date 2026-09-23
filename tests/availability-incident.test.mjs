@@ -29,7 +29,7 @@ function harness({cached,fail=false,empty=false,blocked=false}={}){
   const state={time:'10:00',availabilityStatus:'idle',durationMinutes:60};
   const snaps=[{size:empty?0:1,forEach:f=>{if(!empty)f({data:()=>({status:'open',startTime:'10:00'})});}}, {size:0,forEach(){}}, {exists:()=>false}];
   const context=vm.createContext({state,$,document:{createElement:node},currentLang:'en',console:{error(){}},Date,Set,Map,
-    bookingAvailabilityRequestId:0,bookingAvailabilityCache:new Map(cached?[['2026-09-10',cached]]:[]),
+    RESOURCE_ID:'room1',bookingAvailabilityRequestId:0,bookingAvailabilityCache:new Map(cached?[['room1:2026-09-10',cached]]:[]),
     getSelectedDateISO:()=> '2026-09-10',fetchFreshAvailability:async()=>{if(fail)throw {code:'unavailable'};return snaps;},
     updateBookingConfirmBtn:vi.fn(),reportAvailability:vi.fn(),updateDebugTelemetry:vi.fn(),refreshQuote:vi.fn(),
     getDisabledReasonRange:()=>blocked?'booked':'',toMinB:()=>600,isLateNightHour:()=>false,toHHMMB:()=> '10:00',
@@ -69,6 +69,28 @@ describe('customer availability recovery',()=>{
     resolve([{size:1,forEach:f=>f({data:()=>({status:'open',startTime:'10:00'})})},{size:0,forEach(){}},{exists:()=>false}]);
     await old;
     expect(h.state.availabilityRawCount).toBe(0);
-    expect(h.context.bookingAvailabilityCache.get('2026-09-10').rawSlotCount).toBe(0);
+    expect(h.context.bookingAvailabilityCache.get('room1:2026-09-10').rawSlotCount).toBe(0);
   });
+});
+
+test('switching courts never shows another court cached availability',async()=>{
+  const h=harness({fail:true,cached:{openSlots:['10:00'],blockedCells:[],loadedAt:Date.now(),rawSlotCount:1}});
+  h.context.RESOURCE_ID='court2';
+  await h.context.loadSlotsAndRender('2026-09-10');
+  expect(h.state.openSlots.has('10:00')).toBe(false);
+  expect(h.state.availabilityStatus).toBe('error');
+});
+test('switching courts while loading discards the old court response',async()=>{
+  const h=harness({empty:true,blocked:true});
+  const fetch=h.context.fetchFreshAvailability;
+  let resolve;
+  h.context.fetchFreshAvailability=()=>new Promise(r=>{resolve=r;});
+  const old=h.context.loadSlotsAndRender('2026-09-10');
+  h.context.RESOURCE_ID='court2';h.context.fetchFreshAvailability=fetch;
+  await h.context.loadSlotsAndRender('2026-09-10');
+  resolve([{size:1,forEach:f=>f({data:()=>({status:'open',startTime:'10:00'})})},{size:0,forEach(){}},{exists:()=>false}]);
+  await old;
+  expect(h.state.availabilityRawCount).toBe(0);
+  expect(h.context.bookingAvailabilityCache.get('court2:2026-09-10').rawSlotCount).toBe(0);
+  expect(h.context.bookingAvailabilityCache.has('room1:2026-09-10')).toBe(false);
 });

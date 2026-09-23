@@ -1,3 +1,5 @@
+import { readStore } from './_lib/store-settings.js';
+import { handleCommerceSettings } from './_lib/commerce-admin.js';
 // ════════════════════════════════════════════════════════════════════
 // POST /api/admin-user-action — Admin user management, package and
 // pricing actions
@@ -5,7 +7,7 @@
 // Auth: requires valid admin session cookie.
 // Actions:
 //   add_pass_to_registered_user            (branch_manager or above)
-//   save_store_pricing                      (Art owner only)
+//   save_store_pricing                      (owner only)
 //   save_special_promotion                 (owner-only — merged in from
 //   deactivate_special_promotion            the former /api/admin-pricing-action
 //                                           route to keep the Vercel function
@@ -108,7 +110,12 @@ export default async function handler(req, res) {
 
   const { action, targetUserId, packageType, validFrom, note, eventEndDate, eventName } = req.body || {};
 
-  // Voucher Manager is deliberately pinned to the same single operator as
+  if (['commerce_get', 'commerce_save', 'commerce_preview'].includes(action)) {
+    if (!requireRole(session, 'owner')) return res.status(403).json({ ok: false, error: 'Owner only' });
+    return handleCommerceSettings({ db: getAdminDb(), body: req.body, res, session });
+  }
+
+  // Voucher Manager uses the same owner role as
   // store pricing. The UI is hidden for everyone else, but this server gate is
   // the authority and protects reads as well as writes.
   const voucherActions = new Set([
@@ -118,8 +125,8 @@ export default async function handler(req, res) {
     'event_pass_reject_request', 'event_pass_reset_code',
   ]);
   if (voucherActions.has(action)) {
-    if (adminName !== 'Art' || !requireRole(session, 'owner')) {
-      return res.status(403).json({ ok: false, error: 'Access denied: Art owner only.' });
+    if (!requireRole(session, 'owner')) {
+      return res.status(403).json({ ok: false, error: 'Access denied: Owner only.' });
     }
     return handleVoucherAction({ req, res, adminName, session, action });
   }
@@ -136,10 +143,10 @@ export default async function handler(req, res) {
 
   // ── Pricing actions (owner-only) ─────────────────────────────────
   if (action === 'save_store_pricing' || action === 'save_special_promotion' || action === 'deactivate_special_promotion') {
-    // Pricing is intentionally pinned to one authenticated operator. The UI
+    // Pricing is restricted to authenticated owners. The UI
     // also hides these controls, but this server check is the security boundary.
-    if (adminName !== 'Art' || !requireRole(session, 'owner')) {
-      return res.status(403).json({ ok: false, error: 'Access denied: Art owner only.' });
+    if (!requireRole(session, 'owner')) {
+      return res.status(403).json({ ok: false, error: 'Access denied: Owner only.' });
     }
     return handlePricingAction({ req, res, adminName, session, action });
   }
@@ -978,7 +985,7 @@ function projectVoucherCampaign(doc) {
     startTime: data.startTime || '06:00',
     endTime: data.endTime || '24:00',
     excludeHolidays: data.excludeHolidays === true,
-    exactDurationMinutes: Number(data.exactDurationMinutes) || 60,
+    exactDurationMinutes: Number(data.exactDurationMinutes ?? 60),
     requiresLineLogin: data.requiresLineLogin !== false,
     transferable: data.transferable === true,
     eventPassApprovalMode: data.voucherType === 'event_pass'
@@ -987,7 +994,7 @@ function projectVoucherCampaign(doc) {
     maxUsesPerCode: Number(data.maxUsesPerCode) || 1,
     maxCancellationRestores: Number(data.maxCancellationRestores) || 0,
     branchId: data.branchId || DEFAULT_BRANCH_ID,
-    resourceId: data.resourceId || 'room1',
+    resourceId: data.resourceId === undefined ? 'room1' : data.resourceId,
     allowedPricingTypes: Array.isArray(data.allowedPricingTypes) ? data.allowedPricingTypes : [],
     discountAmount: data.discountAmount ?? null,
     discountPercent: data.discountPercent ?? null,
@@ -1073,6 +1080,10 @@ async function handleVoucherAction({ req, res, adminName, session, action }) {
   if (action === 'voucher_save_campaign') {
     const normalized = normalizeCampaignInput(req.body?.campaign || {});
     if (!normalized.ok) return res.status(400).json({ ok: false, error: normalized.error });
+    if (normalized.data.resourceId) {
+      const store = await readStore(db);
+      if (!store.resources.some(r=>r.id===normalized.data.resourceId)) return res.status(400).json({ok:false,error:'Unknown court'});
+    }
     const ref = db.collection('voucher_campaigns').doc(normalized.campaignId);
     try {
       const before = await ref.get();
@@ -1288,7 +1299,7 @@ async function handleVoucherAction({ req, res, adminName, session, action }) {
           status: 'active', isEventPass: true,
           restrictDays: Array.isArray(campaign.allowedDays) ? campaign.allowedDays : [1, 2, 3, 4, 5],
           branchId: campaign.branchId || DEFAULT_BRANCH_ID,
-          resourceId: campaign.resourceId || 'room1',
+          resourceId: campaign.resourceId === undefined ? 'room1' : campaign.resourceId,
           excludeHolidays: campaign.excludeHolidays === true,
           exactDurationMinutes: 60, eventUsedAt: null,
           eventName: campaign.name || 'Event Pass',

@@ -1,3 +1,7 @@
+import { courtQuote } from './_lib/court-quote.js';
+import { storeConfig, publicStoreConfig, financialSnapshot, resourceError } from '../commerce.js';
+import { validateResourceRequest, resourceSlotId, readPricing, readStore, commerceSettingsRef, pricingFromSnapshots } from './_lib/store-settings.js';
+import { verificationCapabilities } from './_lib/payment-verification.js';
 import { handleAvailabilityDiagnostic } from './_lib/availability-diagnostic.js';
 // ════════════════════════════════════════════════════════════════════
 // POST /api/booking — customer booking route (Pricing v2)
@@ -295,7 +299,7 @@ function quoteWithVoucher(baseQuote, bundle, context) {
     nowMs: context.nowMs, lineUserId: context.lineUserId,
     date: context.date, startTime: context.startTime,
     durationMinutes: context.durationMinutes, isHoliday: context.isHoliday,
-    branchId: DEFAULT_BRANCH_ID, resourceId: RESOURCE_ID, baseQuote,
+    branchId: DEFAULT_BRANCH_ID, resourceId: context.resourceId || RESOURCE_ID, baseQuote,
     bookingId: context.bookingId || null,
   });
   return applyVoucherToQuote(baseQuote, result);
@@ -507,6 +511,17 @@ export default async function handler(req, res) {
     attachTestSession(body, resolved.session);
   }
 
+  if (['price_quote','create','create_pass_booking','coach_slots','create_coach_lesson','coach_addon_v2_options','coach_addon_v2_quote','create_coach_addon_v2'].includes(body.action)) {
+    try {
+      if (['create_pass_booking','create_coach_addon_v2'].includes(body.action)) {
+        // Recover a committed response even if its court has since closed.
+        body.resourceId = body.resourceId || 'room1';
+        if (typeof body.resourceId !== 'string' || !/^[a-zA-Z0-9-]{1,40}$/.test(body.resourceId)) throw Object.assign(new Error('Invalid court ID'), {status:400});
+      } else body.resourceId = await validateResourceRequest(getAdminDb(), body);
+    }
+    catch (e) { return res.status(e.status || 503).json({ ok: false, error: e.status ? e.message : 'Unable to load court settings' }); }
+  }
+
   // Guest capability token (Security Hotfix 2026-08-04)
   if (body.action === 'guest_booking') return handleGuestBooking(req, res, body);
 
@@ -649,7 +664,7 @@ async function handleEventPassRedeem(req, res, body) {
         status: 'active', isEventPass: true,
         restrictDays: Array.isArray(campaign.allowedDays) ? campaign.allowedDays : [1, 2, 3, 4, 5],
         branchId: campaign.branchId || DEFAULT_BRANCH_ID,
-        resourceId: campaign.resourceId || RESOURCE_ID,
+        resourceId: campaign.resourceId === undefined ? RESOURCE_ID : campaign.resourceId,
         excludeHolidays: campaign.excludeHolidays === true,
         exactDurationMinutes: 60, eventUsedAt: null,
         eventName: campaign.name || 'Event Pass',
@@ -806,12 +821,17 @@ async function handleFeatures(res) {
   try { db = getAdminDb(); }
   catch (e) { console.error('[features] DB init:', e.message); return res.status(500).json({ ok: false, error: 'Server error' }); }
   let halfHourPrice = HALF_HOUR_PRICE;
+  // Public projection only — see publicStoreConfig. This route is
+  // unauthenticated; the admin editor reads the full config through the
+  // session-checked commerce_get action instead.
+  let commerce = publicStoreConfig(null);
   try {
-    const p = await db.collection('system_settings').doc('pricing').get();
-    halfHourPrice = halfPriceFrom(p.exists ? p.data() : null);
+    const pricing = await readPricing(db);
+    halfHourPrice = halfPriceFrom(pricing);
+    commerce = publicStoreConfig(pricing);
   } catch (e) { console.warn('[features] pricing read failed → default half price:', e.message); }
   return res.status(200).json({
-    ok: true, buildVersion: BUILD_VERSION,
+    ok: true, buildVersion: BUILD_VERSION, commerce, paymentVerification: verificationCapabilities(),
     enableHalfHourBooking: await halfHourEnabled(db), halfHourPrice,
     enableCoachAddonV2: await coachAddonV2Enabled(db),
   });
@@ -833,10 +853,6 @@ async function handlePriceQuote(res, body) {
   const hasHalf = segs.some(x => x.span === 30);
   const placeErr = halfPlacementError(segs);
   if (placeErr) return res.status(409).json({ ok: false, code: 'SHAPE', error: placeErr });
-  // Vouchers stay single-hour only (Phase A rule; halves never join promos).
-  if (voucherCode && (durationMinutes !== 60 || hasHalf)) {
-    return res.status(409).json({ ok: false, code: 'VOUCHER', error: 'โค้ดส่วนลดใช้ได้กับการจอง 1 ชั่วโมงเท่านั้น' });
-  }
 
   let db;
   try { db = getAdminDb(); }
@@ -849,42 +865,17 @@ async function handlePriceQuote(res, body) {
   try {
     const nowMs = Date.now();
     const [pricingSnap, holidaySnap, voucherBundle] = await Promise.all([
-      db.collection('system_settings').doc('pricing').get(),
+      readPricing(db),
       db.collection('holidays').doc(date).get(),
       loadVoucherBundle(db, voucherCode),
     ]);
-    // Owner rule: a booking containing a half joins NO promotions — full hours
-    // price with the special promo disabled (single MAIN-account QR).
-    const promoConfig = (!hasHalf && pricingSnap.exists) ? pricingSnap.data() : null;
-    const halfPrice   = halfPriceFrom(pricingSnap.exists ? pricingSnap.data() : null);
     const isHoliday = holidaySnap.exists && holidaySnap.data().isHoliday === true;
-    const quoteInput = h => ({
-      date, startTime: h, nowMs,
-      isHoliday,
-      promoConfig, payType, voucherCode: null, voucher: null,
-      lineUserId,
+    const { quote: baseQuote } = courtQuote({ segments: segs, date, startTime, durationMinutes,
+      resourceId: body.resourceId, pricing: pricingSnap, isHoliday, nowMs, lineUserId });
+    const quote = quoteWithVoucher(baseQuote, voucherBundle, {
+      voucherCode, nowMs, lineUserId, date, startTime, durationMinutes, isHoliday, resourceId: body.resourceId,
     });
-    if (durationMinutes === 60) {
-      const baseQuote = computeQuote(quoteInput(startTime));
-      const quote = quoteWithVoucher(baseQuote, voucherBundle, {
-        voucherCode, nowMs, lineUserId, date, startTime, durationMinutes, isHoliday,
-      });
-      return res.status(200).json({ ok: true, quote });
-    }
-    const segQuotes = segs.map(x => x.span === 30
-      ? halfSegQuote(x.start, halfPrice, flatHalfMetadata(date, x.start, isHoliday))
-      : { ...computeQuote(quoteInput(x.start)), startTime: x.start, span: 60 });
-    const combined  = combineQuotes(segQuotes);
-    return res.status(200).json({
-      ok: true,
-      quote: {
-        ...segQuotes.find(q => q.span === 60) || segQuotes[0],  // base flags from an hour seg
-        ...combined,                                            // totals + breakdown override
-        durationMinutes, durationHours: durationMinutes / 60,
-        endTime: endTimeAfterMin(startTime, durationMinutes),
-        voucherApplied: false, voucherCode: null, discountAmount: 0,
-      },
-    });
+    return res.status(200).json({ ok: true, quote: { ...quote, durationMinutes, endTime: endTimeAfterMin(startTime, durationMinutes) } });
   } catch (e) {
     if (e.code === 'MIXED_RECEIVER') {
       return res.status(409).json({ ok: false, code: 'MIXED_RECEIVER', error: 'ช่วงเวลาที่เลือกมีช่องทางชำระเงินต่างกัน กรุณาจองแยกรายชั่วโมง' });
@@ -896,6 +887,8 @@ async function handlePriceQuote(res, body) {
 
 // ── create — server-authoritative single-use booking (Stage 2) ──────
 async function handleCreate(req, res, body) {
+  const RESOURCE_ID = body.resourceId || 'room1';
+  const slotIdOf = (date, time) => resourceSlotId(RESOURCE_ID, date, time);
   const date         = typeof body.date === 'string' ? body.date.trim() : '';
   const startTime    = typeof body.startTime === 'string' ? body.startTime.trim() : '';
   const customerName = typeof body.customerName === 'string' ? body.customerName.trim() : '';
@@ -918,9 +911,7 @@ async function handleCreate(req, res, body) {
   const hasHalf = segs.some(x => x.span === 30);
   const placeErr = halfPlacementError(segs);
   if (placeErr) return res.status(409).json({ ok: false, code: 'SHAPE', error: placeErr });
-  if (voucherCode && (durationMinutes !== 60 || hasHalf)) {
-    return res.status(409).json({ ok: false, code: 'VOUCHER', error: 'โค้ดส่วนลดใช้ได้กับการจอง 1 ชั่วโมงเท่านั้น' });
-  }
+
 
   let db;
   try { db = getAdminDb(); }
@@ -942,38 +933,24 @@ async function handleCreate(req, res, body) {
   }
 
   const nowMs = Date.now();
-  let quote, segQuotes, isHolidayForVoucher = false;
+  let quote, baseQuote, segQuotes, quotedPricing, isHolidayForVoucher = false;
   let voucherBundle = { voucher: null, campaign: null, campaignRef: null };
   try {
     const [pricingSnap, holidaySnap, loadedVoucherBundle] = await Promise.all([
-      db.collection('system_settings').doc('pricing').get(),
+      readPricing(db),
       db.collection('holidays').doc(date).get(),
       loadVoucherBundle(db, voucherCode),
     ]);
     voucherBundle = loadedVoucherBundle;
-    // Owner rule: bookings containing a half join NO promotions (promo off).
-    const promoConfig = (!hasHalf && pricingSnap.exists) ? pricingSnap.data() : null;
-    const halfPrice   = halfPriceFrom(pricingSnap.exists ? pricingSnap.data() : null);
-    const isHoliday   = holidaySnap.exists && holidaySnap.data().isHoliday === true;
+    quotedPricing = pricingSnap;
+    const isHoliday = holidaySnap.exists && holidaySnap.data().isHoliday === true;
     isHolidayForVoucher = isHoliday;
-    segQuotes = segs.map(x => x.span === 30
-      ? halfSegQuote(x.start, halfPrice, flatHalfMetadata(date, x.start, isHoliday))
-      : {
-          ...computeQuote({
-            date, startTime: x.start, nowMs,
-            isHoliday,
-            promoConfig,
-            payType: 'single', voucherCode: null, voucher: null,
-            lineUserId,
-          }),
-          startTime: x.start, span: 60,
-        });
-    quote = durationMinutes === 60
-      ? quoteWithVoucher(segQuotes[0], voucherBundle, {
-          voucherCode, nowMs, lineUserId, date, startTime, durationMinutes, isHoliday,
-        })
-      : { ...(segQuotes.find(q => q.span === 60) || segQuotes[0]), ...combineQuotes(segQuotes),
-          voucherApplied: false, voucherCode: null, discountAmount: 0 };
+    const priced = courtQuote({ segments: segs, date, startTime, durationMinutes, resourceId: RESOURCE_ID,
+      pricing: quotedPricing, isHoliday, nowMs, lineUserId });
+    baseQuote = priced.quote; segQuotes = priced.segQuotes;
+    quote = quoteWithVoucher(baseQuote, voucherBundle, {
+      voucherCode, nowMs, lineUserId, date, startTime, durationMinutes, isHoliday, resourceId: RESOURCE_ID,
+    });
   } catch (e) {
     if (e.code === 'MIXED_RECEIVER') {
       return res.status(409).json({ ok: false, code: 'MIXED_RECEIVER', error: 'ช่วงเวลาที่เลือกมีช่องทางชำระเงินต่างกัน กรุณาจองแยกรายชั่วโมง' });
@@ -987,10 +964,13 @@ async function handleCreate(req, res, body) {
     return res.status(409).json({ ok: false, code: 'VOUCHER', error: mapVoucherReason(quote.voucherReason) });
   }
 
+  if (body.expectedPrice !== undefined && Number(body.expectedPrice) !== quote.finalPrice) {
+    return res.status(409).json({ ok:false,code:'PRICE_CHANGED',error:'ราคาเปลี่ยน กรุณาตรวจสอบราคาและยืนยันใหม่' });
+  }
   const finalPrice        = quote.finalPrice;
   const endTime           = endTimeAfterMin(startTime, durationMinutes);
   const bookingCode       = genBookingCode();
-  const freeVoucher       = quote.isFreeVoucher === true;
+  const freeVoucher       = quote.isFreeVoucher === true || quote.finalPrice === 0;
   const paymentExpiresAt  = freeVoucher ? null : Timestamp.fromMillis(nowMs + PAY_MINS * 60 * 1000);
   const allLateNight      = segQuotes.every(q => q.qrType === 'late_night');
   const bookingType       = allLateNight ? 'Late Night Session' : 'Single Use';
@@ -1042,6 +1022,11 @@ async function handleCreate(req, res, body) {
 
   try {
     await db.runTransaction(async (t) => {
+      const currentPricing = await readPricing(db, t);
+      const currentHoliday = await t.get(db.collection('holidays').doc(date));
+      if (JSON.stringify(currentPricing) !== JSON.stringify(quotedPricing)
+        || (currentHoliday.exists && currentHoliday.data().isHoliday === true) !== isHolidayForVoucher) throw new Error('PRICE_CHANGED');
+      if (resourceError(storeConfig(quotedPricing), RESOURCE_ID, startTime, durationMinutes)) throw new Error('PRICE_CHANGED');
       const reads = [...cellRefs.map(r => t.get(r)), ...availRefs.map(r => t.get(r))];
       if (voucherRef) reads.push(t.get(voucherRef));
       if (campaignRef) reads.push(t.get(campaignRef));
@@ -1079,7 +1064,7 @@ async function handleCreate(req, res, body) {
           voucher: v, campaign, code: voucherCode, nowMs, lineUserId,
           date, startTime, durationMinutes, isHoliday: isHolidayForVoucher,
           branchId: DEFAULT_BRANCH_ID, resourceId: RESOURCE_ID,
-          baseQuote: segQuotes[0], bookingId: bookingRef.id,
+          baseQuote, bookingId: bookingRef.id,
         });
         if (!txResult.ok) throw new Error(`VOUCHER_${txResult.reason}`);
         if (txResult.voucherType !== quote.voucherType || txResult.finalPrice !== finalPrice) {
@@ -1114,6 +1099,7 @@ async function handleCreate(req, res, body) {
         date, startTime, endTime,
         durationMinutes, durationHours: durationMinutes / 60,
         ...(durationMinutes !== 60 ? { priceBreakdown: quote.breakdown } : {}),
+        pricingSnapshot: financialSnapshot(quote),
         // Pricing v2 metadata (server-authoritative)
         price: finalPrice, amount: finalPrice,
         originalPrice: quote.originalPrice, finalPrice,
@@ -1133,8 +1119,8 @@ async function handleCreate(req, res, body) {
         paymentStatus: freeVoucher ? 'package' : 'unpaid',
         paymentExpiresAt,
         slipUrl: null, slipUploadedAt: null, cancelReason: null,
-        createdVia: freeVoucher ? 'server_voucher' : 'server',
-        ...(freeVoucher ? { confirmedAt: FieldValue.serverTimestamp(), paymentMethod: 'voucher' } : {}),
+        createdVia: freeVoucher ? (quote.voucherApplied ? 'server_voucher' : 'server_promotion') : 'server',
+        ...(freeVoucher ? { confirmedAt: FieldValue.serverTimestamp(), paymentMethod: quote.voucherApplied ? 'voucher' : 'promotion' } : {}),
         createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
       });
       // Routed through writeSlotDoc so the public slot contract (SL-02) is
@@ -1152,6 +1138,7 @@ async function handleCreate(req, res, body) {
       if (guestAccessRef) t.create(guestAccessRef, guestAccess.record);
     });
   } catch (e) {
+    if (e.message === 'PRICE_CHANGED') return res.status(409).json({ ok: false, code: 'PRICE_CHANGED', error: 'ราคาเปลี่ยน กรุณาตรวจสอบราคาและจองอีกครั้ง' });
     const msg = e.message || '';
     if (msg.startsWith('SLOT_')) {
       const m = { SLOT_NOT_OPEN: 'ช่องเวลานี้ปิดรับจองแล้ว', SLOT_TAKEN: 'ช่องเวลานี้เพิ่งถูกจอง', SLOT_HELD: 'ช่องเวลานี้ถูกจองค้างอยู่ ลองใหม่อีกครั้ง' };
@@ -1180,6 +1167,7 @@ async function handleCreate(req, res, body) {
       bookingSlotIds: segRefs.map(r => r.id),
       durationMinutes, durationHours: durationMinutes / 60,
       bookingType,
+      resourceId: RESOURCE_ID, pricingSnapshot: financialSnapshot(quote),
       finalPrice, price: finalPrice, originalPrice: quote.originalPrice,
       qrType: quote.qrType, qrAmount: quote.qrAmount, paymentQrType: quote.qrType,
       pricingType: quote.pricingType, discountAmount: quote.discountAmount, voucherCode: quote.voucherCode,
@@ -1331,7 +1319,7 @@ async function handleCancelPending(req, res, body) {
 
   // Release EVERY slot segment the booking holds (Phase B: hour + half docs).
   const slotRefs = bookingSegments(booking)
-    .map(x => db.collection('booking_slots').doc(`${RESOURCE_ID}_${booking.date}_${String(x.start).replace(':', '')}`));
+    .map(x => db.collection('booking_slots').doc(`${booking.resourceId || RESOURCE_ID}_${booking.date}_${String(x.start).replace(':', '')}`));
   // Coach lesson: the coach hour was locked in the create transaction —
   // release it here (ownership-checked below).
   const coachAvailRef = (booking.serviceType === 'coach_lesson' && booking.coachId && booking.date && booking.startTime)
@@ -1611,7 +1599,7 @@ const dowOfDate  = (dateISO) => {
 // Validates a pass against the booking context and returns the package
 // mutation to apply. Pure apart from the values passed in, so the rules are
 // readable in one place. Throws Error(code) — mapped to Thai text by caller.
-export function validatePassAndBuildUpdate({ entitlementType, pkg, uid, dateISO, startTime, durationMinutes, isHoliday, nowMs }) {
+export function validatePassAndBuildUpdate({ entitlementType, pkg, uid, dateISO, startTime, durationMinutes, isHoliday, nowMs, resourceId = 'room1' }) {
   if (pkg.lineUserId !== uid)  throw new Error('PASS_NOT_OWNED');
   if (pkg.status !== 'active') throw new Error('PASS_INACTIVE');
 
@@ -1630,7 +1618,7 @@ export function validatePassAndBuildUpdate({ entitlementType, pkg, uid, dateISO,
   if (entitlementType === 'event') {
     const policyError = eventPassBookingError({
       pkg, dateISO, startTime, durationMinutes, isHoliday, nowMs,
-      branchId: DEFAULT_BRANCH_ID, resourceId: RESOURCE_ID,
+      branchId: DEFAULT_BRANCH_ID, resourceId,
     });
     if (policyError) throw new Error(policyError);
     return { remainingMinutes: remaining - durationMinutes, eventUsedAt: FieldValue.serverTimestamp() };
@@ -1694,6 +1682,8 @@ const PASS_ERROR_TEXT = {
 };
 
 async function handleCreatePassBooking(res, body) {
+  const RESOURCE_ID = body.resourceId || 'room1';
+  const slotIdOf = (date, time) => resourceSlotId(RESOURCE_ID, date, time);
   const date            = typeof body.date === 'string' ? body.date.trim() : '';
   const startTime       = typeof body.startTime === 'string' ? body.startTime.trim() : '';
   const payType         = typeof body.payType === 'string' ? body.payType.trim() : '';
@@ -1784,6 +1774,7 @@ async function handleCreatePassBooking(res, body) {
   const idemScope = `create_pass_booking:${uid}`;
   const idemRef  = idempotencyRef(db, idemKey, idemScope);
   const idemFp   = fingerprintOf({
+    ...(RESOURCE_ID === 'room1' ? {} : { resourceId: RESOURCE_ID }),
     uid, payType, packageId, date, startTime, durationMinutes,
     customerName, customerPhone, customerNote, lineDisplayName,
   });
@@ -1797,6 +1788,8 @@ async function handleCreatePassBooking(res, body) {
       const idem = await readIdempotencyInTx(t, idemRef, idemFp);
       if (idem.state === 'conflict') throw new Error('IDEMPOTENCY_CONFLICT');
       if (idem.state === 'replay')  { replayed = idem.response; return; }
+      const currentStore = await readStore(db, t);
+      if (resourceError(currentStore, RESOURCE_ID, startTime, durationMinutes)) throw new Error('SLOT_NOT_OPEN');
 
       const snaps     = await Promise.all([...cellRefs.map(r => t.get(r)), ...availRefs.map(r => t.get(r)), t.get(pkgRef)]);
       const cellSnaps = snaps.slice(0, cellRefs.length);
@@ -1839,7 +1832,7 @@ async function handleCreatePassBooking(res, body) {
       // Re-validated INSIDE the transaction so a concurrent booking cannot
       // spend the same minutes twice.
       const pkgUpdate = validatePassAndBuildUpdate({
-        entitlementType, pkg, uid, dateISO: date, startTime, durationMinutes, isHoliday, nowMs,
+        entitlementType, pkg, uid, dateISO: date, startTime, durationMinutes, isHoliday, nowMs, resourceId: RESOURCE_ID,
       });
 
       t.set(bookingRef, {
@@ -2107,6 +2100,8 @@ async function handleCoachOptions(res) {
 // availability for a date: room open, room not live-booked, coach hour open
 // (or locked by an expired unpaid hold), and the hour is still in the future.
 async function handleCoachSlots(res, body) {
+  const RESOURCE_ID = body.resourceId || 'room1';
+  const slotIdOf = (date, time) => resourceSlotId(RESOURCE_ID, date, time);
   const date    = typeof body.date === 'string' ? body.date.trim() : '';
   const coachId = typeof body.coachId === 'string' ? body.coachId.trim() : '';
   if (!DATE_RE.test(date)) return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
@@ -2174,6 +2169,8 @@ async function handleCoachSlots(res, body) {
 // ONE transaction. Price/payout are snapshot from the coaches doc at create
 // time (rate changes never affect existing bookings). No vouchers/passes.
 async function handleCreateCoachLesson(res, body) {
+  const RESOURCE_ID = body.resourceId || 'room1';
+  const slotIdOf = (date, time) => resourceSlotId(RESOURCE_ID, date, time);
   const date          = typeof body.date === 'string' ? body.date.trim() : '';
   const startTime     = typeof body.startTime === 'string' ? body.startTime.trim() : '';
   const coachId       = typeof body.coachId === 'string' ? body.coachId.trim() : '';
@@ -2274,6 +2271,9 @@ async function handleCreateCoachLesson(res, body) {
 
   try {
     await db.runTransaction(async (t) => {
+      const currentStore = await readStore(db, t);
+      if (resourceError(currentStore, RESOURCE_ID, startTime, 60)) throw new Error('SLOT_NOT_OPEN');
+
       const [slotSnap, availSnap, caSnap, pkgSnap] = await Promise.all([
         t.get(slotRef), t.get(availRef), t.get(coachAvailRef),
         pkgRef ? t.get(pkgRef) : Promise.resolve(null),
@@ -2425,28 +2425,10 @@ const v2RangesOverlap = (aStart, aDuration, bStart, bDuration) => {
   return a < b + bDuration && b < a + aDuration;
 };
 
-function v2CourtQuoteFromSnapshots({ date, startTime, durationMinutes, lineUserId, pricing, isHoliday }) {
+function v2CourtQuoteFromSnapshots({ date, startTime, durationMinutes, lineUserId, pricing, isHoliday, resourceId = 'room1' }) {
   const segs = segmentsOf(startTime, durationMinutes);
   if (!segs) throw new Error('INVALID_DURATION');
-  const hasHalf = segs.some(segment => segment.span === 30);
-  const promoConfig = (!hasHalf && pricing) ? pricing : null;
-  const halfPrice = halfPriceFrom(pricing);
-  const segQuotes = segs.map(segment => segment.span === 30
-    ? halfSegQuote(segment.start, halfPrice, flatHalfMetadata(date, segment.start, isHoliday))
-    : {
-        ...computeQuote({
-          date, startTime: segment.start, nowMs: Date.now(), isHoliday,
-          promoConfig, payType: 'single', voucherCode: null, voucher: null, lineUserId,
-        }),
-        startTime: segment.start, span: 60,
-      });
-  return {
-    segs,
-    segQuotes,
-    quote: durationMinutes === 60
-      ? segQuotes[0]
-      : { ...segQuotes.find(q => q.span === 60) || segQuotes[0], ...combineQuotes(segQuotes) },
-  };
+  return { segs, ...courtQuote({ segments: segs, date, startTime, durationMinutes, lineUserId, pricing: { ...pricing, commerce: { ...storeConfig(pricing), promotions: [] } }, isHoliday, resourceId }) };
 }
 
 async function v2VerifiedUid(body) {
@@ -2557,7 +2539,7 @@ async function handleCoachAddonV2Quote(res, body) {
   try {
     const [coachSnap, pricingSnap, holidaySnap] = await Promise.all([
       db.collection('coaches').doc(coachId).get(),
-      db.collection('system_settings').doc('pricing').get(),
+      readPricing(db),
       db.collection('holidays').doc(date).get(),
     ]);
     if (!coachSnap.exists || coachSnap.data().active === false) throw new Error('COACH_UNAVAILABLE');
@@ -2565,7 +2547,7 @@ async function handleCoachAddonV2Quote(res, body) {
     const packageCtx = await v2LoadPackage(db, body, uid, durationMinutes);
     const court = v2CourtQuoteFromSnapshots({
       date, startTime, durationMinutes, lineUserId: uid || 'guest',
-      pricing: pricingSnap.exists ? pricingSnap.data() : null,
+      resourceId: body.resourceId, pricing: pricingSnap,
       isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true,
     });
     const price = calculateCoachAddonV2Price({
@@ -2586,6 +2568,8 @@ async function handleCoachAddonV2Quote(res, body) {
 }
 
 async function handleCreateCoachAddonV2(req, res, body) {
+  const RESOURCE_ID = body.resourceId || 'room1';
+  const slotIdOf = (date, time) => resourceSlotId(RESOURCE_ID, date, time);
   const date = typeof body.date === 'string' ? body.date.trim() : '';
   const startTime = typeof body.startTime === 'string' ? body.startTime.trim() : '';
   const coachId = typeof body.coachId === 'string' ? body.coachId.trim() : '';
@@ -2618,7 +2602,7 @@ async function handleCreateCoachAddonV2(req, res, body) {
   // balance. Those may legitimately have changed because the first call won.
   const retryScope = `create_coach_addon_v2:${lineUserId}`;
   const retryRef = idempotencyRef(db, idemKey, retryScope);
-  const retryFingerprint = fingerprintOf({ lineUserId, date, startTime, durationMinutes, coachId, studentCount,
+  const retryFingerprint = fingerprintOf({ ...(RESOURCE_ID === 'room1' ? {} : { resourceId: RESOURCE_ID }), lineUserId, date, startTime, durationMinutes, coachId, studentCount,
     fundingMode: String(body.fundingMode || 'cash'), packageId: body.fundingMode && body.fundingMode !== 'cash' ? String(body.packageId || '').trim() : '',
     customerName, customerPhone, customerNote });
   async function readRetry(t, existing = null) {
@@ -2689,7 +2673,7 @@ async function handleCreateCoachAddonV2(req, res, body) {
   const holdExpiresAt = Timestamp.fromMillis(nowMs + PAY_MINS * 60 * 1000);
   const idemScope = `create_coach_addon_v2:${lineUserId}`;
   const idemRef = idempotencyRef(db, idemKey, idemScope);
-  const idemFp = fingerprintOf({ lineUserId, date, startTime, durationMinutes, coachId, studentCount, fundingMode: packageCtx.fundingMode, packageId: packageCtx.packageId, customerName, customerPhone, customerNote });
+  const idemFp = fingerprintOf({ ...(RESOURCE_ID === 'room1' ? {} : { resourceId: RESOURCE_ID }), lineUserId, date, startTime, durationMinutes, coachId, studentCount, fundingMode: packageCtx.fundingMode, packageId: packageCtx.packageId, customerName, customerPhone, customerNote });
   const guestAccess = lineUserId === 'guest' ? prepareGuestAccess({ bookingEndMs: Date.parse(`${date}T${endTime}:00+07:00`), nowMs }) : null;
   const guestAccessRef = guestAccess ? db.collection(GUEST_ACCESS_COLLECTION).doc(bookingRef.id) : null;
   let replayed = null;
@@ -2701,7 +2685,7 @@ async function handleCreateCoachAddonV2(req, res, body) {
       // reads can outlive a rejected Promise.all and split the lock acquisition.
       const [idemSnap, ...snaps] = await t.getAll(
         idemRef, ...cellRefs, ...availRefs, ...scheduleRefs, ...coachClaimRefs,
-        coachRef, pricingRef, holidayRef, ...(packageRef ? [packageRef] : []),
+        coachRef, pricingRef, commerceSettingsRef(db), holidayRef, ...(packageRef ? [packageRef] : []),
       );
       const idem = await readIdempotencyInTx(t, idemRef, idemFp, idemSnap);
       if (idem.state === 'conflict') throw new Error('IDEMPOTENCY_CONFLICT');
@@ -2711,8 +2695,10 @@ async function handleCreateCoachAddonV2(req, res, body) {
       const availSnaps = snaps.slice(at, at += availRefs.length);
       const scheduleSnaps = snaps.slice(at, at += scheduleRefs.length);
       const coachClaimSnaps = snaps.slice(at, at += coachClaimRefs.length);
-      const coachSnap = snaps[at++], pricingSnap = snaps[at++], holidaySnap = snaps[at++];
+      const coachSnap = snaps[at++], basePricingSnap = snaps[at++], commerceSnap = snaps[at++], holidaySnap = snaps[at++];
+      const pricingSnap = pricingFromSnapshots(basePricingSnap, commerceSnap);
       const packageSnap = packageRef ? snaps[at] : null;
+      if (resourceError(storeConfig(pricingSnap), RESOURCE_ID, startTime, durationMinutes)) throw new Error('SLOT_NOT_OPEN');
 
       if (!coachSnap.exists || coachSnap.data().active === false) throw new Error('COACH_UNAVAILABLE');
       const coach = coachSnap.data();
@@ -2738,7 +2724,7 @@ async function handleCreateCoachAddonV2(req, res, body) {
       const isHoliday = holidaySnap.exists && holidaySnap.data().isHoliday === true;
       const court = v2CourtQuoteFromSnapshots({
         date, startTime, durationMinutes, lineUserId,
-        pricing: pricingSnap.exists ? pricingSnap.data() : null, isHoliday,
+        resourceId: body.resourceId, pricing: pricingSnap, isHoliday,
       });
 
       let packageUpdate = null;

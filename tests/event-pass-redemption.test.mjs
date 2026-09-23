@@ -202,3 +202,12 @@ describe('Event Pass auto approval', () => {
     expect(Number(blocked.headers['Retry-After'])).toBeGreaterThan(0);
   });
 });
+
+test('a campaign valid on every court keeps that scope on its issued event pass',async()=>{
+  await seed('MSTR-ALL-COURTS');
+  await mockState.db.collection('voucher_campaigns').doc(CAMPAIGN).update({resourceId:null});
+  const result=await call('MSTR-ALL-COURTS');
+  expect(result.statusCode).toBe(200);
+  const pass=(await mockState.db.collection('customer_packages').doc(result.body.packageId).get()).data();
+  expect(pass.resourceId).toBeNull();
+});

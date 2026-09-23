@@ -1,3 +1,4 @@
+import { bookingFinancials } from '../commerce.js';
 // ════════════════════════════════════════════════════════════════════
 // GET /api/finance-data?month=YYYY-MM
 // POST/PATCH /api/finance-data — write handling for expense and income
@@ -129,7 +130,8 @@ export default async function handler(req, res) {
       return res.status(403).json({ ok: false, error: 'Finance access denied' });
     }
 
-    const { month, action } = req.query;
+    const { month, action, basis = 'service' } = req.query;
+    if (!['service','payment'].includes(basis)) return res.status(400).json({ ok: false, error: 'Invalid report basis' });
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({ ok: false, error: 'Invalid month — expected YYYY-MM' });
     }
@@ -138,6 +140,9 @@ export default async function handler(req, res) {
     }
 
     const [year, m] = month.split('-');
+    const paymentStart = new Date(`${month}-01T00:00:00+07:00`);
+    const next = new Date(Date.UTC(Number(year), Number(m), 1));
+    const paymentEnd = new Date(`${next.toISOString().slice(0,10)}T00:00:00+07:00`);
     const startDate = `${year}-${m}-01`;
     const endDate   = `${year}-${m}-31`;
 
@@ -154,11 +159,9 @@ export default async function handler(req, res) {
 
     try {
       const [bookSnap, expSnap, incSnap] = await Promise.all([
-        db.collection('bookings')
-          .where('date', '>=', startDate)
-          .where('date', '<=', endDate)
-          .orderBy('date', 'asc')
-          .get(),
+        (basis === 'payment'
+          ? db.collection('bookings').where('paidAt', '>=', paymentStart).where('paidAt', '<', paymentEnd).orderBy('paidAt', 'asc')
+          : db.collection('bookings').where('date', '>=', startDate).where('date', '<=', endDate).orderBy('date', 'asc')).get(),
         db.collection('finance_expenses')
           .where('date', '>=', startDate)
           .where('date', '<=', endDate)
@@ -185,6 +188,12 @@ export default async function handler(req, res) {
           paymentStatus:            b.paymentStatus            ?? '',
           bookingStatus:            b.bookingStatus            ?? '',
           price:                    Number(b.price)            || 0,
+          financials: bookingFinancials(b),
+          resourceId: b.resourceId || 'room1',
+          paidAt: b.paidAt?.toDate?.()?.toISOString?.() || null,
+          refundAmount: Number(b.refundAmount) || 0,
+          refundStatus: b.refundStatus || null,
+          voucherCode: b.voucherCode || null,
           bookingType:              b.bookingType              ?? '',
           bookingCode:              b.bookingCode              ?? '',
           packageType:              b.packageType              ?? null,
@@ -202,7 +211,7 @@ export default async function handler(req, res) {
         .map(d => ({ id: d.id, ...serializeFsDoc(d.data()) }))
         .filter(i => !i.deleted);
 
-      return res.status(200).json({ ok: true, bookings, expenses, income });
+      return res.status(200).json({ ok: true, bookings, expenses, income, basis });
     } catch (e) {
       console.error('[finance-data] query error:', e.message);
       return res.status(500).json({ ok: false, error: 'Failed to load finance data' });
@@ -311,6 +320,7 @@ async function handleDocumentIssue({ res, db, body, session }) {
       if (linkedType !== 'booking' && source.businessUnit && source.businessUnit !== BUSINESS_UNIT) {
         throw httpError(403, 'Cannot issue a document for this record');
       }
+      const financials = linkedType === 'booking' ? bookingFinancials(source) : null;
       const derived = buildDocumentSource(docType, linkedType, linkedId, source);
       const year = source.date.slice(0, 4);
       const counterRef = db.collection('finance_document_counters').doc(`${docType}_${year}`);
@@ -327,9 +337,10 @@ async function handleDocumentIssue({ res, db, body, session }) {
         status:                 'issued',
         counterpartyName:       derived.counterpartyName,
         counterpartyType:       derived.counterpartyType,
-        items:                  [{ description: derived.description, quantity: 1, unitPrice: derived.amount, amount: derived.amount }],
-        subtotal:               derived.amount,
-        discount:               0,
+        items:                  [{ description: derived.description, quantity: 1, unitPrice: financials?.subtotal ?? derived.amount, amount: financials?.subtotal ?? derived.amount }],
+        subtotal:               financials?.subtotal ?? derived.amount,
+        discount:               financials?.discountTotal ?? 0,
+        pricingSnapshot:        financials,
         vatMode:                'non_vat',
         vatAmount:              0,
         total:                  derived.amount,

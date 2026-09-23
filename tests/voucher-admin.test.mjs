@@ -37,6 +37,11 @@ describe('Voucher Manager campaign validation', () => {
     });
   });
 
+  test('supports multi-hour campaigns and keeps Event Pass at one hour', () => {
+    expect(normalizeCampaignInput(validCampaign({exactDurationMinutes:120,resourceId:'court2'}))).toMatchObject({ok:true,data:{exactDurationMinutes:120,resourceId:'court2'}});
+    expect(normalizeCampaignInput(validCampaign({voucherType:'event_pass',exactDurationMinutes:120})).ok).toBe(false);
+  });
+
   test('supports amount and percent configuration with bounded values', () => {
     expect(normalizeCampaignInput(validCampaign({
       voucherType: 'discount_amount', discountAmount: 80,
@@ -58,7 +63,7 @@ describe('Voucher Manager campaign validation', () => {
     [{ campaignId: '../bad' }, 'Campaign ID'],
     [{ allowedDays: [] }, 'Select at least one'],
     [{ startTime: '20:00', endTime: '06:00' }, 'End time'],
-    [{ exactDurationMinutes: 30 }, 'fixed at 60'],
+    [{ exactDurationMinutes: 45 }, 'Invalid voucher duration'],
     [{ validFrom: '2026-12-31T00:00:00+07:00', expiresAt: '2026-01-01T00:00:00+07:00' }, 'Expiry'],
     [{ voucherType: 'discount_amount', discountAmount: 0 }, 'Discount amount'],
     [{ voucherType: 'discount_percent', discountPercent: 101 }, 'Discount percent'],

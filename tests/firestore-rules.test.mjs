@@ -21,8 +21,8 @@
 
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, updateDoc, collection, getDocs, query, where } from 'firebase/firestore';
-import { beforeAll, afterAll, beforeEach, describe, test } from 'vitest';
+import { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import { beforeAll, afterAll, beforeEach, describe, test, expect } from 'vitest';
 
 const PROJECT_ID = 'ultra-tennis-rules-test';
 const RULES_FILE = process.env.RULES_FILE || 'firestore.rules.hotfix-proposed';
@@ -357,5 +357,54 @@ describe('Server-only collections', () => {
   });
   test('holidays remain publicly readable for pricing', async () => {
     await assertSucceeds(getDoc(doc(anon(), 'holidays/2026-08-12')));
+  });
+});
+
+// Exercise the exact supplied ruleset, including its catch-all denial, against
+// the new private commercial collections and all four public court grids.
+describe('commercial settings and multi-court rules', () => {
+  const date='2027-05-15';
+  beforeEach(async()=>{
+    await testEnv.withSecurityRulesDisabled(async ctx=>{
+      const db=ctx.firestore();
+      await setDoc(doc(db,'commerce_settings/current'),{commerce:{revision:1,rateRules:[{id:'future-rate',hourlyPrice:400}],promotions:[{id:'future-promo',value:10}]}});
+      await setDoc(doc(db,'commerce_settings_history/change1'),{actor:'Owner',before:{revision:0},after:{revision:1}});
+      for(const resourceId of ['room1','court2','court3','court4']){
+        const id=`${resourceId}_${date}_1200`;
+        await setDoc(doc(db,`available_slots/${id}`),{resourceId,date,startTime:'12:00',status:'open'});
+        await setDoc(doc(db,`booking_slots/${id}`),{resourceId,date,hour:'12:00',slotSpanMinutes:30,bookingStatus:'confirmed',paymentStatus:'paid'});
+        await setDoc(doc(db,`booking_slot_claims/${id}`),{bookingId:'bk_A1',bookingCode:'UTAAA01',resourceId,date,hour:'12:00'});
+      }
+    });
+  });
+  for(const [name,context] of [
+    ['anonymous',()=>testEnv.unauthenticatedContext()],
+    ['customer',()=>testEnv.authenticatedContext(UID_A)],
+    ['owner claim',()=>testEnv.authenticatedContext('owner',{admin:true,role:'owner'})],
+  ]){
+    test.each([['commerce_settings','current'],['commerce_settings_history','change1']])(`${name} cannot read or mutate %s directly`,async(collectionName,id)=>{
+      const db=context().firestore();
+      const ref=doc(db,collectionName,id);
+      await assertFails(getDoc(ref));
+      await assertFails(getDocs(collection(db,collectionName)));
+      await assertFails(setDoc(doc(db,collectionName,'new'),{commerce:{revision:999}}));
+      await assertFails(updateDoc(ref,{actor:'attacker',commerce:{revision:999}}));
+      await assertFails(deleteDoc(ref));
+    });
+  }
+  test.each(['room1','court2','court3','court4'])('guest can read %s availability but cannot book directly or read its ownership claim',async resourceId=>{
+    const db=anon();const id=`${resourceId}_${date}_1200`;
+    for(const collectionName of ['available_slots','booking_slots']){
+      const snapshot=await assertSucceeds(getDocs(query(collection(db,collectionName),where('date','==',date),where('resourceId','==',resourceId))));
+      expect(snapshot.docs.map(d=>d.id)).toEqual([id]);
+      await assertFails(updateDoc(doc(db,collectionName,id),{status:'open',bookingStatus:'cancelled'}));
+    }
+    await assertFails(getDoc(doc(db,`booking_slot_claims/${id}`)));
+  });
+  test('a customer cannot replace the locked booking price or manual approval evidence',async()=>{
+    await assertFails(updateDoc(doc(asA(),'bookings/bk_A1'),{
+      price:0,pricingSnapshot:{subtotal:350,promotionDiscount:350,total:0},
+      paymentApproval:{mode:'manual',approvedBy:'Owner'},paymentStatus:'paid',
+    }));
   });
 });

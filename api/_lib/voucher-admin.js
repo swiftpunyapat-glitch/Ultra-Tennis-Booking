@@ -6,7 +6,7 @@ export const VOUCHER_CAMPAIGN_TYPES = Object.freeze([
 
 export const VOUCHER_PRICING_TYPES = Object.freeze([
   'standard', 'morning_weekday', 'morning_weekday_advance',
-  'late_night', 'special_promotion',
+  'late_night', 'special_promotion', 'custom_rate', 'multi_rate', 'half_hour',
 ]);
 
 const CAMPAIGN_ID_RE = /^[a-z0-9][a-z0-9-]{2,63}$/;
@@ -69,11 +69,11 @@ export function normalizeCampaignInput(input = {}) {
     return { ok: false, error: 'End time must be later than start time' };
   }
 
-  // The current customer booking route deliberately permits vouchers only on
-  // exact 60-minute bookings. Keep the Admin contract honest until that route
-  // is expanded; do not let an owner create a campaign the live app rejects.
+  // Coupons support all booking durations; Event Pass remains a one-hour entitlement.
   const exactDurationMinutes = Number(input.exactDurationMinutes ?? 60);
-  if (exactDurationMinutes !== 60) return { ok: false, error: 'Voucher duration is currently fixed at 60 minutes' };
+  if (![0,30,60,90,120,150,180].includes(exactDurationMinutes) || (voucherType === 'event_pass' && exactDurationMinutes !== 60)) return { ok: false, error: 'Invalid voucher duration (Event Pass requires 60 minutes)' };
+  const resourceId = input.resourceId === undefined ? 'room1' : input.resourceId || null;
+  if (resourceId && !/^[A-Za-z0-9-]{1,40}$/.test(resourceId)) return { ok: false, error: 'Invalid court ID' };
 
   const validFrom = parseOptionalInstant(input.validFrom, 'Valid from');
   if (!validFrom.ok) return validFrom;
@@ -140,7 +140,7 @@ export function normalizeCampaignInput(input = {}) {
       maxUsesPerCode: 1,
       maxCancellationRestores,
       branchId: 'ladprao1',
-      resourceId: 'room1',
+      resourceId,
       allowedPricingTypes,
       discountAmount,
       discountPercent,

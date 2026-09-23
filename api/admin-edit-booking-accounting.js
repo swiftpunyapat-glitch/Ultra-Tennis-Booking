@@ -1,3 +1,7 @@
+import { validateResourceRequest, readPricing, readStore } from './_lib/store-settings.js';
+import { courtQuote } from './_lib/court-quote.js';
+import { financialSnapshot, bookingFinancials, money, storeConfig, resourceError } from '../commerce.js';
+import { manualPaymentApproval } from './_lib/payment-verification.js';
 import { checkedWriteBatch } from './_lib/checked-write-batch.js';
 // ════════════════════════════════════════════════════════════════════
 // POST /api/admin-edit-booking-accounting
@@ -143,7 +147,7 @@ function bookingDurationMin(booking) {
 }
 
 const SPLIT_AMOUNT_FIELDS = [
-  'price','amount','finalPrice','originalPrice','basePrice','effectivePrice','qrAmount','packageMinutesUsed',
+  'price','amount','finalPrice','originalPrice','basePrice','effectivePrice','qrAmount','packageMinutesUsed','discountAmount',
 ];
 function proportionalBookingSplit(booking, assignedMinutes, totalMinutes) {
   const assigned = {};
@@ -151,9 +155,24 @@ function proportionalBookingSplit(booking, assignedMinutes, totalMinutes) {
   for (const field of SPLIT_AMOUNT_FIELDS) {
     const total = Number(booking?.[field]);
     if (!Number.isFinite(total)) continue;
-    const first = Math.round(total * assignedMinutes / totalMinutes);
+    const first = field === 'packageMinutesUsed' ? Math.round(total * assignedMinutes / totalMinutes) : money(total * assignedMinutes / totalMinutes);
     assigned[field] = first;
-    remainder[field] = total - first;
+    remainder[field] = money(total - first);
+  }
+  if (booking.pricingSnapshot) {
+    const original = bookingFinancials(booking);
+    assigned.pricingSnapshot = { ...original, lines: [], allocation: 'proportional-reschedule' };
+    remainder.pricingSnapshot = { ...original, lines: [], allocation: 'proportional-reschedule' };
+    for (const key of ['subtotal','promotionDiscount','couponDiscount','total']) {
+      const first = money(original[key] * assignedMinutes / totalMinutes);
+      assigned.pricingSnapshot[key] = first;
+      remainder.pricingSnapshot[key] = money(original[key] - first);
+    }
+    for (const part of [assigned, remainder]) {
+      part.pricingSnapshot.discountTotal = money(part.pricingSnapshot.subtotal - part.pricingSnapshot.total);
+      part.pricingSnapshot.couponDiscount = money(part.pricingSnapshot.discountTotal - part.pricingSnapshot.promotionDiscount);
+      part.discountAmount = part.pricingSnapshot.discountTotal;
+    }
   }
   return { assigned, remainder };
 }
@@ -420,7 +439,7 @@ export default async function handler(req, res) {
   // ── Route by operation ────────────────────────────────────────────
   const operation = body.operation || 'accounting_edit';
 
-  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach', 'coach_lesson_update', 'coach_payout_paid', 'manual_create', 'calendar_sync_fields', 'test_session_purge'];
+  const VALID_OPERATIONS = ['accounting_edit', 'refund', 'mark_paid', 'approve_slip', 'reject_payment', 'delete_booking', 'reschedule_park', 'reschedule_assign', 'reschedule_cancel', 'assign_coach', 'coach_lesson_update', 'coach_payout_paid', 'manual_create', 'manual_quote', 'calendar_sync_fields', 'test_session_purge'];
   if (!VALID_OPERATIONS.includes(operation)) {
     return res.status(400).json({ ok: false, error: `Invalid operation. Must be one of: ${VALID_OPERATIONS.join(', ')}.` });
   }
@@ -499,7 +518,7 @@ export default async function handler(req, res) {
     }
   }
 
-  if (operation === 'manual_create') {
+  if (operation === 'manual_create' || operation === 'manual_quote') {
     if (!requireRole(session, 'owner', 'ultra_admin', 'branch_manager', 'branch_staff')) {
       return res.status(403).json({ ok:false, error:'Role cannot create manual bookings' });
     }
@@ -612,6 +631,10 @@ function manualSegmentsOfRange(startTime, durationMinutes) {
 }
 
 async function handleManualCreate({ res, adminName, session, body }) {
+  let RESOURCE_ID;
+  try { RESOURCE_ID = await validateResourceRequest(getAdminDb(), body); }
+  catch (e) { return res.status(e.status || 503).json({ ok: false, error: e.message }); }
+  const preview = body.operation === 'manual_quote';
   const name = typeof body.customerName === 'string' ? body.customerName.trim().slice(0,120) : '';
   const phone = typeof body.customerPhone === 'string' ? body.customerPhone.trim().slice(0,40) : '';
   const note = typeof body.customerNote === 'string' ? body.customerNote.trim().slice(0,500) : '';
@@ -622,7 +645,7 @@ async function handleManualCreate({ res, adminName, session, body }) {
   const segs = manualSegmentsOfRange(startTime, durationMinutes);
   const hasHalf = segs?.some(x => x.span === 30) === true;
   const startMin = toMin(startTime);
-  if (!name || !phone || !RESCHED_DATE_RE.test(date) || !RESCHED_TIME_RE.test(startTime) || !segs || !MANUAL_BOOKING_TYPES.has(bookingType)) {
+  if ((!preview && (!name || !phone)) || !RESCHED_DATE_RE.test(date) || !RESCHED_TIME_RE.test(startTime) || !segs || !MANUAL_BOOKING_TYPES.has(bookingType)) {
     return res.status(400).json({ ok:false, error:'Invalid manual booking fields' });
   }
   // Half cells are daytime-only and no individual half may begin at/after
@@ -650,8 +673,8 @@ async function handleManualCreate({ res, adminName, session, body }) {
   const availRefs=touchedHours.map(h=>db.collection('available_slots').doc(reschedSlotId(RESOURCE_ID,date,`${String(h).padStart(2,'0')}:00`)));
   const code=manualCode();
   const packageMode=MANUAL_PACKAGE_TYPES.has(bookingType);
-  const paymentStatus=packageMode?'package':bookingType==='Paid Outside'?'paid':'unpaid';
-  let price=0;
+  let paymentStatus=packageMode?'package':bookingType==='Paid Outside'?'paid':'unpaid';
+  let price=0, manualQuote=null, manualPricing=null, manualHoliday=false;
   try {
     if(hasHalf){
       try {
@@ -664,17 +687,24 @@ async function handleManualCreate({ res, adminName, session, body }) {
     }
     if(!packageMode){
       const [pricingSnap,holidaySnap]=await Promise.all([
-        db.collection('system_settings').doc('pricing').get(),
+        readPricing(db),
         db.collection('holidays').doc(date).get(),
       ]);
-      if(hasHalf){
-        price=manualHalfPriceFrom(pricingSnap.exists?pricingSnap.data():null)*segs.filter(x=>x.span===30).length;
-      }else{
-        const q=computeQuote({date,startTime,nowMs:Date.now(),isHoliday:holidaySnap.exists&&holidaySnap.data().isHoliday===true,promoConfig:pricingSnap.exists?pricingSnap.data():null,payType:'single',lineUserId:'manual'});
-        price=Number(q.finalPrice)||0;
-      }
+      manualPricing=pricingSnap;manualHoliday=holidaySnap.exists && holidaySnap.data().isHoliday === true;
+      manualQuote = courtQuote({ segments: segs, date, startTime, durationMinutes, resourceId: RESOURCE_ID,
+        pricing: pricingSnap, isHoliday: holidaySnap.exists && holidaySnap.data().isHoliday === true }).quote;
+      price = manualQuote.finalPrice;
     }
+    if (!packageMode && price === 0) paymentStatus='package';
+    if(preview) return res.status(200).json({ok:true,quote:manualQuote || {finalPrice:0,pricingType:'package'}});
+    if(body.expectedPrice !== undefined && Number(body.expectedPrice)!==price) return res.status(409).json({ok:false,code:'PRICE_CHANGED',error:'ราคาเปลี่ยน กรุณาตรวจสอบอีกครั้ง'});
     await db.runTransaction(async t=>{
+      const ps=await readPricing(db, t);
+      if (resourceError(storeConfig(ps), RESOURCE_ID, startTime, durationMinutes)) throw new Error('SLOT_NOT_OPEN');
+      if(!packageMode){
+        const hs=await t.get(db.collection('holidays').doc(date));
+        if(JSON.stringify(ps)!==JSON.stringify(manualPricing) || (hs.exists&&hs.data().isHoliday===true)!==manualHoliday) throw new Error('PRICE_CHANGED');
+      }
       const [cellSnaps,availSnaps]=await Promise.all([
         Promise.all(cellRefs.map(r=>t.get(r))),
         Promise.all(availRefs.map(r=>t.get(r))),
@@ -694,9 +724,11 @@ async function handleManualCreate({ res, adminName, session, body }) {
         lineUserId:'manual',lineDisplayName:'Manual Booking',customerName:name,customerPhone:phone,
         customerPhoneNormalized:String(phone).replace(/\D/g,''),customerNote:note,
         date,startTime,endTime:endAfterMin(startTime,durationMinutes),durationMinutes,durationHours:durationMinutes/60,
-        price,amount:price,finalPrice:price,originalPrice:price,pricingType:packageMode?'package':hasHalf?'half_hour':'manual',
+        ...(manualQuote ? { pricingSnapshot: financialSnapshot(manualQuote), discountAmount: manualQuote.discountAmount, promoCode: manualQuote.promoCode, priceRuleVersion: manualQuote.priceRuleVersion } : {}),
+        price,amount:price,finalPrice:price,originalPrice:manualQuote?.originalPrice ?? price,pricingType:packageMode?'package':hasHalf?'half_hour':'manual',
         bookingStatus:'confirmed',status:'confirmed',paymentStatus,source:'admin_manual',createdBy:adminName,
-        ...(paymentStatus==='paid'?{paidAt:FieldValue.serverTimestamp(),paidBy:adminName}:{}),
+        ...(paymentStatus==='paid'?{paidAt:FieldValue.serverTimestamp(),paidBy:adminName,...manualPaymentApproval(adminName,FieldValue.serverTimestamp())}:{}),
+        ...(!packageMode && price===0 ? {paymentMethod:'promotion'} : {}),
         createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp(),
       });
       slotRefs.forEach((slotRef,i)=>{
@@ -706,7 +738,7 @@ async function handleManualCreate({ res, adminName, session, body }) {
       });
     });
   } catch(e){
-    const map={SLOT_NOT_OPEN:[409,'Slot is not open'],SLOT_TAKEN:[409,'Slot is already occupied'],HALF_DISABLED:[409,'Half-hour booking is currently disabled']};
+    const map={PRICE_CHANGED:[409,'ราคาเปลี่ยน กรุณาตรวจสอบอีกครั้ง'],SLOT_NOT_OPEN:[409,'Slot is not open'],SLOT_TAKEN:[409,'Slot is already occupied'],HALF_DISABLED:[409,'Half-hour booking is currently disabled']};
     const [status,msg]=map[e.message]||[500,'Failed to create manual booking'];
     if(status===500) console.error('[manual_create]',e.message);
     return res.status(status).json({ok:false,error:msg});
@@ -788,7 +820,7 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
   // Pricing v2: when the client omits a value, fall back to what the booking
   // was actually priced at (mornings 330/320, late night 450) before the flat
   // 350 legacy default.
-  const storedValue   = [booking.basePrice, booking.originalPrice, booking.price]
+  const storedValue   = [booking.price, booking.basePrice, booking.originalPrice]
                           .map(Number).find(n => Number.isFinite(n) && n > 0) || null;
   const price         = (rawPrice != null) ? Math.max(0, Number(rawPrice)) : (storedValue ?? 350);
   const influencerAmt = (rawInfluencerAmt != null) ? Math.max(1, Number(rawInfluencerAmt))
@@ -898,6 +930,15 @@ async function handleAccountingEdit({ res, adminName, session, db, booking, book
   const isNowInfluencer = accountingType === 'influencer_free';
   const existingExpId   = booking.influencerExpenseId || null;
 
+  if (booking.pricingSnapshot && accountingFields.price !== undefined) {
+    accountingFields.pricingSnapshot = bookingFinancials({ ...booking, price: accountingFields.price });
+    accountingFields.amount = accountingFields.finalPrice = accountingFields.qrAmount = accountingFields.price;
+    accountingFields.discountAmount = accountingFields.pricingSnapshot.discountTotal;
+    if (accountingFields.paymentStatus === 'paid') {
+      accountingFields.paidAt = booking.paidAt || FieldValue.serverTimestamp();
+      Object.assign(accountingFields, manualPaymentApproval(adminName, FieldValue.serverTimestamp()));
+    }
+  }
   const batch = checkedWriteBatch(db, [bookingSnapshot]);
   let expIdUpdate = {};
 
@@ -1043,6 +1084,7 @@ async function handleRefund({ res, adminName, session, db, booking, bookingSnaps
 
   const refundAmount  = Number(rawAmount);
   const originalPrice = Number(booking.price) || 0;
+  if (booking.pricingSnapshot && refundAmount > originalPrice) return res.status(400).json({ok:false,error:'Refund cannot exceed the booking payment total'});
   const refundStatus  = refundAmount >= originalPrice ? 'refunded' : 'partial_refunded';
 
   // ── Finance expense note ──────────────────────────────────────────
@@ -1253,6 +1295,7 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
       if (!bSnap.exists) throw new Error('BOOKING_MISSING');
       const bNow = bSnap.data();
       if (bNow.paymentStatus === 'paid') throw new Error('ALREADY_PAID');
+      if (bNow.pricingSnapshot && money(amount) !== money(bNow.price)) throw new Error('AMOUNT_MISMATCH');
       if (bNow.paymentStatus !== 'unpaid') throw new Error('BAD_STATE');
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
       redeemReservedVoucher(t, voucherRef, voucherSnap, bNow, bookingId);
@@ -1264,6 +1307,7 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
         price:           Number(amount),
         paidAt:          FieldValue.serverTimestamp(),
         paidBy:          adminName,
+        ...manualPaymentApproval(adminName, FieldValue.serverTimestamp()),
         paymentMethod:   paymentMethod,
         paymentNote:     String(paymentNote).slice(0, 400),
         adminReviewedAt: FieldValue.serverTimestamp(),
@@ -1286,7 +1330,7 @@ async function handleMarkPaid({ res, adminName, session, db, booking, bookingRef
       VOUCHER_MISSING: [409, 'Reserved voucher was not found'],
       VOUCHER_CONFLICT:[409, 'Voucher is no longer reserved for this booking'],
       HOLD_EXPIRED:   [409, 'Coach Add-on hold expired before payment confirmation'],
-      AMOUNT_MISMATCH:[409, 'Amount must match the frozen Coach Add-on cash due'],
+      AMOUNT_MISMATCH:[409, 'Amount must match the booking total; use accounting correction to change it'],
       CLAIM_MISSING:  [409, 'Coach Add-on resource claim is missing'],
       CLAIM_CONFLICT: [409, 'Coach Add-on resource claim belongs to another booking'],
       PACKAGE_MISSING:[409, 'Reserved package is missing'],
@@ -1401,6 +1445,7 @@ async function handleApproveSlip({ res, adminName, session, db, booking, booking
         bookingStatus:   'confirmed',
         status:          'confirmed',
         paidBy:          adminName,
+        ...manualPaymentApproval(adminName, FieldValue.serverTimestamp()),
         paidAt:          FieldValue.serverTimestamp(),
         confirmedAt:     FieldValue.serverTimestamp(),
         adminReviewedAt: FieldValue.serverTimestamp(),
@@ -1930,7 +1975,7 @@ async function restoreReservedSlots({ db, testSessionId, slotRestore }) {
           // either, that is the correct end state.
           if (!previous.existed) return 'already_clean';
           t.set(ref, {
-            resourceId: RESOURCE_ID, date: previous.id.split('_')[1] || null,
+            resourceId: previous.id.split('_')[0], date: previous.id.split('_')[1] || null,
             status: previous.status ?? 'open',
             openedAt: previous.openedAt ?? null, openedBy: previous.openedBy ?? null,
             closedAt: previous.closedAt ?? null, closedBy: previous.closedBy ?? null,
@@ -2279,7 +2324,7 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
   await writeAuditLog(db, {
     actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
     action: 'reschedule_park', targetId: bookingId,
-    before: { bookingStatus: booking.bookingStatus, date: booking.date, startTime: booking.startTime },
+    before: { resourceId: booking.resourceId || RESOURCE_ID, bookingStatus: booking.bookingStatus, date: booking.date, startTime: booking.startTime },
     after:  { bookingStatus: 'rescheduled', pendingRescheduleStatus: 'pending' },
   });
 
@@ -2346,7 +2391,9 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
     return res.status(400).json({ ok: false, error: `New time cannot fit ${durMin} minutes before midnight (whole hours start at :00)` });
   }
   const newEndTime  = endAfterMin(newStartTime, durMin);
-  const resourceId  = booking.resourceId || RESOURCE_ID;
+  let resourceId;
+  try { resourceId = await validateResourceRequest(db, {resourceId:body.newResourceId || booking.resourceId || RESOURCE_ID,startTime:newStartTime,durationMinutes:durMin}); }
+  catch(e){return res.status(e.status || 503).json({ok:false,error:e.message});}
   const oldSlotIds  = bookingSlotIds(booking);
   const newSlotIds  = newSegs.map(x => reschedSlotId(resourceId, newDate, x.start));
 
@@ -2371,6 +2418,9 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
   let meta;
   try {
     meta = await db.runTransaction(async (t) => {
+      const settings = await readStore(db, t);
+      if (resourceError(settings, resourceId, newStartTime, durMin)) throw new Error('SLOT_NOT_OPEN');
+
       const [avSnaps, cellSnaps, oldSnaps, bSnap] = await Promise.all([
         Promise.all(avRefs.map(r => t.get(r))),
         Promise.all(cellRefs.map(r => t.get(r))),
@@ -2386,6 +2436,10 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       const currentTotalDur = bookingDurationMin(bNow);
       if (currentTotalDur !== totalDurMin) throw new Error('STALE_DURATION');
       const partial = requestedAssign < currentTotalDur;
+      if (partial) {
+        const receiptLock = await t.get(db.collection('finance_document_counters').doc(`active_receipt_booking_${encodeURIComponent(bookingId)}`));
+        if (receiptLock.exists) throw new Error('RECEIPT_EXISTS');
+      }
       if (partial && !isPendingRescheduleBooking(bNow)) throw new Error('PARTIAL_REQUIRES_PENDING');
       if (partial && (bNow.refundStatus || Number(bNow.refundAmount) > 0 || Number(bNow.refundedAmount) > 0)) throw new Error('ALREADY_REFUNDED');
       for (const avSnap of avSnaps) {
@@ -2412,7 +2466,7 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       const splitValues = partial ? proportionalBookingSplit(bNow, requestedAssign, currentTotalDur) : null;
 
       const update = {
-        date: newDate, startTime: newStartTime, endTime: newEndTime,
+        resourceId, date: newDate, startTime: newStartTime, endTime: newEndTime,
         durationMinutes: requestedAssign, durationHours: requestedAssign / 60,
         bookingSlotIds: newSlotIds,
         bookingStatus: nextStatus,
@@ -2529,6 +2583,7 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       STALE_DURATION:  [409, 'Booking duration changed; reload and try again'],
       PARTIAL_REQUIRES_PENDING: [409, 'Partial assignment is allowed only for a pending-reschedule booking'],
       ALREADY_REFUNDED: [409, 'Cannot split a booking that already has a refund'],
+      RECEIPT_EXISTS: [409, 'Void the active receipt before splitting this booking'],
       SLOT_NOT_OPEN:   [409, 'Selected slot is not open'],
       SLOT_TAKEN:      [409, 'Selected slot is already booked'],
     };
@@ -2540,9 +2595,9 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
   await writeAuditLog(db, {
     actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
     action: 'reschedule_assign', targetId: bookingId,
-    before: { bookingStatus: booking.bookingStatus, date: booking.date, startTime: booking.startTime },
+    before: { resourceId: booking.resourceId || RESOURCE_ID, bookingStatus: booking.bookingStatus, date: booking.date, startTime: booking.startTime },
     after:  {
-      bookingStatus: meta.nextStatus, date: newDate, startTime: newStartTime,
+      resourceId, bookingStatus: meta.nextStatus, date: newDate, startTime: newStartTime,
       wasPending: meta.wasPending, partial: meta.partial,
       assignedDurationMinutes: meta.assignedDurationMinutes,
       remainderBookingId: meta.remainderBookingId,

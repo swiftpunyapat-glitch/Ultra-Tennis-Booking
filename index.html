@@ -822,6 +822,7 @@
 
       <div class="card">
         <div class="slabel" data-i18n="selectDate">Select Date</div>
+        <label style="display:block;margin:12px 0">คอร์ต <select id="bookingCourt" style="padding:10px;width:100%"><option value="room1">Ultra Tennis</option></select></label>
         <div class="dstrip" id="dateStrip"></div>
       </div>
 
@@ -1159,6 +1160,7 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
+import { courtRequest, loadCourtSelector } from "./court-selector.js";
 import { AVAILABILITY_BUILD, canUseAvailability, reportAvailability } from "./availability-state.js";
 import { initializeApp }             from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
 import { isSupported, getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
@@ -1278,7 +1280,8 @@ async function ensureFirebaseAuth(lineUserId){
 // ── CONSTANTS ───────────────────────────────────────────────────
 const LIFF_ID     = "2010034901-ClPr9N5v";
 const _isLineApp  = /Line\//i.test(navigator.userAgent); // true inside LINE's in-app browser
-const RESOURCE_ID = "room1";
+let RESOURCE_ID = new URLSearchParams(location.search).get("court") || "room1";
+const courtFetch = (url, options) => courtRequest(RESOURCE_ID, url, options);
 // Must match DEFAULT_BRANCH_ID in api/_lib/admin-auth.js and admin.html.
 // Stamped on new bookings/slots; legacy docs without it resolve to this branch.
 const DEFAULT_BRANCH_ID = "ladprao1";
@@ -1961,7 +1964,7 @@ async function initLiff() {
           const bookingRead = state.lineProfile.userId==="guest"
             ? (async()=>{
               if(!pending.guestToken) throw new Error("Guest access token missing");
-              const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"guest_booking",bookingId:pending.docId,guestToken:pending.guestToken})});
+              const r=await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"guest_booking",bookingId:pending.docId,guestToken:pending.guestToken})});
               const d=await r.json().catch(()=>({}));
               if(!r.ok||!d.ok) throw new Error(d.error||"Guest booking read failed");
               return {exists:()=>true,data:()=>d.booking};
@@ -2210,12 +2213,13 @@ let _featuresFetched=false;
 async function fetchBookingFeatures(){
   if(_featuresFetched) return;
   try{
-    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"features"})});
+    const r=await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"features"})});
     const d=await r.json().catch(()=>null);
     if(r.ok&&d&&d.ok){
       state.halfHourEnabled=d.enableHalfHourBooking!==false;
       state.coachAddonV2.enabled=d.enableCoachAddonV2===true;
       if(Number.isInteger(Number(d.halfHourPrice))&&Number(d.halfHourPrice)>0) state.halfHourPrice=Number(d.halfHourPrice);
+      state.commerce=d.commerce;
       _featuresFetched=true;
     }
   }catch(e){ console.warn("[features] fetch failed (using live half-hour default):",e); }
@@ -2248,7 +2252,7 @@ async function loadEventRedeemStatus(){
   box.innerHTML=`<p style="font-size:.78rem;color:var(--muted)">Loading...</p>`;
   try{
     const idToken=await protectedIdToken();
-    const res=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"event_pass_status",idToken})});
+    const res=await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"event_pass_status",idToken})});
     const data=await res.json().catch(()=>({}));
     if(!res.ok||!data.ok) throw new Error(data.error||"โหลดสถานะไม่สำเร็จ");
     const items=data.requests||[];
@@ -2272,7 +2276,7 @@ async function submitEventRedeemCode(){
   const btn=$("eventRedeemSubmit");btn.disabled=true;btn.textContent="กำลังตรวจ Code...";
   try{
     const idToken=await protectedIdToken();
-    const res=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+    const res=await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
       action:"event_pass_redeem",code,idToken,lineDisplayName:state.lineProfile.displayName,
     })});
     const data=await res.json().catch(()=>({}));
@@ -2541,7 +2545,14 @@ async function openBookingView() {
   state.durationMinutes=60;
   resetCoachAddonV2Selection();
   syncDurButtons();
-  fetchBookingFeatures();   // async; re-syncs chips when the flag arrives
+  await fetchBookingFeatures();
+  try {
+    await loadCourtSelector($("bookingCourt"), RESOURCE_ID, async id => {
+      RESOURCE_ID=id; state.time=null; latestQuote=null; quoteInFlight=null;
+      resetCoachAddonV2Selection();
+      await loadSlotsAndRender(getSelectedDateISO()); refreshQuote();
+    });
+  } catch(e) { showToast(e.message,true); return; }
   state.dateOffset=0;
 
   // Set visual loading state on pass buttons while eligibility loads
@@ -2677,7 +2688,8 @@ async function loadSlotsAndRender(dateStr) {
   const startedAt=Date.now();
   const requestId=++bookingAvailabilityRequestId;
   state.availabilityRefreshing=true;
-  const cached=bookingAvailabilityCache.get(dateStr);
+  const courtCacheKey=`${RESOURCE_ID}:${dateStr}`;
+  const cached=bookingAvailabilityCache.get(courtCacheKey);
   state.availabilityDate=dateStr;
   state.availabilityError=null;
   state.availabilityStale=false;
@@ -2720,7 +2732,7 @@ async function loadSlotsAndRender(dateStr) {
     // Firestore getDocs cannot be aborted. Ignore an older response that
     // finishes after the customer has already selected another date.
     if(requestId!==bookingAvailabilityRequestId || dateStr!==getSelectedDateISO()) return;
-    bookingAvailabilityCache.set(dateStr,result);
+    bookingAvailabilityCache.set(courtCacheKey,result);
     state.openSlots=new Set(openSlots);
     state.blockedCells=new Set(blockedCells);
     state.currentDateIsHoliday=currentDateIsHoliday;
@@ -2786,7 +2798,7 @@ function reloadBookingWithCacheBust(){
 async function hardRetryBookingAvailability(dateStr){
   if(availabilityHardRetryBusy) return;
   availabilityHardRetryBusy=true;
-  bookingAvailabilityCache.delete(dateStr);
+  bookingAvailabilityCache.delete(`${RESOURCE_ID}:${dateStr}`);
   state.availabilityDate=dateStr;
   state.availabilityStatus="loading";
   state.availabilityError=null;
@@ -2941,6 +2953,8 @@ function segmentsOfB(startMin,n){
 function getCellReason(cellMin){
   const h=Math.floor(cellMin/60);
   const hourStr=`${String(h).padStart(2,"0")}:00`;
+  const court=state.commerce?.resources?.find(r=>r.id===RESOURCE_ID && r.active);
+  if(state.commerce && (!court || cellMin<toMinB(court.openTime) || cellMin+30>toMinB(court.closeTime))) return t("notOpened");
   // Past time check (same rule as before: the current hour is not bookable)
   if(state.dateOffset===0 && cellMin<(Number(bangkokDateParts().hour)+1)*60) return t("timePassed");
   // Admin opens whole hours — an open hour opens both halves
@@ -3149,12 +3163,12 @@ async function refreshCoachAddonV2Options(){
   const ca=state.coachAddonV2;
   if(!ca.enabled||!ca.active) return;
   const date=getSelectedDateISO(),startTime=state.time||"",durationMinutes=state.durationMinutes||60;
-  const key=`${date}|${startTime}|${durationMinutes}`;
+  const key=`${RESOURCE_ID}|${date}|${startTime}|${durationMinutes}`;
   if(!startTime||durationMinutes<60){ ca.coaches=[];ca.selectedCoach=null;ca.quote=null;ca.optionsKey=key;renderCoachAddonV2();return; }
   if(ca.optionsKey===key&&(ca.loading||ca.coaches.length)) return;
   ca.optionsKey=key;ca.loading=true;ca.coaches=[];ca.selectedCoach=null;ca.quote=null;renderCoachAddonV2();updateBookingConfirmBtn();
   try{
-    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_addon_v2_options",date,startTime,durationMinutes})});
+    const r=await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_addon_v2_options",date,startTime,durationMinutes})});
     const d=await r.json().catch(()=>null);
     if(ca.optionsKey!==key) return;
     ca.coaches=(r.ok&&d?.ok&&d.enabled===true&&Array.isArray(d.coaches))?d.coaches:[];
@@ -3177,7 +3191,7 @@ async function refreshCoachAddonV2Quote(){
   ca.quoteKey=key;ca.quote=null;renderCoachAddonV2();updateBookingConfirmBtn();
   try{
     const auth=await coachAddonV2AuthFields(ca.fundingMode);
-    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_addon_v2_quote",date:getSelectedDateISO(),startTime:state.time,durationMinutes:state.durationMinutes,coachId:ca.selectedCoach.id,studentCount:ca.studentCount,fundingMode:ca.fundingMode,...auth})});
+    const r=await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"coach_addon_v2_quote",date:getSelectedDateISO(),startTime:state.time,durationMinutes:state.durationMinutes,coachId:ca.selectedCoach.id,studentCount:ca.studentCount,fundingMode:ca.fundingMode,...auth})});
     const d=await r.json().catch(()=>null);
     if(ca.quoteKey!==key) return;
     if(!r.ok||!d?.ok||!d.quote) throw new Error(d?.error||"คำนวณราคาไม่สำเร็จ");
@@ -3213,7 +3227,7 @@ function currentQuoteKey(){
   const payType   = state.bookingPaymentType;
   const voucher   = ($("bkVoucher")?.value || "").trim().toUpperCase();
   const dur       = state.durationMinutes || 60;
-  return { date, startTime, payType, voucher, dur, key:`${date}|${startTime}|${payType}|${voucher}|${dur}` };
+  return { date, startTime, payType, voucher, dur, key:`${RESOURCE_ID}|${date}|${startTime}|${payType}|${voucher}|${dur}` };
 }
 
 async function refreshQuote(){
@@ -3232,13 +3246,13 @@ async function refreshQuote(){
   quoteInFlight = ctx.key;
   updateBookingConfirmBtn(); updateBookingPriceNote();   // show "calculating…"
   try{
-    const res = await fetch("/api/booking", {
+    const res = await courtFetch("/api/booking", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ action:"price_quote", date:ctx.date, startTime:ctx.startTime, payType:"single", voucherCode:ctx.voucher||undefined, durationMinutes:ctx.dur, lineUserId:state.lineProfile.userId }),
     });
     const d = await res.json().catch(()=>({}));
     if (currentQuoteKey().key !== ctx.key) return;   // context changed → discard stale
-    latestQuote = (res.ok && d.ok && d.quote) ? { key:ctx.key, quote:d.quote } : { key:ctx.key, failed:true };
+    latestQuote = (res.ok && d.ok && d.quote && !d.quote.voucherReason) ? { key:ctx.key, quote:d.quote } : { key:ctx.key, failed:true, error:d.error || d.quote?.voucherReason || "คำนวณราคาไม่สำเร็จ" };
   }catch(e){
     if (currentQuoteKey().key === ctx.key) latestQuote = { key:ctx.key, failed:true };
   }finally{
@@ -3270,6 +3284,8 @@ function updateBookingPriceNote(){
     $("bkNote2").textContent = (q && Array.isArray(q.breakdown) && q.breakdown.length > 1)
       ? `${state.time}–${q.endTime} · ${q.breakdown.map(b=>Number(b.price)).join("+")} · ${t("paymentDue")}`
       : t("paymentDue");
+    if(q) $("bkNote2").textContent += ` · ราคา ${q.subtotal ?? q.originalPrice} − โปร ${q.promotionDiscount || 0} − Coupon ${q.couponDiscount || 0} = ${q.finalPrice} บาท`;
+    if(latestQuote?.key===ctx.key && latestQuote.failed) $("bkNote2").textContent=latestQuote.error || 'คำนวณราคาไม่สำเร็จ กรุณาลองอีกครั้ง';
   } else {
     $("bkPrice").textContent="฿0 (Pass)";
     if(state.bookingPaymentType==="ultra" && state.eligibility.ultraPkg) {
@@ -3285,6 +3301,7 @@ function updateBookingPriceNote(){
 function updateBookingConfirmBtn() {
   const btn = $("confirmBkBtn");
   if(!btn) return;
+  if($("bookingCourt")) $("bookingCourt").disabled=state.bookingSubmitting;
   if(state.bookingSubmitting) { btn.disabled=true; btn.textContent=t("saving"); return; }
   if(!canUseAvailability(state,getSelectedDateISO())) { btn.disabled=true; btn.textContent=currentLang==="th"?"รอตรวจสอบเวลาว่าง":"Waiting for availability"; return; }
   if(state.coachAddonV2?.enabled&&state.coachAddonV2.active){
@@ -3300,12 +3317,12 @@ function updateBookingConfirmBtn() {
     return;
   }
   const ctx = currentQuoteKey();
-  if (quoteInFlight === ctx.key){ btn.textContent = t("calculatingPrice"); return; }
+  if (quoteInFlight === ctx.key){ btn.disabled=true; btn.textContent = t("calculatingPrice"); return; }
   if (latestQuote && latestQuote.key === ctx.key && latestQuote.quote){
     btn.textContent = `${t("confirmBooking")} · ฿${Number(latestQuote.quote.finalPrice).toLocaleString("en-US")}`;
     return;
   }
-  btn.textContent = t("confirmBooking");
+  btn.disabled=true; btn.textContent = latestQuote?.error || t("calculatingPrice");
 }
 
 // Voucher code changes re-quote (debounced) so the confirm button reflects ฿300.
@@ -3323,10 +3340,11 @@ try{
 async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
   try{
     const idToken=state.lineProfile.userId==="guest"?null:await protectedIdToken();
-    const res = await fetch("/api/booking", {
+    const res = await courtFetch("/api/booking", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
         action:"create", date:dateISO, startTime:state.time,
+        expectedPrice:latestQuote?.key===currentQuoteKey().key?latestQuote.quote?.finalPrice:undefined,
         durationMinutes: state.durationMinutes || 60,
         customerName:name, customerPhone:phone, customerNote:note,
         lineUserId:state.lineProfile.userId, lineDisplayName:state.lineProfile.displayName,
@@ -3337,6 +3355,7 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
     const d = await res.json().catch(()=>({}));
     if(!res.ok || !d.ok){
       // Legit rejections (bad input / slot taken / voucher invalid): show, no fallback.
+      if(d.code==="PRICE_CHANGED"){ latestQuote=null; await refreshQuote(); showToast(d.error,true); return "handled"; }
       if(d.code==="VALIDATION" || d.code==="SLOT" || d.code==="VOUCHER" || d.code==="SHAPE" || d.code==="MIXED_RECEIVER"){
         showToast(d.error || t("bookingFailed"), true);
         return "handled";
@@ -3356,7 +3375,7 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
     if (gotN !== wantN) {
       console.error(`[booking] duration mismatch — asked ${wantN}h, server booked ${gotN}h. Cancelling.`);
       try {
-        await fetch("/api/booking", {
+        await courtFetch("/api/booking", {
           method:"POST", headers:{"Content-Type":"application/json"},
           body: JSON.stringify({ action:"cancel_pending", bookingId:b.id, bookingCode:b.bookingCode, lineUserId:state.lineProfile.userId, idToken:idToken||undefined, guestToken:d.guestAccessToken||undefined }),
         });
@@ -3384,7 +3403,7 @@ async function tryServerCreate({ dateISO, name, phone, note, voucherCode }){
         localStorage.removeItem("ut_pending_booking");
         sessionStorage.removeItem(VOUCHER_DEEP_LINK_KEY);
       }catch(_){ }
-      showSuccess("✅",t("bookingConfirmed"),b.bookingCode,`${name} · ${dateISO} · ${state.time}–${endTime} · Voucher`);
+      showSuccess("✅",t("bookingConfirmed"),b.bookingCode,`${name} · ${dateISO} · ${state.time}–${endTime} · ${RESOURCE_ID}`);
       showView("viewSuccess");
       return true;
     }
@@ -3406,7 +3425,7 @@ async function tryServerPassCreate({dateISO,name,phone,note,payType}){
   if(!pkg){ showToast(t("invalidPayment"),true); return "handled"; }
   try{
     const idToken=await protectedIdToken();
-    const res=await fetch("/api/booking",{
+    const res=await courtFetch("/api/booking",{
       method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({
         action:"create_pass_booking",idToken,
@@ -3459,7 +3478,7 @@ async function tryCoachAddonV2Create({dateISO,name,phone,note}){
     const auth=await coachAddonV2AuthFields(ca.fundingMode);
     const idToken=auth.idToken||(state.lineProfile.userId==="guest"?null:await protectedIdToken());
     const requestBody={
-      action:"create_coach_addon_v2",
+      action:"create_coach_addon_v2",resourceId:RESOURCE_ID,
       date:dateISO,startTime:state.time,durationMinutes:state.durationMinutes,
       coachId:ca.selectedCoach.id,studentCount:ca.studentCount,fundingMode:ca.fundingMode,
       packageId:auth.packageId||undefined,idToken:idToken||undefined,
@@ -3467,7 +3486,7 @@ async function tryCoachAddonV2Create({dateISO,name,phone,note}){
       customerName:name,customerPhone:phone,customerNote:note,
     };
     requestBody.idempotencyKey=coachAddonV2RetryKey({...requestBody,idToken:undefined});
-    const res=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(requestBody)});
+    const res=await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(requestBody)});
     const d=await res.json().catch(()=>null);
     if(!res.ok||!d?.ok){
       showToast(d?.error||t("bookingFailed"),true);
@@ -3558,7 +3577,7 @@ function scheduleCoachAddonV2Expiry(bookingId,expiresAt,guestToken){
   coachAddonV2ExpiryTimer=setTimeout(async()=>{
     try{
       const idToken=state.lineProfile.userId==="guest"?null:await protectedIdToken().catch(()=>null);
-      await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"expire_coach_addon_v2",bookingId,idToken:idToken||undefined,guestToken:guestToken||undefined})});
+      await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"expire_coach_addon_v2",bookingId,idToken:idToken||undefined,guestToken:guestToken||undefined})});
     }catch(e){console.warn("[coach addon v2] expiry release will retry on next server access",e);}
   },Math.min(delay,2_147_000_000));
 }
@@ -3918,7 +3937,7 @@ $("cancelBookingBtn").addEventListener("click", async()=>{
     // (not in the rules enum). Sends a Firebase ID token when signed in so the
     // server can verify ownership (uid === booking.lineUserId).
     const idToken = fbAuth.currentUser ? await fbAuth.currentUser.getIdToken().catch(()=>null) : null;
-    const res = await fetch("/api/booking", {
+    const res = await courtFetch("/api/booking", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
         action:"cancel_pending",
@@ -4236,7 +4255,7 @@ const PB_DESC={
 
 async function initPassSelfPurchase(){
   try{
-    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
+    const r=await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"pass_catalog"})});
     const d=await r.json().catch(()=>null);
     if(r.ok&&d&&d.ok&&d.enabled===true&&Array.isArray(d.passes)&&d.passes.length){
@@ -4282,7 +4301,7 @@ $("pbConfirmBtn").addEventListener("click", async()=>{
   pbBusy=true;
   const btn=$("pbConfirmBtn"); btn.disabled=true; btn.textContent="กำลังสร้างรายการ...";
   try{
-    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
+    const r=await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({
         action:"create_pass_purchase",
         packageType:pbSel.packageType,
@@ -4406,7 +4425,7 @@ async function loadCkHours(){
   $("ckTimeGrid").innerHTML=`<p class="tloading">${t("loading")}</p>`;
   $("ckSlotsText").textContent="—";
   try{
-    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
+    const r=await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"coach_slots",coachId:ckSel.id,date:ckDate})});
     const d=await r.json().catch(()=>null);
     if(!r.ok||!d||!d.ok){ $("ckTimeGrid").innerHTML=`<p class="tloading">${esc((d&&d.error)||"โหลดไม่สำเร็จ")}</p>`; return; }
@@ -4514,7 +4533,7 @@ $("ckConfirmBtn").addEventListener("click", async()=>{
       pkgToken = fbAuth.currentUser ? await fbAuth.currentUser.getIdToken().catch(()=>null) : null;
       if(!pkgToken){ showToast("กรุณาเปิดผ่าน LINE เพื่อใช้แพ็คเกจ",true); return; }
     }
-    const r=await fetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
+    const r=await courtFetch("/api/booking",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({
         action:"create_coach_lesson",
         coachId:ckSel.id, date:ckDate, startTime:ckTime,

@@ -1,3 +1,4 @@
+import { validateResourceRequest, resourceSlotId } from './_lib/store-settings.js';
 import { closeRoomSlots } from './_lib/close-room-slots.js';
 // ════════════════════════════════════════════════════════════════════
 // POST /api/admin-ops — Partner Studio operations (Phase 2A)
@@ -248,6 +249,11 @@ export default async function handler(req, res) {
   if (!session) session = verifySession(req);
   if (!session) return res.status(401).json({ ok: false, error: 'Unauthorized' });
 
+  if (['slot_bulk_set','slot_close_unbooked','slot_toggle','test_session_start','coach_availability_get','coach_availability_set','coach_availability_batch_set','shop_open_days'].includes(action)) {
+    try { body.resourceId = await validateResourceRequest(getAdminDb(), body, { checkHours: false }); }
+    catch (e) { return res.status(e.status || 503).json({ ok: false, error: e.status ? e.message : 'Unable to load court settings' }); }
+  }
+
   switch (action) {
     case 'branch_get':             return handleBranchGet(res, session, body);
     case 'branch_save':            return handleBranchSave(res, session, body);
@@ -291,7 +297,7 @@ const BOOKING_READ_FIELDS = [
   'bookingCode','branchId','resourceId','bookingSlotIds','bookingType','serviceType','source','createdVia',
   'lineUserId','lineDisplayName','customerName','customerPhone','customerPhoneNormalized','customerNote',
   'date','startTime','endTime','durationMinutes','durationHours','price','amount','originalPrice','finalPrice',
-  'basePrice','effectivePrice','pricingType','pricingMode','promoCode','voucherCode','discountAmount','qrAmount','qrType','paymentQrType',
+  'pricingSnapshot','paymentApproval','basePrice','effectivePrice','pricingType','pricingMode','promoCode','voucherCode','discountAmount','qrAmount','qrType','paymentQrType',
   'bookingStatus','status','paymentStatus','paymentExpiresAt','slipUrl','slipUploadedAt','paymentVerification',
   'packageId','packageType','packageName','usedPackageId','usedPackageType','packageMinutesUsed','isEventBooking',
   'coachId','coachName','coachPayoutStatus','coachPayoutAmount','studentCount',
@@ -925,6 +931,8 @@ function slotGuardSent(res, session) {
 // one or more dates. onlyMissing:true skips slots that already exist (= openAll).
 // batch.set OVERWRITES each available_slots doc (same as the old client batch).
 async function handleSlotBulkSet(res, session, body) {
+  const SLOT_RESOURCE_ID = body.resourceId || 'room1';
+  const slotDocId = (date, hour) => resourceSlotId(SLOT_RESOURCE_ID, date, `${slotPad(hour)}:00`);
   if (slotGuardSent(res, session)) return;
 
   const { hourSet, op } = body;
@@ -1009,6 +1017,8 @@ async function handleSlotBulkSet(res, session, body) {
 // slot_close_unbooked — close every open slot on a date that does NOT currently
 // hold a live booking. Reads booking_slots (never writes it).
 async function handleSlotCloseUnbooked(res, session, body) {
+  const SLOT_RESOURCE_ID = body.resourceId || 'room1';
+  const slotDocId = (date, hour) => resourceSlotId(SLOT_RESOURCE_ID, date, `${slotPad(hour)}:00`);
   if (slotGuardSent(res, session)) return;
 
   const { date } = body;
@@ -1048,12 +1058,14 @@ async function handleSlotCloseUnbooked(res, session, body) {
 // here, because it cannot be reconstructed later — once the status has been
 // overwritten there is no record of whether the slot was open, closed, or had
 // never existed. Purge restores from this snapshot.
-function testSlotIdsForHour(date, hour) {
+function testSlotIdsForHour(date, hour, SLOT_RESOURCE_ID = 'room1') {
   const hh = slotPad(hour);
   return [`${SLOT_RESOURCE_ID}_${date}_${hh}00`, `${SLOT_RESOURCE_ID}_${date}_${hh}30`];
 }
 
 async function handleTestSessionStart(res, session, body) {
+  const SLOT_RESOURCE_ID = body.resourceId || 'room1';
+  const slotDocId = (date, hour) => resourceSlotId(SLOT_RESOURCE_ID, date, `${slotPad(hour)}:00`);
   if (!requireRole(session, 'owner')) {
     return res.status(403).json({ ok: false, error: 'Only the owner can start a test session' });
   }
@@ -1072,7 +1084,7 @@ async function handleTestSessionStart(res, session, body) {
   const expiresAtMs = Date.now() + ttlHours * 3_600_000;
   const slotRefs = hours.map(h => db.collection('available_slots').doc(slotDocId(date, h)));
   const sessionRef = db.collection(TEST_SESSION_COLLECTION).doc(testSessionId);
-  const reservedSlotIds = hours.flatMap(h => testSlotIdsForHour(date, h));
+  const reservedSlotIds = hours.flatMap(h => testSlotIdsForHour(date, h, SLOT_RESOURCE_ID));
 
   let reservedCount;
   try {
@@ -1224,6 +1236,8 @@ async function handleTestSessionList(res, session) {
 }
 
 async function handleSlotToggle(res, session, body) {
+  const SLOT_RESOURCE_ID = body.resourceId || 'room1';
+  const slotDocId = (date, hour) => resourceSlotId(SLOT_RESOURCE_ID, date, `${slotPad(hour)}:00`);
   if (slotGuardSent(res, session)) return;
 
   const { date, op } = body;
@@ -1714,6 +1728,8 @@ async function resolveCoachActor(res, session, body, db) {
 // coach_availability_get {date, coachId?} — coach (own) or any admin.
 // Returns everything the "วันว่างของฉัน" grid needs in one call.
 async function handleCoachAvailabilityGet(res, session, body) {
+  const SLOT_RESOURCE_ID = body.resourceId || 'room1';
+  const slotDocId = (date, hour) => resourceSlotId(SLOT_RESOURCE_ID, date, `${slotPad(hour)}:00`);
   const date = typeof body.date === 'string' ? body.date.trim() : '';
   if (!DATE_RE.test(date)) return res.status(400).json({ ok: false, error: 'date must be YYYY-MM-DD' });
   const db = getDbOr500(res); if (!db) return;
@@ -1767,9 +1783,9 @@ async function handleCoachAvailabilityGet(res, session, body) {
 // branch_manager+. Open requires the room slot to be open (rule: a coach can
 // only offer hours the shop itself offers). Close is blocked while any live
 // booking holds the hour for this coach.
-async function applyCoachAvailabilityChange(db, coachId, coach, date, hour, open) {
+async function applyCoachAvailabilityChange(db, coachId, coach, date, hour, open, resourceId = 'room1') {
   const availRef = db.collection('coach_availability').doc(availDocId(coachId, date, hour));
-  const roomRef = db.collection('available_slots').doc(slotDocId(date, parseInt(hour, 10)));
+  const roomRef = db.collection('available_slots').doc(resourceSlotId(resourceId, date, hour));
 
   return db.runTransaction(async (t) => {
     const availSnap = await t.get(availRef);
@@ -1845,7 +1861,7 @@ async function handleCoachAvailabilitySet(res, session, body) {
   const { coachId, coach } = actor;
 
   try {
-    const result = await applyCoachAvailabilityChange(db, coachId, coach, date, hour, open);
+    const result = await applyCoachAvailabilityChange(db, coachId, coach, date, hour, open, body.resourceId);
 
     await writeAuditLog(db, {
       actor: session.name, actorRole: session.role, branchId: resolveBranchId(coach),
@@ -1906,7 +1922,7 @@ async function handleCoachAvailabilityBatchSet(res, session, body) {
       return { hour, open, ok: false, code: 'SAME_DAY_CLOSE', error: 'Coach cannot close availability on the same day' };
     }
     try {
-      const result = await applyCoachAvailabilityChange(db, coachId, coach, date, hour, open);
+      const result = await applyCoachAvailabilityChange(db, coachId, coach, date, hour, open, body.resourceId);
       return { hour, open, ok: true, result };
     } catch (error) {
       return { hour, open, ok: false, ...coachAvailabilityError(error) };
@@ -1934,6 +1950,8 @@ async function handleCoachAvailabilityBatchSet(res, session, body) {
 // month have at least one OPEN room slot ("ปฏิทินร้าน" for coach.html).
 // Single-field range query on available_slots.date — no composite index.
 async function handleShopOpenDays(res, session, body) {
+  const SLOT_RESOURCE_ID = body.resourceId || 'room1';
+  const slotDocId = (date, hour) => resourceSlotId(SLOT_RESOURCE_ID, date, `${slotPad(hour)}:00`);
   const month = typeof body.month === 'string' ? body.month.trim() : '';
   if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ ok: false, error: 'month must be YYYY-MM' });
   const isCoach = session.role === 'coach';

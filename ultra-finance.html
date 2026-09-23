@@ -271,6 +271,7 @@
     <label>Month</label>
     <button class="mnav" id="prevMonth">‹</button>
     <input type="month" id="monthPicker"/>
+    <select id="financeBasis" aria-label="เกณฑ์วันที่รายงาน"><option value="service">ตามวันใช้สนาม</option><option value="payment">ตามวันรับเงิน</option></select>
     <button class="mnav" id="nextMonth">›</button>
     <span class="mstate" id="mState"></span>
   </div>
@@ -567,7 +568,7 @@ function calcHours(s, e) {
 
 function baht(n) {
   const v = Math.abs(Number(n) || 0);
-  return "฿" + v.toLocaleString("en-US", {maximumFractionDigits: 0});
+  return "฿" + v.toLocaleString("en-US", {maximumFractionDigits: 2});
 }
 
 function todayISO() {
@@ -700,6 +701,7 @@ $("nextMonth").addEventListener("click", () => {
   loadMonthData();
 });
 $("monthPicker").addEventListener("change", loadMonthData);
+$("financeBasis").addEventListener("change", loadMonthData);
 
 // ── LOAD DATA FOR SELECTED MONTH ──────────────────────────────────
 async function loadMonthData() {
@@ -709,7 +711,7 @@ async function loadMonthData() {
   $("mState").textContent = "Loading…";
   try {
     const [financeRes, documentRes] = await Promise.all([
-      fetch(`/api/finance-data?month=${encodeURIComponent(mv)}`),
+      fetch(`/api/finance-data?month=${encodeURIComponent(mv)}&basis=${$("financeBasis").value}`),
       fetch(`/api/finance-data?month=${encodeURIComponent(mv)}&action=documents%3Alist`),
     ]);
     const [data, documentData] = await Promise.all([financeRes.json(), documentRes.json()]);
@@ -731,6 +733,7 @@ async function loadMonthData() {
 
 // ── RENDER ALL ────────────────────────────────────────────────────
 function renderAll() {
+  renderCommercialSummary();
   renderSummaryCards();
   renderBookingTable();
   renderIncomeTable();
@@ -751,6 +754,25 @@ function updateMonthLabels() {
 }
 
 // ── SUMMARY CARDS ─────────────────────────────────────────────────
+function renderCommercialSummary() {
+  let panel=$("commercialSummary");
+  if(!panel){ panel=document.createElement("section"); panel.id="commercialSummary"; panel.className="panel";
+    panel.style.cssText="margin:18px 0;padding:20px;border:1px solid #44505c;border-radius:12px";
+    $("cRevTotal").closest(".cards")?.after(panel);
+    if(!panel.isConnected) $("monthPicker").parentElement.after(panel);
+  }
+  const paid=allBookings.filter(b=>b.paymentStatus==="paid" || (b.bookingStatus==="confirmed" && Number(b.price)===0 && b.financials?.discountTotal>0));
+  const groups=new Map();
+  for(const b of paid){
+    const f=b.financials || {subtotal:b.price,promotionDiscount:0,couponDiscount:0,total:b.price};
+    const key=`${b.resourceId || "room1"} · ${f.promotionName || "ไม่มีโปร"} · ${f.voucherCampaignName || b.voucherCode || "ไม่มี Coupon"}`;
+    const row=groups.get(key)||{count:0,subtotal:0,promo:0,coupon:0,total:0,refund:0};
+    row.count++;row.subtotal+=Number(f.subtotal)||0;row.promo+=Number(f.promotionDiscount)||0;
+    row.coupon+=Number(f.couponDiscount)||0;row.total+=Number(b.price)||0;row.refund+=Number(b.refundAmount)||0;groups.set(key,row);
+  }
+  panel.innerHTML=`<h3>ราคาและส่วนลด แยกคอร์ต / แคมเปญ</h3><p style="font-size:12px">${$("financeBasis").value==="payment"?"ตามวันรับเงิน — รายการเก่าที่ไม่มีวันรับเงินไม่รวมในมุมมองนี้":"ตามวันใช้สนาม"} · รายการชำระแล้วและสิทธิ์ฟรี (รายรับฟรี = 0) · คืนเงินแสดงเพื่ออ้างอิง รายจ่าย Refund ถูกนับในสรุปรายจ่ายแล้ว</p><div style="overflow:auto"><table style="width:100%"><thead><tr><th>คอร์ต / โปร / Coupon</th><th>จำนวน</th><th>ก่อนลด</th><th>โปร</th><th>Coupon</th><th>รับชำระ</th><th>คืนเงินสะสม</th></tr></thead><tbody>${[...groups].map(([key,r])=>`<tr><td>${esc(key)}</td><td>${r.count}</td><td>${baht(r.subtotal)}</td><td>${baht(r.promo)}</td><td>${baht(r.coupon)}</td><td>${baht(r.total)}</td><td>${baht(r.refund)}</td></tr>`).join("")||'<tr><td colspan="7">ไม่มีรายการ</td></tr>'}</tbody></table></div>`;
+}
+
 function renderSummaryCards() {
   const paidBookings   = allBookings.filter(b => b.paymentStatus === "paid");
   const unpaidBookings = allBookings.filter(b =>
@@ -1128,7 +1150,7 @@ function renderMonthlyReport() {
   ].filter(Boolean);
 
   const netText = `${netPL >= 0 ? "+" : "−"}${baht(Math.abs(netPL))}`;
-  const reportMonth = monthLabel($("monthPicker").value);
+  const reportMonth = monthLabel($("monthPicker").value) + ($("financeBasis").value==="payment" ? " · Payment date" : " · Service date");
   $("monthlyReportContent").innerHTML = `
     <div class="report-sheet">
       <div class="report-head">
@@ -1305,7 +1327,7 @@ function viewDocument(docId) {
     </table>
     <div class="doc-total">
       <div class="doc-total-row"><span>Subtotal</span><strong>${baht(d.subtotal || 0)}</strong></div>
-      <div class="doc-total-row"><span>Discount</span><strong>${baht(d.discount || 0)}</strong></div>
+      <div class="doc-total-row"><span>Discount (Promotion + Coupon)</span><strong>${baht(d.discount || 0)}</strong></div>
       <div class="doc-total-row grand"><span>Total</span><strong>${baht(d.total || 0)}</strong></div>
     </div>
     <div class="doc-footer">${footer}</div>`;

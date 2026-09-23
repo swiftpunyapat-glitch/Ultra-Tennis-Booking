@@ -374,6 +374,18 @@ describe('Coach Add-on v2 mixed payment lifecycle', () => {
     expect((await db.collection('bookings').get()).size).toBe(1);
   });
 
+  test('a committed coach booking can replay after its court is disabled', async () => {
+    const body = createBody({ idToken: undefined, lineUserId: 'guest' });
+    const first = await call(bookingHandler, body);
+    expect(first.statusCode).toBe(200);
+    await db.collection('system_settings').doc('pricing').set({ commerce: {resources:[{id:'room1',name:'Closed',active:false,openTime:'00:00',closeTime:'24:00'}]} },{merge:true});
+    const retry = await call(bookingHandler, body);
+    expect(retry.statusCode,JSON.stringify(retry.body)).toBe(200);
+    expect(retry.body).toMatchObject({replayed:true,booking:{id:first.body.booking.id},guestAccessToken:first.body.guestAccessToken});
+    const next = await call(bookingHandler, createBody({idempotencyKey:'after-closed',startTime:'12:00'}));
+    expect(next.statusCode).not.toBe(200);
+  });
+
   test('R3: concurrent guest retries yield one booking and the same valid token', async () => {
     const body = createBody({ idToken: undefined, lineUserId: 'guest' });
     const results = await tracedRace('guest-same-key', () => Promise.all([call(bookingHandler, body), call(bookingHandler, body)]));
@@ -588,6 +600,7 @@ describe('Coach Add-on v2 mixed payment lifecycle', () => {
     });
     expect(created.statusCode).toBe(200);
     const bookingId = created.body.booking.id;
+    await db.collection('bookings').doc(bookingId).update({ pricingSnapshot: (await import('firebase-admin/firestore')).FieldValue.delete() });
     const paid = await call(accountingHandler, { operation: 'mark_paid', bookingId, amount: 400, paymentMethod: 'cash', paymentNote: 'Legacy override' }, true);
     expect(paid.statusCode).toBe(200);
     expect(paid.body).toEqual({ ok: true });
