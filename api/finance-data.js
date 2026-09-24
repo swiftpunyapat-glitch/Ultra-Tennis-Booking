@@ -1,4 +1,5 @@
 import { bookingFinancials } from '../commerce.js';
+import { DEFAULT_COMPANY_PROFILE, documentCompanyProfile, validateCompanyProfile } from '../finance-company.js';
 // ════════════════════════════════════════════════════════════════════
 // GET /api/finance-data?month=YYYY-MM
 // POST/PATCH /api/finance-data — write handling for expense and income
@@ -10,19 +11,6 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { isLiveBooking } from '../test-booking.js';
 
 const BUSINESS_UNIT = 'ultra_tennis';
-const COMPANY_PROFILE = {
-  legalNameTh:       'บริษัท สวิฟท์ สปอร์ตส์ กรุ๊ป จำกัด',
-  legalNameEn:       'Swift Sports Group Co., Ltd.',
-  brandName:         'Ultra Tennis',
-  taxId:             '',
-  branch:            'สำนักงานใหญ่',
-  address:           '',
-  phone:             '',
-  email:             '',
-  vatRegistered:     false,
-  vatRate:           0.07,
-  taxInvoiceEnabled: false,
-};
 const DOCUMENT_TYPES = {
   receipt:         { prefix: 'RC', linkedTypes: ['booking', 'manual_income'] },
   payment_voucher: { prefix: 'PV', linkedTypes: ['expense'] },
@@ -55,6 +43,48 @@ function isPositiveNumber(v) {
 
 function httpError(status, message, extra = {}) {
   return Object.assign(new Error(message), { status, extra });
+}
+
+// Private settings; clients use the authenticated Finance API, never direct writes.
+const companyRef = db => db.collection('system_settings').doc('finance_company');
+const profileFrom = snap => documentCompanyProfile(snap.exists ? snap.data().profile : DEFAULT_COMPANY_PROFILE);
+
+async function handleCompanyGet(res) {
+  try {
+    const snap = await companyRef(getAdminDb()).get();
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ ok: true, profile: profileFrom(snap), revision: snap.data()?.revision || 0 });
+  } catch (e) {
+    console.error('[finance-company] read:', e.message);
+    return res.status(500).json({ ok: false, error: 'โหลดหัวเอกสารไม่สำเร็จ กรุณาลองใหม่' });
+  }
+}
+
+async function handleCompanySave({ res, db, body, session }) {
+  let profile;
+  try { profile = validateCompanyProfile(body.profile); }
+  catch (e) { return res.status(400).json({ ok: false, error: e.message }); }
+  if (!Number.isSafeInteger(body.revision) || body.revision < 0) return res.status(400).json({ ok: false, error: 'Invalid revision' });
+  try {
+    const revision = await db.runTransaction(async t => {
+      const ref = companyRef(db), snap = await t.get(ref);
+      const currentRevision = snap.data()?.revision || 0;
+      if (body.revision !== currentRevision) throw httpError(409, 'มีการแก้หัวเอกสารจากอีกหน้าต่าง กรุณาปิดแล้วเปิดการตั้งค่าใหม่');
+      const next = currentRevision + 1;
+      const timestamp = FieldValue.serverTimestamp();
+      t.set(ref, { profile, revision: next, updatedBy: session.name, updatedAt: timestamp });
+      t.create(db.collection('audit_logs').doc(), {
+        actor: session.name, actorRole: session.role, action: 'finance_company_updated',
+        targetId: ref.path, before: profileFrom(snap), after: profile,
+        revision: next, source: 'finance', createdAt: timestamp,
+      });
+      return next;
+    });
+    return res.status(200).json({ ok: true, profile, revision });
+  } catch (e) {
+    console.error('[finance-company] save:', e.message);
+    return res.status(e.status || 500).json({ ok: false, error: e.status ? e.message : 'บันทึกหัวเอกสารไม่สำเร็จ กรุณาลองใหม่' });
+  }
 }
 
 function validDocumentId(v) {
@@ -132,6 +162,7 @@ export default async function handler(req, res) {
     }
 
     const { month, action, basis = 'service' } = req.query;
+    if (action === 'company:get') return handleCompanyGet(res);
     if (!['service','payment'].includes(basis)) return res.status(400).json({ ok: false, error: 'Invalid report basis' });
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({ ok: false, error: 'Invalid month — expected YYYY-MM' });
@@ -238,6 +269,12 @@ export default async function handler(req, res) {
     const body = parseBody(req);
     if (!body) return res.status(400).json({ ok: false, error: 'Invalid request body' });
 
+    if (body.action === 'company:save') {
+      if (!requireRole(session, 'owner')) return res.status(403).json({ ok: false, error: 'Owner access only' });
+      if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Company settings require POST' });
+      return handleCompanySave({ res, db, body, session });
+    }
+
     if (body.action === 'documents:issue') {
       if (req.method !== 'POST') {
         return res.status(400).json({ ok: false, error: 'Document issuance requires POST' });
@@ -304,9 +341,10 @@ async function handleDocumentIssue({ res, db, body, session }) {
 
   try {
     const result = await db.runTransaction(async transaction => {
-      const [sourceSnap, lockSnap] = await Promise.all([
+      const [sourceSnap, lockSnap, companySnap] = await Promise.all([
         transaction.get(sourceRef),
         transaction.get(lockRef),
+        transaction.get(companyRef(db)),
       ]);
       if (!sourceSnap.exists) throw httpError(404, 'Linked finance record not found');
       if (lockSnap.exists) {
@@ -355,7 +393,8 @@ async function handleDocumentIssue({ res, db, body, session }) {
         voidedAt:               null,
         voidedBy:               null,
         voidReason:             null,
-        companyProfileSnapshot: { ...COMPANY_PROFILE },
+        companyProfileSnapshot: profileFrom(companySnap),
+        companyProfileRevision: companySnap.data()?.revision || 0,
       };
 
       transaction.set(counterRef, {

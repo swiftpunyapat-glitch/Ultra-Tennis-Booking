@@ -111,6 +111,7 @@ beforeEach(async () => {
     });
     await setDoc(doc(db, 'system_settings/pricing'), { normalSingleUsePrice: 350 });
     await setDoc(doc(db, 'system_settings/features'), { enableHalfHourBooking: true });
+    await setDoc(doc(db, 'system_settings/finance_company'), { profile: { legalNameTh: 'Private issuer' }, revision: 1 });
     await setDoc(doc(db, 'holidays/2026-08-12'), { date: '2026-08-12', isHoliday: true });
     await setDoc(doc(db, 'audit_logs/al_1'), { action: 'x', actor: 'y' });
     await setDoc(doc(db, 'vouchers/V1'), { code: 'V1', active: true });
@@ -382,7 +383,7 @@ describe('commercial settings and multi-court rules', () => {
     ['customer',()=>testEnv.authenticatedContext(UID_A)],
     ['owner claim',()=>testEnv.authenticatedContext('owner',{admin:true,role:'owner'})],
   ]){
-    test.each([['commerce_settings','current'],['commerce_settings_history','change1']])(`${name} cannot read or mutate %s directly`,async(collectionName,id)=>{
+    test.each([['commerce_settings','current'],['commerce_settings_history','change1'],['system_settings','finance_company']])(`${name} cannot read or mutate %s directly`,async(collectionName,id)=>{
       const db=context().firestore();
       const ref=doc(db,collectionName,id);
       await assertFails(getDoc(ref));

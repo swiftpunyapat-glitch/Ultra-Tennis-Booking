@@ -181,6 +181,11 @@
     .report-note + .report-note{margin-top:7px;}
     .report-register{grid-column:1/-1;}
     #monthlyReportPrint{display:none;}
+    #companySettingsDialog{margin:auto;}
+    #companySettingsDialog::backdrop{background:#0009;}
+    #companySettingsFields input,#companySettingsFields textarea{margin-top:5px;padding:9px 12px;border:1px solid var(--bd);border-radius:7px;background:var(--s2);color:var(--t);}
+    #companySettingsFields input:focus,#companySettingsFields textarea:focus{outline:2px solid var(--g);outline-offset:1px;}
+    .doc-company{min-width:0;overflow-wrap:anywhere;}
 
     @media print{
       body{background:#fff;}
@@ -249,6 +254,7 @@
     </div>
     <div class="ahdr-r">
       <a href="/admin.html" class="backbtn">← Admin</a>
+      <button class="btn-g" id="companySettingsBtn" style="display:none">ตั้งค่าหัวเอกสาร</button>
       <span class="abadge" id="adminBadge">—</span>
       <button class="loutbtn" id="logoutBtn">Logout</button>
     </div>
@@ -530,12 +536,38 @@
   </div>
 </div>
 
+<dialog id="companySettingsDialog" aria-labelledby="companySettingsTitle" style="width:min(760px,94vw);max-height:90vh;padding:24px;background:#161b25;color:#f2f4f7;border:1px solid #596579;border-radius:12px;overflow:auto">
+  <h2 id="companySettingsTitle">ตั้งค่าหัวเอกสาร</h2>
+  <p style="margin:12px 0;color:#bec8d8">ใช้กับใบเสร็จและใบสำคัญจ่ายที่ออกใหม่ เอกสารที่ออกแล้วคงข้อมูลเดิม</p>
+  <form id="companySettingsForm">
+    <fieldset id="companySettingsFields" disabled style="border:0;padding:0;display:grid;gap:12px">
+      <label>ชื่อผู้ออกเอกสารภาษาไทย *<input name="legalNameTh" required maxlength="200" style="display:block;width:100%"></label>
+      <label>ชื่อภาษาอังกฤษ<input name="legalNameEn" maxlength="200" style="display:block;width:100%"></label>
+      <label>ชื่อแบรนด์<input name="brandName" maxlength="100" style="display:block;width:100%"></label>
+      <label>สาขา<input name="branch" maxlength="100" style="display:block;width:100%"></label>
+      <label>ที่อยู่<textarea name="address" maxlength="1000" rows="3" style="display:block;width:100%"></textarea></label>
+      <label>เลขประจำตัวผู้เสียภาษี<input name="taxId" inputmode="numeric" pattern="[0-9]{13}" maxlength="13" style="display:block;width:100%"></label>
+      <label>เบอร์โทร<input name="phone" maxlength="50" style="display:block;width:100%"></label>
+      <label>อีเมล<input name="email" type="email" maxlength="254" style="display:block;width:100%"></label>
+    </fieldset>
+    <p style="margin:12px 0;color:#bec8d8">ช่องที่ไม่บังคับสามารถเว้นว่างเพื่อซ่อนบรรทัดนั้น การตั้งค่านี้ไม่เปลี่ยนโหมด Non-VAT</p>
+    <h3 style="margin:12px 0">ตัวอย่างก่อนบันทึก</h3>
+    <div id="companyHeaderPreview" class="doc-company" style="background:white;color:#17202a;padding:20px;border-radius:8px;overflow-wrap:anywhere"></div>
+    <p id="companySettingsStatus" role="status" aria-live="polite" style="margin:12px 0"></p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn-g" id="companySettingsSave" type="submit" disabled>บันทึกหัวเอกสาร</button>
+      <button class="btn-d" id="companySettingsClose" type="button">ปิด</button>
+    </div>
+  </form>
+</dialog>
+
 <div id="monthlyReportPrint"></div>
 
 <div class="toast" id="toast"></div>
 
 <script type="module">
 import { isUltraPassUsage, ultraPassRate } from "./package-usage.js?v=20260920-pkgusage1";
+import { DEFAULT_COMPANY_PROFILE, COMPANY_FIELDS, documentCompanyProfile, companyHeaderHTML, companyFooterHTML } from "./finance-company.js?v=20260924-company1";
 
 const $ = id => document.getElementById(id);
 
@@ -548,6 +580,10 @@ let allBookings      = [];
 let allExpenses      = [];
 let allManualIncome  = [];
 let allDocuments     = [];
+let currentCompanyProfile = { ...DEFAULT_COMPANY_PROFILE };
+let companyRevision = 0;
+let companyEditorBusy = false;
+let companyEditorLoad = 0;
 let expCatFilter     = "all";
 let expEditId        = null;
 let incEditId        = null;
@@ -638,6 +674,7 @@ function showApp(name, role) {
   $("adminBadge").textContent = name;
   currentAdminRole = role || null;
   const allowed = canAccessFinance();
+  $("companySettingsBtn").style.display = currentAdminRole === "owner" ? "" : "none";
   $("financeAccessDenied").style.display = allowed ? "none" : "block";
   $("financeContent").style.display = allowed ? "block" : "none";
   if (!allowed) return;
@@ -674,9 +711,81 @@ $("logoutBtn").addEventListener("click", async () => {
   try { await fetch("/api/admin-session", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"logout"})}); } catch {}
   currentAdminName = null;
   currentAdminRole = null;
+  companyEditorLoad++;
+  $("companySettingsDialog").close();
+  currentCompanyProfile = { ...DEFAULT_COMPANY_PROFILE };
   $("mainApp").style.display = "none"; $("loginScreen").style.display = "flex";
   $("adminSel").value = ""; $("pinIn").value = "";
 });
+
+function companyFormProfile() {
+  return Object.fromEntries(Object.keys(COMPANY_FIELDS).map(key => [key, $("companySettingsForm").elements.namedItem(key).value.trim()]));
+}
+function previewCompanyHeader() {
+  const profile = companyFormProfile();
+  $("companyHeaderPreview").innerHTML = companyHeaderHTML(profile) + companyFooterHTML(profile, true);
+}
+$("companySettingsBtn").addEventListener("click", async () => {
+  if (currentAdminRole !== "owner") return;
+  const load = ++companyEditorLoad;
+  $("companySettingsFields").disabled = true;
+  $("companySettingsSave").disabled = true;
+  $("companySettingsClose").disabled = false;
+  $("companyHeaderPreview").replaceChildren();
+  $("companySettingsStatus").textContent = "กำลังโหลดหัวเอกสาร…";
+  $("companySettingsDialog").showModal();
+  try {
+    const res = await fetch('/api/finance-data?action=company%3Aget');
+    const data = await res.json();
+    if (load !== companyEditorLoad || currentAdminRole !== "owner") return;
+    if (!res.ok || !data.ok) throw new Error(data.error || "โหลดหัวเอกสารไม่สำเร็จ");
+    companyRevision = data.revision;
+    for (const key of Object.keys(COMPANY_FIELDS)) $("companySettingsForm").elements.namedItem(key).value = data.profile[key] ?? '';
+    $("companySettingsFields").disabled = false;
+    $("companySettingsSave").disabled = false;
+    $("companySettingsStatus").textContent = "";
+    previewCompanyHeader();
+  } catch (e) {
+    if (load === companyEditorLoad) $("companySettingsStatus").textContent = e.message || "โหลดไม่สำเร็จ กรุณาปิดแล้วลองใหม่";
+  }
+});
+$("companySettingsForm").addEventListener("input", previewCompanyHeader);
+$("companySettingsForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (currentAdminRole !== "owner" || companyEditorBusy || $("companySettingsSave").disabled) return;
+  const profile = companyFormProfile();
+  const load = companyEditorLoad;
+  companyEditorBusy = true;
+  $("companySettingsFields").disabled = true;
+  $("companySettingsSave").disabled = true;
+  $("companySettingsClose").disabled = true;
+  $("companySettingsStatus").textContent = "กำลังบันทึก…";
+  let conflict = false;
+  try {
+    const res = await fetch('/api/finance-data', { method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ action:'company:save', profile, revision:companyRevision }) });
+    const data = await res.json();
+    conflict = res.status === 409;
+    if (load !== companyEditorLoad || currentAdminRole !== "owner") return;
+    if (!res.ok || !data.ok) throw new Error(data.error || "บันทึกไม่สำเร็จ");
+    currentCompanyProfile = data.profile;
+    companyRevision = data.revision;
+    $("companySettingsDialog").close();
+    renderAll();
+    showToast("บันทึกแล้ว — ใช้กับเอกสารที่ออกใหม่ ใบเดิมคงข้อมูลเดิม");
+  } catch (error) {
+    if (load === companyEditorLoad) $("companySettingsStatus").textContent = error.message || "บันทึกไม่สำเร็จ กรุณาลองใหม่";
+  } finally {
+    companyEditorBusy = false;
+    if (load === companyEditorLoad) {
+      $("companySettingsClose").disabled = false;
+      $("companySettingsFields").disabled = conflict;
+      $("companySettingsSave").disabled = conflict;
+    }
+  }
+});
+$("companySettingsClose").addEventListener("click", () => { companyEditorLoad++; $("companySettingsDialog").close(); });
+$("companySettingsDialog").addEventListener("cancel", e => { if (companyEditorBusy) e.preventDefault(); else companyEditorLoad++; });
 
 // ── TABS ──────────────────────────────────────────────────────────
 document.querySelectorAll(".tab").forEach(btn => {
@@ -710,13 +819,16 @@ async function loadMonthData() {
   if (!mv) return;
   $("mState").textContent = "Loading…";
   try {
-    const [financeRes, documentRes] = await Promise.all([
+    const [financeRes, documentRes, companyRes] = await Promise.all([
       fetch(`/api/finance-data?month=${encodeURIComponent(mv)}&basis=${$("financeBasis").value}`),
       fetch(`/api/finance-data?month=${encodeURIComponent(mv)}&action=documents%3Alist`),
+      fetch('/api/finance-data?action=company%3Aget'),
     ]);
-    const [data, documentData] = await Promise.all([financeRes.json(), documentRes.json()]);
+    const [data, documentData, companyData] = await Promise.all([financeRes.json(), documentRes.json(), companyRes.json()]);
     if (!data.ok) throw new Error(data.error || "Failed to load");
     if (!documentData.ok) throw new Error(documentData.error || "Failed to load documents");
+    if (!companyRes.ok || !companyData.ok) throw new Error(companyData.error || "Failed to load company profile");
+    currentCompanyProfile = companyData.profile;
     allBookings     = data.bookings;
     allExpenses     = data.expenses;
     allManualIncome = data.income;
@@ -1135,7 +1247,7 @@ function renderMonthlyReport() {
     <td>${esc(d.status || "—")}</td>
   </tr>`).join("") || `<tr><td colspan="6" style="text-align:center;color:var(--m)">No documents issued this month.</td></tr>`;
 
-  const profile = allDocuments.find(d => d.companyProfileSnapshot)?.companyProfileSnapshot || {};
+  const profile = currentCompanyProfile;
   const taxIdBlank = !String(profile.taxId || "").trim();
   const notes = [
     voidedDocuments.length
@@ -1155,8 +1267,8 @@ function renderMonthlyReport() {
     <div class="report-sheet">
       <div class="report-head">
         <div>
-          <h2>Ultra Tennis Monthly Finance Report</h2>
-          <p>Swift Sports Group Co., Ltd. · ${esc(reportMonth)} · Internal non-VAT report</p>
+          <h2>${esc(profile.brandName || profile.legalNameTh)} Monthly Finance Report</h2>
+          <p>${esc(profile.legalNameTh)} · ${esc(reportMonth)} · Internal non-VAT report</p>
         </div>
         <p>Prepared from current finance records and document register.</p>
       </div>
@@ -1278,7 +1390,7 @@ async function voidDocument(docId) {
 function viewDocument(docId) {
   const d = allDocuments.find(item => item.id === docId);
   if (!d) { showToast("Document not found in this month.", true); return; }
-  const profile = d.companyProfileSnapshot || {};
+  const profile = documentCompanyProfile(d.companyProfileSnapshot);
   const items = Array.isArray(d.items) ? d.items : [];
   const title = documentTypeLabel(d.docType);
   const partyLabel = d.counterpartyType === "vendor" ? "Paid To / Vendor" : "Received From / Customer";
@@ -1289,21 +1401,12 @@ function viewDocument(docId) {
     <td class="right">${baht(item.unitPrice || 0)}</td>
     <td class="right">${baht(item.amount || 0)}</td>
   </tr>`).join("");
-  const footer = d.docType === "receipt"
-    ? `<p>This document is generated from Swift Sports internal finance system.</p><p><strong>This document is not a tax invoice.</strong></p>`
-    : `<p>This document is generated from Swift Sports internal finance system.</p>`;
+  const footer = companyFooterHTML(profile, d.docType === "receipt");
 
   $("documentPrintArea").innerHTML = `
     <div class="doc-head">
       <div class="doc-company">
-        <h2>${esc(profile.legalNameTh || "บริษัท สวิฟท์ สปอร์ตส์ กรุ๊ป จำกัด")}</h2>
-        <p>${esc(profile.legalNameEn || "Swift Sports Group Co., Ltd.")}</p>
-        <p>Brand: ${esc(profile.brandName || "Ultra Tennis")}</p>
-        <p>Branch: ${esc(profile.branch || "สำนักงานใหญ่")}</p>
-        ${profile.address ? `<p>${esc(profile.address)}</p>` : ""}
-        <p>Tax ID: ${esc(profile.taxId || "")}</p>
-        ${profile.phone ? `<p>Phone: ${esc(profile.phone)}</p>` : ""}
-        ${profile.email ? `<p>Email: ${esc(profile.email)}</p>` : ""}
+        ${companyHeaderHTML(profile)}
       </div>
       <div class="doc-title">
         <h1>${esc(title)}</h1>
