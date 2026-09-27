@@ -73,6 +73,7 @@ import { belongsToTestSession } from './_lib/test-session.js';
 import { revertTestVoucherRedemption } from './_lib/test-voucher.js';
 import { confirmCoachAddonV2Payment, releaseCoachAddonV2Hold } from './_lib/coach-addon-v2-store.js';
 import { markBookingTest } from './_lib/mark-booking-test.js';
+import { pendingRestriction, pendingTargetError, readPendingPolicy } from './_lib/customer-reschedule.js';
 
 // ── Shared constants ──────────────────────────────────────────────
 const RESOURCE_ID = 'room1';
@@ -2292,9 +2293,11 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
     return res.status(400).json({ ok: false, error: 'Booking date/time is missing' });
   }
 
-  const fromDate  = booking.pendingRescheduleFromDate      || booking.previousDate      || booking.date;
-  const fromStart = booking.pendingRescheduleFromStartTime || booking.previousStartTime || booking.startTime;
-  const fromEnd   = booking.pendingRescheduleFromEndTime   || booking.previousEndTime   || booking.endTime;
+  // A second park starts from the currently assigned slot, not the first
+  // historical time preserved by an earlier reschedule.
+  const fromDate  = booking.date;
+  const fromStart = booking.startTime;
+  const fromEnd   = booking.endTime;
 
   const oldSlotIds = bookingSlotIds(booking);
   const oldSlotRefs = oldSlotIds.map(id => db.collection('booking_slots').doc(id));
@@ -2309,6 +2312,7 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
       if (isEventPassBooking(bNow)) throw new Error('EVENT_PASS_NO_RESCHEDULE');
       if (isPendingRescheduleBooking(bNow)) throw new Error('ALREADY_PENDING');
+      if (bNow.date !== booking.date || bNow.startTime !== booking.startTime || bNow.endTime !== booking.endTime || bNow.resourceId !== booking.resourceId) throw new Error('STALE_BOOKING');
 
       t.update(bookingRef, {
         bookingStatus:                  'rescheduled',
@@ -2344,6 +2348,7 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
       CANCELLED:       [409, 'Cannot reschedule a cancelled booking'],
       EVENT_PASS_NO_RESCHEDULE: [409, 'Event Pass bookings cannot be rescheduled'],
       ALREADY_PENDING: [409, 'Booking is already pending reschedule'],
+      STALE_BOOKING: [409, 'รายการนี้ถูกเปลี่ยนแล้ว กรุณาโหลดใหม่ก่อนเลื่อน'],
     };
     const [code, msg] = map[e.message] || [500, 'Failed to move to pending reschedule'];
     if (code === 500) console.error('[reschedule_park] tx:', e.message);
@@ -2376,11 +2381,11 @@ async function handleReschedulePark({ res, adminName, session, db, booking, book
 // customer UI reliably blocks it (it only blocks confirmed / unexpired pending).
 // Customer + admin notifications and Calendar sync stay client-side.
 // ════════════════════════════════════════════════════════════════════
-async function handleRescheduleAssign({ res, adminName, session, db, booking, bookingRef, bookingId, body }) {
+export async function handleRescheduleAssign({ res, adminName, session, db, booking, bookingRef, bookingId, body, customerUid = null }) {
   if (isCoachAddonV2Booking(booking)) {
     return res.status(409).json({ ok: false, code: 'COACH_ADDON_V2_RESCHEDULE_UNSUPPORTED', error: 'Coach Add-on v2 reschedule requires a coach-aware claim transition' });
   }
-  if (!hasBranchAccess(session, resolveBranchId(booking))) {
+  if (customerUid ? pendingRestriction(booking, customerUid) : !hasBranchAccess(session, resolveBranchId(booking))) {
     return res.status(403).json({ ok: false, error: 'No access to this branch' });
   }
   if (booking.bookingStatus === 'cancelled') {
@@ -2423,7 +2428,7 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
   let resourceId;
   try { resourceId = await validateResourceRequest(db, {resourceId:body.newResourceId || booking.resourceId || RESOURCE_ID,startTime:newStartTime,durationMinutes:durMin}); }
   catch(e){return res.status(e.status || 503).json({ok:false,error:e.message});}
-  const oldSlotIds  = bookingSlotIds(booking);
+  const oldSlotIds  = isPendingRescheduleBooking(booking) ? [] : bookingSlotIds(booking);
   const newSlotIds  = newSegs.map(x => reschedSlotId(resourceId, newDate, x.start));
 
   // Cell-level conflict model (Phase B): read BOTH 30-min cell docs of every
@@ -2462,6 +2467,17 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       const bNow = bSnap.data();
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
       if (isEventPassBooking(bNow)) throw new Error('EVENT_PASS_NO_RESCHEDULE');
+      // Competing customer/admin assignments must not leave two sets of slots
+      // owned by a single booking. Reject a stale source before any writes.
+      for (const key of ['bookingStatus', 'pendingReschedule', 'date', 'startTime', 'endTime', 'resourceId', 'durationMinutes', 'paymentStatus', 'price']) {
+        if (JSON.stringify(bNow[key] ?? null) !== JSON.stringify(booking[key] ?? null)) throw new Error('STALE_BOOKING');
+      }
+      if (customerUid) {
+        const policy = await readPendingPolicy(db, { ...bNow, id: bookingId }, newDate, t);
+        const issue = pendingTargetError(bNow, customerUid, newDate, newStartTime, requestedAssign, policy);
+        if (issue) throw Object.assign(new Error(issue), { customerPolicy: true });
+        if (resourceId !== (bNow.resourceId || RESOURCE_ID)) throw Object.assign(new Error('กรุณาใช้คอร์ตเดิมของรายการนี้'), { customerPolicy: true });
+      }
       const currentTotalDur = bookingDurationMin(bNow);
       if (currentTotalDur !== totalDurMin) throw new Error('STALE_DURATION');
       const partial = requestedAssign < currentTotalDur;
@@ -2473,6 +2489,7 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       if (partial && (bNow.refundStatus || Number(bNow.refundAmount) > 0 || Number(bNow.refundedAmount) > 0)) throw new Error('ALREADY_REFUNDED');
       for (const avSnap of avSnaps) {
         if (!avSnap.exists || avSnap.data().status !== 'open') throw new Error('SLOT_NOT_OPEN');
+        if (customerUid && (avSnap.data().testSessionId || avSnap.data().isTest)) throw new Error('SLOT_NOT_OPEN');
       }
       cellSnaps.forEach((snap, i) => {
         if (!snap.exists) return;
@@ -2505,6 +2522,7 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
         rescheduledAt: FieldValue.serverTimestamp(),
         updatedAt:     FieldValue.serverTimestamp(),
         ...(splitValues ? splitValues.assigned : {}),
+        ...(customerUid ? { rescheduledBy: 'customer', customerRescheduledAt: FieldValue.serverTimestamp(), googleCalendarSyncStatus: 'customer_reschedule_pending' } : {}),
       };
       if (partial) {
         update.splitFromDurationMinutes = currentTotalDur;
@@ -2605,11 +2623,13 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
       };
     });
   } catch (e) {
+    if (e.customerPolicy) return res.status(409).json({ ok: false, error: e.message });
     const map = {
       BOOKING_MISSING: [404, 'Booking not found'],
       CANCELLED:       [409, 'Cannot reschedule a cancelled booking'],
       EVENT_PASS_NO_RESCHEDULE: [409, 'Event Pass bookings cannot be rescheduled'],
       STALE_DURATION:  [409, 'Booking duration changed; reload and try again'],
+      STALE_BOOKING:   [409, 'รายการนี้ถูกเปลี่ยนแล้ว กรุณาโหลดใหม่ก่อนเลือกเวลา'],
       PARTIAL_REQUIRES_PENDING: [409, 'Partial assignment is allowed only for a pending-reschedule booking'],
       ALREADY_REFUNDED: [409, 'Cannot split a booking that already has a refund'],
       RECEIPT_EXISTS: [409, 'Void the active receipt before splitting this booking'],
@@ -2622,7 +2642,7 @@ async function handleRescheduleAssign({ res, adminName, session, db, booking, bo
   }
 
   await writeAuditLog(db, {
-    actor: adminName, actorRole: session.role, branchId: resolveBranchId(booking),
+    actor: adminName, actorRole: customerUid ? 'customer' : session.role, branchId: resolveBranchId(booking),
     action: 'reschedule_assign', targetId: bookingId,
     before: { resourceId: booking.resourceId || RESOURCE_ID, bookingStatus: booking.bookingStatus, date: booking.date, startTime: booking.startTime },
     after:  {

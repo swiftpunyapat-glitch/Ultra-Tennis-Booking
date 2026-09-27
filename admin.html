@@ -4928,6 +4928,8 @@ function openResch(b){
   durationSelect.disabled=!isPending;
   $("rDate").value="";$("rTimeGrid").innerHTML="";$("rHint").textContent="";
   $("mPendingResch").style.display=isPending?"none":"inline-block";
+  $("mPendingResch").disabled=false;
+  $("mPendingResch").textContent="Move to Pending";
   $("mConfirm").textContent=isPending?"Assign New Slot":"Confirm Reschedule";
   $("mConfirm").disabled=true;$("reschModal").style.display="flex";
 }
@@ -4955,7 +4957,7 @@ async function moveToPendingReschedule(){
       body:JSON.stringify({operation:"reschedule_park",bookingId:reschBooking.id}),
     });
     const data=await res.json().catch(()=>({}));
-    if(!res.ok||!data.ok){showToast(data.error||"Move to pending reschedule failed.",true);btn.disabled=false;btn.textContent="Move to Pending";return;}
+    if(!res.ok||!data.ok){showToast(data.error||"Move to pending reschedule failed.",true);return;}
 
     // ── Phase B: fire-and-forget admin notification ───────────────
     // Must not block or affect the reschedule; failure is logged only.
@@ -4998,6 +5000,7 @@ async function moveToPendingReschedule(){
     if($("tabDaily").style.display!=="none"&&$("dvDate").value===releasedDate) await loadDailyView();
   }catch(e){
     console.error(e);showToast(e.message||"Move to pending reschedule failed.",true);
+  }finally{
     btn.disabled=false;btn.textContent="Move to Pending";
   }
 }

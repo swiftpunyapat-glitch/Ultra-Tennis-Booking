@@ -18,6 +18,40 @@
 import { verifySessionCookie } from './_lib/admin-auth.js';
 import { getAdminDb } from './_lib/firebase-admin.js';
 import { testSessionIdForBookingCode } from './_lib/test-session.js';
+import { isTestBooking } from '../test-booking.js';
+import { FieldValue } from 'firebase-admin/firestore';
+
+// Server-only entry point: the booking is loaded from Firestore, never from
+// customer request fields. A sync failure is visible in the existing admin
+// Calendar retry UI and does not undo a committed reschedule.
+export async function syncCustomerRescheduleCalendar(db, bookingId) {
+  const ref = db.collection('bookings').doc(bookingId);
+  const snap = await ref.get();
+  if (!snap.exists) return;
+  const b = snap.data();
+  if (isTestBooking(b) || b.bookingStatus !== 'confirmed' || b.pendingReschedule === true || !['paid', 'package'].includes(b.paymentStatus)) return;
+  let fields;
+  try {
+    const signal = AbortSignal.timeout(4000);
+    let result;
+    if (b.googleCalendarEventId) {
+      try { result = await updateCalendarEvent(b.googleCalendarEventId, b, signal); }
+      catch (e) { if (!/calendar_api_(404|410)/.test(e.message)) throw e; }
+    }
+    result ||= await createCalendarEvent(b, signal);
+    fields = { googleCalendarEventId: result.eventId, googleCalendarHtmlLink: result.htmlLink || null,
+      googleCalendarSyncStatus: 'updated', googleCalendarSyncError: null };
+  } catch (e) {
+    fields = { googleCalendarSyncStatus: 'failed', googleCalendarSyncError: safeError(e.message) };
+  }
+  await db.runTransaction(async t => {
+    const current = await t.get(ref);
+    if (!current.exists) return;
+    const now = current.data();
+    if (isTestBooking(now) || now.bookingStatus !== 'confirmed' || now.date !== b.date || now.startTime !== b.startTime || now.endTime !== b.endTime) return;
+    t.update(ref, { ...fields, googleCalendarSyncedAt: FieldValue.serverTimestamp() });
+  });
+}
 
 // A test booking must never reach the real calendar. The booking record is the
 // only trustworthy source here, and a lookup failure suppresses rather than
@@ -33,7 +67,7 @@ function parseBody(req) {
 }
 
 // Exchange refresh token for a short-lived access token.
-async function getAccessToken() {
+async function getAccessToken(signal) {
   const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN } = process.env;
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) {
     throw new Error('Google OAuth env vars not configured');
@@ -45,6 +79,7 @@ async function getAccessToken() {
     refresh_token: GOOGLE_REFRESH_TOKEN,
   });
   const res = await fetch('https://oauth2.googleapis.com/token', {
+    signal,
     method:  'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body:    params.toString(),
@@ -121,17 +156,18 @@ function buildEvent(booking) {
   return event;
 }
 
-async function createCalendarEvent(booking) {
+async function createCalendarEvent(booking, signal) {
   const calendarId = process.env.GOOGLE_CALENDAR_ID;
   if (!calendarId) throw new Error('GOOGLE_CALENDAR_ID not configured');
 
-  const accessToken = await getAccessToken();
+  const accessToken = await getAccessToken(signal);
   const event       = buildEvent(booking);
 
   // sendUpdates=all — ensures attendees (e.g. BaiMon) receive an email/calendar invite.
   // Without this param Google defaults to no notification for internal Gmail attendees.
   const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?sendUpdates=all`;
   const res = await fetch(url, {
+    signal,
     method:  'POST',
     headers: {
       'Authorization': `Bearer ${accessToken}`,
@@ -152,15 +188,16 @@ async function createCalendarEvent(booking) {
 
 // PATCH an existing Calendar event to a new date/time.
 // Uses sendUpdates=all so BaiMon receives a changed-time notification.
-async function updateCalendarEvent(eventId, booking) {
+async function updateCalendarEvent(eventId, booking, signal) {
   const calendarId = process.env.GOOGLE_CALENDAR_ID;
   if (!calendarId) throw new Error('GOOGLE_CALENDAR_ID not configured');
 
-  const accessToken = await getAccessToken();
+  const accessToken = await getAccessToken(signal);
   const event       = buildEvent(booking);   // reuse privacy-safe builder
 
   const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=all`;
   const res = await fetch(url, {
+    signal,
     method:  'PATCH',
     headers: {
       'Authorization': `Bearer ${accessToken}`,

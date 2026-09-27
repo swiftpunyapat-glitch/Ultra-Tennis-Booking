@@ -399,7 +399,7 @@ function buildMessages(type, payload) {
 
 // ─── Raw LINE Messaging API call ────────────────────────────────────
 // Returns { ok, status, error, requestId } — never throws.
-async function callLinePush({ to, messages }) {
+async function callLinePush({ to, messages, timeoutMs }) {
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!token) {
     return { ok: false, status: 500, error: "LINE_CHANNEL_ACCESS_TOKEN not set", requestId: null };
@@ -407,6 +407,7 @@ async function callLinePush({ to, messages }) {
   let res;
   try {
     res = await fetch("https://api.line.me/v2/bot/message/push", {
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -442,6 +443,7 @@ export async function sendAndLog({
   bookingCode,
   payload,       // raw fields used to build the message
   testSessionId, // set ⇒ Test Mode: build the message, never send it (Guard 3)
+  timeoutMs,
 }) {
   const db = getDb();
   const logRef = db.collection("notification_logs").doc(eventId);
@@ -510,7 +512,7 @@ export async function sendAndLog({
     return { ok: true, status: "suppressed_test", testSessionId };
   }
 
-  const result = await callLinePush({ to: lineUserId, messages });
+  const result = await callLinePush({ to: lineUserId, messages, timeoutMs });
 
   await logRef.set({
     eventId, type, targetType, lineUserId,

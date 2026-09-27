@@ -692,7 +692,17 @@
       .home-brand-logo{width:60px;height:60px;}
       .home-title{font-size:1.35rem;}
     }
-  </style>
+    .pending-reschedule-dialog{border:0;border-radius:16px;padding:24px;margin:auto;width:min(92vw,480px);max-height:85vh;overflow:auto;color:var(--ink);background:var(--surface);box-shadow:0 15px 60px #0004}
+    .pending-reschedule-dialog::backdrop{background:#0008}
+    .pending-reschedule-dialog h2{font-size:1.2rem;margin:0 0 12px}
+    .pending-reschedule-dialog p{font-size:.85rem;line-height:1.6;margin:12px 0}
+    .pending-reschedule-dialog label{display:block;margin:12px 0;font-weight:700}
+    .pending-reschedule-dialog select,.pending-reschedule-dialog input{display:block;width:100%;padding:12px;margin-top:6px;border:1px solid #ddd;border-radius:8px;background:white;color:#222}
+    .pending-reschedule-dialog button:disabled{opacity:.5;cursor:not-allowed}
+    .pending-reschedule-item{padding:12px 0;border-top:1px solid #ddd;font-size:.85rem;line-height:1.6}
+    .pending-reschedule-item button{margin-top:8px}
+    .pending-reschedule-actions{display:flex;justify-content:space-between;gap:12px;margin-top:16px}
+</style>
 </head>
 <body>
 
@@ -816,6 +826,7 @@
     <div class="view">
       <button class="back" id="bkBack">← <span data-i18n="back">Back</span></button>
       <div class="ptitle" data-i18n="bookPracticeRoom">Book Practice Room</div>
+      <div id="bookingPendingHours"></div>
 
       <!-- Dynamic Promo Banner Container -->
       <div id="promoBannerWrap" style="display:none; margin-bottom:12px;"></div>
@@ -1027,6 +1038,7 @@
     <div class="view" style="padding:16px 16px 0">
       <button class="back" id="myBack">← <span data-i18n="back">Back</span></button>
       <div class="ptitle" data-i18n="myBookingPass">My Booking & My Pass</div>
+      <div id="myPendingHours"></div>
     </div>
     <div id="myContent" class="mlist">
       <div style="text-align:center;padding:32px">
@@ -1161,6 +1173,7 @@
 
 <script type="module">
 import { courtRequest, loadCourtSelector } from "./court-selector.js";
+import { createPendingRescheduleUI } from "./pending-reschedule.js";
 import { AVAILABILITY_BUILD, canUseAvailability, reportAvailability } from "./availability-state.js";
 import { initializeApp }             from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
 import { isSupported, getAnalytics } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-analytics.js";
@@ -1803,6 +1816,8 @@ function setupLanguageToggle() {
       currentLang=btn.dataset.lang;
       localStorage.setItem(LANG_KEY,currentLang);
       applyI18n();
+      if($("viewBooking").style.display!=="none") pendingRescheduleUI.load($("bookingPendingHours"));
+      if($("viewMyBookings").style.display!=="none") pendingRescheduleUI.load($("myPendingHours"));
       buildDates();
       renderTimes();
       if(state.myBookingsData && $("viewMyBookings").style.display!=="none"){
@@ -2539,7 +2554,23 @@ function updateHomeSingleUsePricing() {
   }
 }
 
+const pendingRescheduleUI = createPendingRescheduleUI({
+  signedIn: () => !!state.lineProfile?.userId && state.lineProfile.userId !== 'guest',
+  english: () => currentLang === 'en',
+  api: async body => {
+    const idToken = await protectedIdToken();
+    const response = await fetch('/api/booking', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, idToken }) });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'ไม่สามารถโหลดรายการได้');
+    return data;
+  },
+  onAssigned: async () => {
+    if ($('viewMyBookings').style.display !== 'none') await openMyBookings();
+    if ($('viewBooking').style.display !== 'none') await loadSlotsAndRender(getSelectedDateISO());
+  },
+});
 async function openBookingView() {
+  pendingRescheduleUI.load($('bookingPendingHours'));
   state.time=null;
   state.bookingPaymentType="single";
   state.durationMinutes=60;
@@ -4042,6 +4073,7 @@ async function openMyBookings() {
     { userId: state.lineProfile?.userId || "(none)", displayName: state.lineProfile?.displayName || "(none)" });
 
   showView("viewMyBookings");
+  pendingRescheduleUI.load($('myPendingHours'));
 
   const uid = state.lineProfile?.userId;
   if (uid === "guest") {
@@ -4138,6 +4170,7 @@ function renderMyBookings(bookings, packages, purchases) {
       const isPendRev=b.paymentStatus==="pending_review";
       const isPaid   =b.paymentStatus==="paid"||b.paymentStatus==="package";
       const isCoachAddonV2=b.coachAddonSchemaVersion===2;
+      const isPendingMove=b.bookingStatus==='pending_reschedule'||(b.bookingStatus==='rescheduled'&&b.pendingReschedule===true);
       const fundingLabel=({cash:"เงินสด/โอน",ultra_pass:"Ultra Pass",coaching_package:"Beginner Coaching",mixed:"Pass + เงินสด"})[b.fundingSource]||b.fundingSource||"";
       html+=`<div class="bitem">
         <div class="bitem-top"><span class="bitem-code">${esc(b.bookingCode)}</span><span class="bitem-type">${esc(displayBookingType(b.bookingType)||"—")}</span></div>
@@ -4149,10 +4182,10 @@ function renderMyBookings(bookings, packages, purchases) {
           ${isCoachAddonV2?`<div class="bf-field"><div class="bf-lbl">Coach</div><div class="bf-val">${esc(b.coachName||"—")} · ${Number(b.studentCount)||1} คน</div></div><div class="bf-field"><div class="bf-lbl">ที่มาของเงิน</div><div class="bf-val">${esc(fundingLabel)}</div></div>`:""}
         </div>
         <div class="bitem-footer">
-          <span class="sp s-${esc(b.bookingStatus)}">${esc(displayStatus(b.bookingStatus))}</span>
+          <span class="sp s-${esc(b.bookingStatus)}">${isPendingMove?(currentLang==='th'?'รอเลือกวันใหม่':'Pending reschedule'):esc(displayStatus(b.bookingStatus))}</span>
           ${isPendPay?`<button class="btn-rpay" onclick="resumeBookingPayment('${esc(b.id)}')">${t("completePayment")}</button>`:""}
           ${isPendRev?`<span style="font-size:.72rem;color:#1e40af">⏳ ${t("pendingReview")}</span>`:""}
-          ${(isPaid&&!isPendRev)?`<span style="font-size:.72rem;color:var(--brand-dark)">✅ ${t("confirmed")}</span>`:""}
+          ${(isPaid&&!isPendRev&&!isPendingMove)?`<span style="font-size:.72rem;color:var(--brand-dark)">✅ ${t("confirmed")}</span>`:""}
         </div>
       </div>`;
     });

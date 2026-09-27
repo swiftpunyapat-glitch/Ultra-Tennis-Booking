@@ -3,6 +3,7 @@ import { storeConfig, publicStoreConfig, financialSnapshot, resourceError } from
 import { validateResourceRequest, resourceSlotId, readPricing, readStore, commerceSettingsRef, pricingFromSnapshots } from './_lib/store-settings.js';
 import { verificationCapabilities } from './_lib/payment-verification.js';
 import { handleAvailabilityDiagnostic } from './_lib/availability-diagnostic.js';
+import { isPending, pendingMinutes, pendingRestriction, pendingOptions, validPendingDate } from './_lib/customer-reschedule.js';
 // ════════════════════════════════════════════════════════════════════
 // POST /api/booking — customer booking route (Pricing v2)
 // ════════════════════════════════════════════════════════════════════
@@ -524,6 +525,7 @@ export default async function handler(req, res) {
 
   // Guest capability token (Security Hotfix 2026-08-04)
   if (body.action === 'guest_booking') return handleGuestBooking(req, res, body);
+  if (['pending_reschedules', 'pending_reschedule_options', 'assign_pending_reschedule'].includes(body.action)) return handleCustomerPending(res, body);
 
   if (body.action === 'availability_diagnostic') return handleAvailabilityDiagnostic(req,res,body);
   if (body.action === 'price_quote')   return handlePriceQuote(res, body);
@@ -570,6 +572,63 @@ async function eventPassUser(idToken) {
   if (!idToken || typeof idToken !== 'string') return null;
   try { return (await getAdminAuth().verifyIdToken(idToken.trim())).uid || null; }
   catch { return null; }
+}
+
+async function handleCustomerPending(res, body) {
+  const uid = await eventPassUser(body.idToken);
+  if (!uid) return res.status(401).json({ ok: false, error: 'กรุณาเข้าสู่ระบบผ่าน LINE อีกครั้ง' });
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const db = getAdminDb();
+    if (body.action === 'pending_reschedules') {
+      const snap = await db.collection('bookings').where('lineUserId', '==', uid).get();
+      const bookings = snap.docs.filter(d => isPending(d.data()) && !isTestBooking(d.data())).map(d => {
+        const b = d.data();
+        return { id: d.id, bookingCode: b.bookingCode || d.id, durationMinutes: pendingMinutes(b), resourceId: b.resourceId || 'room1',
+          originalDate: b.pendingRescheduleFromDate || b.date, originalStartTime: b.pendingRescheduleFromStartTime || b.startTime,
+          restriction: pendingRestriction(b, uid) };
+      });
+      return res.status(200).json({ ok: true, bookings, totalMinutes: bookings.reduce((n, b) => n + b.durationMinutes, 0) });
+    }
+    if (typeof body.bookingId !== 'string' || !body.bookingId || body.bookingId.length > 200 || body.bookingId.includes('/')) return res.status(400).json({ ok: false, error: 'Invalid booking ID' });
+    const bookingRef = db.collection('bookings').doc(body.bookingId);
+    const snap = await bookingRef.get();
+    if (!snap.exists || snap.data().lineUserId !== uid || isTestBooking(snap.data())) return res.status(404).json({ ok: false, error: 'ไม่พบรายการจองของคุณ' });
+    const booking = { ...snap.data(), id: snap.id };
+    const restriction = pendingRestriction(booking, uid);
+    if (restriction) return res.status(409).json({ ok: false, error: restriction });
+    const duration = Number(body.assignDurationMinutes);
+    if (!validPendingDate(body.newDate) || !Number.isInteger(duration) || duration < 30 || duration > pendingMinutes(booking) || duration % 30) return res.status(400).json({ ok: false, error: 'กรุณาเลือกวันและจำนวนชั่วโมงที่ถูกต้อง' });
+    if (body.action === 'pending_reschedule_options') return res.status(200).json({ ok: true, ...await pendingOptions(db, booking, uid, body.newDate, duration) });
+    const { handleRescheduleAssign } = await import('./admin-edit-booking-accounting.js');
+    // Only these validated fields cross into the shared transaction. Client
+    // prices, payment fields, court overrides and user IDs are never trusted.
+    let outcome, status;
+    const result = { status(code) { status = code; return this; }, json(value) { outcome = value; return this; } };
+    await handleRescheduleAssign({ res: result, db, booking, bookingRef, bookingId: snap.id, customerUid: uid, adminName: uid,
+      body: { newDate: body.newDate, newStartTime: body.newStartTime, assignDurationMinutes: duration, newResourceId: booking.resourceId || 'room1' } });
+    if (outcome.ok) {
+      try {
+        const { syncCustomerRescheduleCalendar } = await import('./gcal.js');
+        await syncCustomerRescheduleCalendar(db, snap.id);
+      } catch (e) { console.error('[customer-reschedule] calendar:', e.message); }
+      // Notification failure must never undo or report failure for committed hours.
+      try {
+        const payload = { ...booking, date: body.newDate, startTime: body.newStartTime, endTime: outcome.newEndTime,
+          previousDate: booking.date, previousStartTime: booking.startTime, previousEndTime: booking.endTime, actionBy: 'ลูกค้าเลือกเวลาเอง' };
+        const eventId = `${snap.id}_customer_reschedule_${body.newDate}_${body.newStartTime}_${Date.now()}`;
+        const admins = await loadActiveAdmins();
+        await Promise.allSettled([
+          sendAndLog({ eventId: `${eventId}_customer`, type: 'booking_rescheduled_customer', targetType: 'customer', lineUserId: uid, bookingCode: booking.bookingCode, payload, timeoutMs: 3000 }),
+          ...admins.map(admin => sendAndLog({ eventId: `${eventId}_${admin.id}`, type: 'booking_rescheduled_admin', targetType: 'admin', lineUserId: admin.lineUserId, bookingCode: booking.bookingCode, payload, timeoutMs: 3000 })),
+        ]);
+      } catch (e) { console.error('[customer-reschedule] notification:', e.message); }
+    }
+    return res.status(status).json(outcome);
+  } catch (e) {
+    console.error('[customer-reschedule]', e.message);
+    return res.status(500).json({ ok: false, error: 'ไม่สามารถดำเนินการได้ กรุณาโหลดรายการใหม่เพื่อตรวจสอบสถานะก่อนลองอีกครั้ง' });
+  }
 }
 
 async function handleEventPassRedeem(req, res, body) {
