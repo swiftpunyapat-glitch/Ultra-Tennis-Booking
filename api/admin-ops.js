@@ -32,7 +32,7 @@ import {
   getAdminDb, getAdminAuth, getAdminBucket, serializeFsDoc, writeAuditLog,
   BRANCH_STATUSES, statusFlags,
 } from './_lib/firebase-admin.js';
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp, FieldPath } from 'firebase-admin/firestore';
 import { randomUUID } from 'node:crypto';
 import { buildCustomerIdentityDryRun } from './_lib/customer-identity.js';
 import { ultraPassUsageValue } from '../package-usage.js';
@@ -342,19 +342,24 @@ async function handleAdminRead(res, session, body) {
       if (testsOnly && (session.name !== 'Art' || session.role !== 'owner')) {
         return res.status(403).json({ ok:false, error:'Only Art can view test booking history' });
       }
-      let q = db.collection('bookings').orderBy('createdAt', 'desc');
+      // Opt-in stable ID traversal includes legacy docs without createdAt.
+      // Existing clients retain their createdAt ordering/cursor contract.
+      const byId = body.bookingOrder === 'id';
+      if (body.bookingOrder !== undefined && !byId) return res.status(400).json({ ok:false, error:'Invalid bookingOrder' });
+      let q = db.collection('bookings').orderBy(byId ? FieldPath.documentId() : 'createdAt', byId ? 'asc' : 'desc');
       if (typeof body.cursorBookingId === 'string') {
         if (!body.cursorBookingId || body.cursorBookingId.includes('/')) return res.status(400).json({ ok:false, error:'Invalid cursorBookingId' });
         const cursor = await db.collection('bookings').doc(body.cursorBookingId).get();
-        if (!cursor.exists || !cursor.data().createdAt) return res.status(409).json({ ok:false, error:'Booking list changed. Refresh and try again.' });
+        if (!cursor.exists || (!byId && !cursor.data().createdAt)) return res.status(409).json({ ok:false, error:'Booking list changed. Refresh and try again.' });
         q = q.startAfter(cursor);
       } else if (typeof body.cursorCreatedAt === 'string') {
+        if (byId) return res.status(400).json({ ok:false, error:'ID pagination requires cursorBookingId' });
         const cursor = new Date(body.cursorCreatedAt);
         if (!Number.isFinite(cursor.getTime())) return res.status(400).json({ ok:false, error:'Invalid cursorCreatedAt' });
         q = q.startAfter(Timestamp.fromDate(cursor));
       }
       const snap = await q.limit(limit).get();
-      const scoped = filterToSessionBranches(session, snap.docs.map(d => ({ id:d.id, ...d.data() })));
+      const scoped = filterToSessionBranches(session, snap.docs.map(d => ({ ...d.data(), id:d.id })));
       const items = scoped.filter(d => testsOnly ? !isLiveBooking(d) : isLiveBooking(d))
         .map(d => projectAdminDoc(d.id, d, BOOKING_READ_FIELDS, { pii, slip }));
       const last = snap.docs.at(-1)?.data()?.createdAt?.toDate?.()?.toISOString?.() ?? null;
