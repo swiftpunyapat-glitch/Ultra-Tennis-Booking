@@ -1,0 +1,10 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // All slips (including legacy prefixes) are served by the authorized server.
+    // Admin SDK uses IAM and bypasses these client rules. No public exception.
+    match /{allPaths=**} {
+      allow get, list, create, update, delete: if false;
+    }
+  }
+}

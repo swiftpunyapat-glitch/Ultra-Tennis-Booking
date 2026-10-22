@@ -1023,10 +1023,10 @@
         <div class="tnote">💳 <span id="transferTextA">Transfer</span> <strong>฿<span id="payAmtText">350</span></strong> <span id="transferTextB">and upload slip below</span></div>
         <div class="sarea" id="slipArea" onclick="document.getElementById('slipIn').click()">
           <p id="slipAreaTxt">📎 <strong>Tap to upload payment slip</strong></p>
-          <p style="font-size:.7rem;margin-top:2px" data-i18n="fileHint">JPG, PNG · Max 5MB</p>
+          <p style="font-size:.7rem;margin-top:2px" data-i18n="fileHint">JPG, PNG, WebP · Max 2MB</p>
           <img id="slipPrev" class="spreview" style="display:none" alt="Slip preview"/>
         </div>
-        <input type="file" id="slipIn" accept="image/*" style="display:none"/>
+        <input type="file" id="slipIn" accept="image/jpeg,image/png,image/webp" style="display:none"/>
         <button class="btn-slip" id="submitSlipBtn" disabled data-i18n="submitSlip">Submit Payment Slip</button>
         <button class="btn-cancel-booking" id="cancelBookingBtn" type="button" data-i18n="cancelBooking">Cancel Booking</button>
       </div>
@@ -1183,9 +1183,6 @@ import {
   disableNetwork, enableNetwork
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
 import {
-  getStorage, ref as sRef, uploadBytes, getDownloadURL
-} from "https://www.gstatic.com/firebasejs/12.13.0/firebase-storage.js";
-import {
   getAuth, signInWithCustomToken, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
 
@@ -1201,7 +1198,6 @@ const firebaseConfig = {
 };
 const fbApp  = initializeApp(firebaseConfig);
 const db     = getFirestore(fbApp);
-const storage= getStorage(fbApp);
 const fbAuth = getAuth(fbApp);
 isSupported().then(ok=>{ if(ok) getAnalytics(fbApp); }).catch(()=>{});
 
@@ -1551,7 +1547,7 @@ const I18N = {
     transferA:"โอนเงินจำนวน",
     transferB:"บาท แล้วอัปโหลดสลิปด้านล่าง",
     tapUpload:"แตะเพื่ออัปโหลดสลิป",
-    fileHint:"JPG, PNG · ขนาดไม่เกิน 5MB",
+    fileHint:"JPG, PNG, WebP · ขนาดไม่เกิน 2MB",
     submitSlip:"ส่งสลิปชำระเงิน",
     uploading:"กำลังอัปโหลด...",
     done:"สำเร็จแล้ว",
@@ -1575,7 +1571,7 @@ const I18N = {
     passNoteOffpeak:"หัก 1 ครั้งจาก Off-Peak Pass",
     selectFile:"กรุณาเลือกไฟล์",
     imageOnly:"กรุณาอัปโหลดรูปภาพ (JPG, PNG)",
-    fileTooLarge:"ไฟล์ใหญ่เกินไป สูงสุด 5MB",
+    fileTooLarge:"ไฟล์ใหญ่เกินไป สูงสุด 2MB (JPG, PNG, WebP)",
     uploadTimeout:"อัปโหลดใช้เวลานานเกินไป กรุณาตรวจสอบการเชื่อมต่อ",
     nameRequired:"กรุณากรอกชื่อ",
     phoneRequired:"กรุณากรอกเบอร์โทร",
@@ -1705,7 +1701,7 @@ const I18N = {
     transferA:"Transfer",
     transferB:"and upload slip below",
     tapUpload:"Tap to upload payment slip",
-    fileHint:"JPG, PNG · Max 5MB",
+    fileHint:"JPG, PNG, WebP · Max 2MB",
     submitSlip:"Submit Payment Slip",
     uploading:"Uploading...",
     done:"Done!",
@@ -1729,7 +1725,7 @@ const I18N = {
     passNoteOffpeak:"1 session deducted from Off-Peak Pass",
     selectFile:"Please select a file",
     imageOnly:"Please upload an image (JPG, PNG)",
-    fileTooLarge:"File too large. Max 5MB.",
+    fileTooLarge:"File too large. Max 2MB (JPG, PNG, WebP).",
     uploadTimeout:"Upload timed out. Check connection.",
     nameRequired:"Name is required",
     phoneRequired:"Phone is required",
@@ -3839,7 +3835,7 @@ async function runSlipPrecheckPass(file,purchaseId,purchaseCode,pd){
     const [clientSlipHash,clientQrPayload]=await Promise.all([hashFileSha256(file),decodeSlipQr(file)]);
     const res=await fetch("/api/slip-verify",{
       method:"POST",headers:{"Content-Type":"application/json"},keepalive:true,
-      body:JSON.stringify({targetType:"pass_purchase",purchaseId,purchaseCode,clientSlipHash,clientQrPayload})
+      body:JSON.stringify({targetType:"pass_purchase",purchaseId,purchaseCode,clientSlipHash,clientQrPayload,idToken:await protectedIdToken()})
     });
     const d=await res.json().catch(()=>null);
     if(!res.ok||!d||!d.ok) throw new Error((d&&d.error)||`HTTP ${res.status}`);
@@ -3860,7 +3856,7 @@ async function runSlipPrecheck(file,bookingDocId,bookingCode,bd){
     const [clientSlipHash,clientQrPayload]=await Promise.all([hashFileSha256(file),decodeSlipQr(file)]);
     const res=await fetch("/api/slip-verify",{
       method:"POST",headers:{"Content-Type":"application/json"},keepalive:true,
-      body:JSON.stringify({bookingId:bookingDocId,bookingCode,clientSlipHash,clientQrPayload})
+      body:JSON.stringify({bookingId:bookingDocId,bookingCode,clientSlipHash,clientQrPayload,idToken:state.lineProfile.userId==="guest"?undefined:await protectedIdToken(),guestToken:state.currentGuestToken||undefined})
     });
     const d=await res.json().catch(()=>null);
     if(!res.ok||!d||!d.ok) throw new Error((d&&d.error)||`HTTP ${res.status}`);
@@ -3874,8 +3870,8 @@ async function runSlipPrecheck(file,bookingDocId,bookingCode,bd){
 async function submitSlipState({isPass,url}){
   const idToken=state.lineProfile.userId==="guest"?null:await protectedIdToken();
   const payload=isPass
-    ? {action:"submit_pass_slip",purchaseId:state.currentPurchaseDocId,slipUrl:url,idToken:idToken||undefined,idempotencyKey:`slip-${crypto.randomUUID()}`}
-    : {action:"submit_slip",bookingId:state.currentBookingDocId,bookingCode:state.currentBookingCode,slipUrl:url,idToken:idToken||undefined,guestToken:state.currentGuestToken||undefined,idempotencyKey:`slip-${crypto.randomUUID()}`};
+    ? {action:"submit_pass_slip",targetType:"pass_purchase",purchaseId:state.currentPurchaseDocId,slipUrl:url,idToken:idToken||undefined,idempotencyKey:`submit-${state.slipUploadIdempotency}`}
+    : {action:"submit_slip",bookingId:state.currentBookingDocId,bookingCode:state.currentBookingCode,slipUrl:url,idToken:idToken||undefined,guestToken:state.currentGuestToken||undefined,idempotencyKey:`submit-${state.slipUploadIdempotency}`};
   const res=await fetch("/api/slip-verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
   const d=await res.json().catch(()=>({}));
   if(!res.ok||!d.ok) throw new Error(d.error||"Slip submission failed");
@@ -3886,8 +3882,8 @@ async function submitSlipState({isPass,url}){
 $("submitSlipBtn").addEventListener("click", async()=>{
   const file=$("slipIn").files[0];
   if(!file){ showToast(t("selectFile"),true); return; }
-  if(!file.type.startsWith("image/")){ showToast(t("imageOnly"),true); return; }
-  if(file.size>5*1024*1024){ showToast(t("fileTooLarge"),true); return; }
+  if(!["image/jpeg","image/png","image/webp"].includes(file.type)){ showToast(t("imageOnly"),true); return; }
+  if(file.size>2*1024*1024){ showToast(t("fileTooLarge"),true); return; }
 
   const btn=$("submitSlipBtn"); btn.disabled=true; btn.textContent=t("uploading");
   
@@ -3900,16 +3896,18 @@ $("submitSlipBtn").addEventListener("click", async()=>{
     const ts=Date.now();
     const isPass=state.paymentMode==="pass";
     const code=isPass?state.currentPurchaseCode:state.currentBookingCode;
-    const folder=isPass?"pass_slips":"payment_slips";
-    const path=`${folder}/${code}/${ts}_${file.name}`;
-    console.log("Starting slip upload", path);
-
-    const ref=sRef(storage,path);
-    await uploadBytes(ref,file);
-    console.log("Upload complete");
-
-    const url=await getDownloadURL(ref);
-    console.log("Download URL received");
+    // Retry key survives transient failures for this file/target during this page session.
+    const uploadKey = `${isPass}:${code}:${file.name}:${file.size}:${file.lastModified}`;
+    if(state.slipUploadKey!==uploadKey){ state.slipUploadKey=uploadKey; state.slipUploadIdempotency=`upload-${crypto.randomUUID()}`; }
+    const dataUrl=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file);});
+    const uploadPayload={action:"upload_slip",targetType:isPass?"pass_purchase":"booking",
+      bookingId:isPass?undefined:state.currentBookingDocId,purchaseId:isPass?state.currentPurchaseDocId:undefined,
+      idToken:state.lineProfile.userId==="guest"?undefined:await protectedIdToken(),guestToken:state.currentGuestToken||undefined,
+      contentType:file.type,fileBase64:String(dataUrl).split(",")[1],idempotencyKey:state.slipUploadIdempotency};
+    const uploadRes=await fetch("/api/slip-verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(uploadPayload)});
+    const uploaded=await uploadRes.json().catch(()=>({}));
+    if(!uploadRes.ok||!uploaded.ok) throw new Error(uploaded.error||"อัปโหลดไม่ได้ กรุณาติดต่อแอดมินผ่านช่องทางเดิมของสตูดิโอ");
+    const url=uploaded.slipReceipt;
     await submitSlipState({isPass,url});
 
     if(isPass){
@@ -4120,6 +4118,22 @@ function myBookingsSectionError(){
   </div>`;
 }
 
+document.addEventListener("click",async event=>{
+  const button=event.target.closest("[data-customer-slip]");if(!button) return;
+  button.disabled=true;
+  try{
+    const type=button.dataset.slipType;
+    const response=await fetch("/api/slip-verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"read_slip",targetType:type,
+      bookingId:type==="booking"?button.dataset.customerSlip:undefined,purchaseId:type==="pass_purchase"?button.dataset.customerSlip:undefined,
+      idToken:state.lineProfile.userId==="guest"?undefined:await protectedIdToken(),guestToken:state.currentGuestToken||undefined})});
+    if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.error||"เปิดสลิปไม่ได้ กรุณาติดต่อแอดมิน");}
+    const url=URL.createObjectURL(await response.blob());const dialog=document.createElement("dialog");const image=document.createElement("img");
+    image.src=url;image.alt="สลิปของฉัน";image.style.cssText="max-width:100%;max-height:75vh";
+    const close=document.createElement("button");close.textContent="ปิด";close.onclick=()=>dialog.close();dialog.append(image,close);
+    dialog.addEventListener("close",()=>{URL.revokeObjectURL(url);dialog.remove();},{once:true});document.body.append(dialog);dialog.showModal();
+  }catch(error){showToast(error.message,true);}finally{button.disabled=false;}
+});
+
 function renderMyBookings(bookings, packages, purchases) {
   // null = that section's query failed (see loadMySection); [] = loaded, empty.
   const bookingsFailed  = bookings  === null;
@@ -4156,6 +4170,7 @@ function renderMyBookings(bookings, packages, purchases) {
           ${p.status==="pending_review"?`<span style="color:var(--brand-dark)">⏳ ${t("pendingReview")}</span>`:`<span style="color:var(--warning)">💳 ${t("paymentRequiredShort")}</span>`}
         </div>
         ${p.status==="pending_payment"?`<button class="btn-rpay" style="margin-top:9px;width:100%" onclick="resumePassPayment('${esc(p.id)}')">${t("completePayment")}</button>`:""}
+        ${p.slipUrl?`<button type="button" data-customer-slip="${esc(p.id)}" data-slip-type="pass_purchase">เปิดสลิปของฉัน</button>`:""}
       </div>`;
     });
   }
@@ -4185,6 +4200,7 @@ function renderMyBookings(bookings, packages, purchases) {
           <span class="sp s-${esc(b.bookingStatus)}">${isPendingMove?(currentLang==='th'?'รอเลือกวันใหม่':'Pending reschedule'):esc(displayStatus(b.bookingStatus))}</span>
           ${isPendPay?`<button class="btn-rpay" onclick="resumeBookingPayment('${esc(b.id)}')">${t("completePayment")}</button>`:""}
           ${isPendRev?`<span style="font-size:.72rem;color:#1e40af">⏳ ${t("pendingReview")}</span>`:""}
+          ${b.slipUrl||b.hasSlip?`<button type="button" data-customer-slip="${esc(b.id)}" data-slip-type="booking">เปิดสลิปของฉัน</button>`:""}
           ${(isPaid&&!isPendRev&&!isPendingMove)?`<span style="font-size:.72rem;color:var(--brand-dark)">✅ ${t("confirmed")}</span>`:""}
         </div>
       </div>`;
