@@ -1,0 +1,43 @@
+Rendered excerpt only. Active version: Aug 5, 2026, 6:42 PM (console). Rechecked 22 Oct 2026. No edits.
+
+        isOptStr(request.resource.data.get("lineDisplayName", null), 200) &&
+        isOptStr(request.resource.data.get("pictureUrl", null), 500) &&
+        isStr(request.resource.data.name, 120) &&
+        isStr(request.resource.data.phone, 40) &&
+        isOptStr(request.resource.data.get("phoneNormalized", null), 40) &&
+        isOptStr(request.resource.data.get("source", null), 80);
+    }
+
+
+    // ───────── system_settings ──────────────────────────────────────
+    // Unchanged. Only the pricing document is public; features and
+    // notification_flags stay closed (api/booking.js:287 exists precisely
+    // because of this, and that behaviour must not change).
+    match /system_settings/{settingId} {
+      allow read: if settingId == "pricing";
+      allow write: if false;
+    }
+
+
+    // ───────── admin_users / users (reserved) ───────────────────────
+    match /admin_users/{uid} {
+      allow read, write: if false;
+    }
+    match /users/{uid} {
+      allow read, write: if false;
+    }
+
+
+    // ───────── catch-all deny ───────────────────────────────────────
+    // RETAINED. Covers every server-only collection:
+    //   vouchers, slip_registry, audit_logs, coaches, coach_availability,
+    //   branches, incidents, ratings, finance_expenses,
+    //   finance_income_manual, finance_documents,
+    //   finance_document_counters, notification_logs, admin_notify_users,
+    //   coach_auth, auth_metrics
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
