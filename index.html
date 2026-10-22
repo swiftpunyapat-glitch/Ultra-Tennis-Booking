@@ -3781,7 +3781,7 @@ $("downloadQrBtn").addEventListener("click",()=>{
 // Slip file change
 $("slipIn").addEventListener("change",()=>{
   const f=$("slipIn").files[0]; if(!f) return;
-  $("slipAreaTxt").innerHTML=`📎 <strong>${f.name}</strong>`;
+  $("slipAreaTxt").textContent=`📎 ${f.name}`;
   $("slipArea").classList.add("has");
   $("slipPrev").src=URL.createObjectURL(f); $("slipPrev").style.display="block";
   $("submitSlipBtn").disabled=false;
