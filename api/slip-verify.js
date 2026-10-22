@@ -525,6 +525,7 @@ export default async function handler(req, res) {
     if (body.action === 'read_slip') return await servePrivateSlip(req, res, body, securityDb);
     if (body.action === 'upload_slip') {
       if (process.env.SLIP_UPLOADS_DISABLED === 'true') return res.status(503).json({ ok: false, code: 'SLIP_MAINTENANCE', error: 'รับสลิปผ่านแอดมินชั่วคราว กรุณาติดต่อช่องทางเดิมของสตูดิโอ' });
+      if (!(await serverSlipSubmitEnabled(securityDb))) return res.status(503).json({ ok: false, code: 'SLIP_NOT_READY', error: 'รับสลิปผ่านแอดมินชั่วคราว กรุณาติดต่อช่องทางเดิมของสตูดิโอ' });
       return res.status(200).json(await uploadPrivateSlip(req, body, securityDb));
     }
     // Protect verification too: codes alone previously permitted registry writes / notifications.
