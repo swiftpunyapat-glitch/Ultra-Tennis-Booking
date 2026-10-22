@@ -40,8 +40,9 @@
 // ════════════════════════════════════════════════════════════════════
 
 import crypto from 'node:crypto';
+import { uploadPrivateSlip, servePrivateSlip, slipError, authorizeSlipTarget, readReceiptInTransaction, readStoredSlip, assertUploadState, runSlipTransaction } from './_lib/slip-storage.mjs';
 import {
-  getAdminDb, getAdminBucket, writeAuditLog, getAdminAuth,
+  getAdminDb, writeAuditLog, getAdminAuth,
   verifyGuestToken, checkRateLimit, readRateLimitGate, RATE_LIMITS, clientIp,
   idempotencyRef, fingerprintOf, readIdempotencyInTx, writeIdempotencyInTx,
   GUEST_BOOKING_ID_MAX_LENGTH, GUEST_TOKEN_MAX_LENGTH, isValidIdempotencyKey,
@@ -52,12 +53,6 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { isCoachAddonV2Booking } from './_lib/coach-addon-v2.js';
 import { releaseCoachAddonV2Hold } from './_lib/coach-addon-v2-store.js';
 
-const MAX_SLIP_BYTES   = 6 * 1024 * 1024;             // client caps at 5MB; headroom
-const ALLOWED_BUCKETS  = [
-  'ultra-tennis-booking.firebasestorage.app',
-  'ultra-tennis-booking.appspot.com',
-];
-const ALLOWED_PATH_RE  = /^(payment_slips|pass_slips)\//;
 const SHA256_RE        = /^[a-f0-9]{64}$/i;
 const MAX_DOCUMENT_ID_LENGTH = 128;
 const MAX_BOOKING_CODE_LENGTH = 128;
@@ -77,22 +72,6 @@ const REASON_TH = {
 function parseBody(req) {
   if (req.body && typeof req.body === 'object') return req.body;
   try { return JSON.parse(req.body); } catch { return null; }
-}
-
-// Firebase Storage download URL →  { bucket, path } (or null if not ours).
-// Format: https://firebasestorage.googleapis.com/v0/b/<bucket>/o/<encodedPath>?...
-function parseStorageUrl(url) {
-  try {
-    const u = new URL(url);
-    if (u.hostname !== 'firebasestorage.googleapis.com') return null;
-    const m = u.pathname.match(/^\/v0\/b\/([^/]+)\/o\/(.+)$/);
-    if (!m) return null;
-    const bucket = m[1];
-    const path = decodeURIComponent(m[2]);
-    if (!ALLOWED_BUCKETS.includes(bucket)) return null;
-    if (!ALLOWED_PATH_RE.test(path)) return null;
-    return { bucket, path };
-  } catch { return null; }
 }
 
 // Best-effort transRef extraction from a client-decoded slip mini-QR.
@@ -125,19 +104,13 @@ function extractTransRef(rawPayload) {
 
 // Download the slip via the Admin SDK and hash it. Never throws —
 // returns { hash } or { error }.
-async function computeServerSlipHash(slipUrl) {
-  const loc = parseStorageUrl(slipUrl);
-  if (!loc) return { error: 'slipUrl is not a recognized storage URL' };
+async function computeServerSlipHash(db, record, type, id) {
   try {
-    const file = getAdminBucket(loc.bucket).file(loc.path);
-    const [meta] = await file.getMetadata();
-    const size = Number(meta.size) || 0;
-    if (size <= 0 || size > MAX_SLIP_BYTES) return { error: `slip file size out of range (${size})` };
-    const [buf] = await file.download();
-    return { hash: crypto.createHash('sha256').update(buf).digest('hex') };
-  } catch (e) {
-    return { error: `storage fetch failed: ${e.message}` };
-  }
+    const { bytes, sourceSha256 } = await readStoredSlip(db, record, type, id);
+    // The original-byte hash was computed by the trusted uploader. Keep it
+    // compatible with legacy registry entries while checking stored-image integrity.
+    return { hash: sourceSha256 || crypto.createHash('sha256').update(bytes).digest('hex') };
+  } catch { return { error: 'private storage read failed' }; }
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -178,7 +151,7 @@ async function authorizeSlipCaller(req, db, { bookingId, ownerLineUserId, idToke
   // not silently degrade into a weaker check.
   if (idToken) {
     let uid = null;
-    try { uid = (await getAdminAuth().verifyIdToken(idToken)).uid; }
+    try { uid = (await getAdminAuth().verifyIdToken(idToken, true)).uid; }
     catch { return { ok: false, status: 401, error: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่' }; }
     if (uid && uid === ownerLineUserId) return { ok: true, actor: uid, actorRole: 'customer' };
     return { ok: false, status: 403, error: 'บัญชีไม่ตรงกับการจอง' };
@@ -205,16 +178,8 @@ async function authorizeSlipCaller(req, db, { bookingId, ownerLineUserId, idToke
   return { ok: false, status: 403, error: 'ยืนยันตัวตนไม่ผ่าน' };
 }
 
-// Accepts a storage URL only if it points at our own bucket, reusing the
-// parser the hashing path already relies on. Prevents a caller from
-// pointing slipUrl at an arbitrary external host.
-function isOwnStorageUrl(url) {
-  return !!parseStorageUrl(url);
-}
-
-// The slot ids a booking holds. Server-created bookings record them
-// explicitly; older ones are reconstructed from date + start + duration the
-// same way the booking route derives them.
+// Preserve the existing private slot-claim checks. External URL submissions
+// are disabled; submission consumes a server-created receipt in this transaction.
 function bookingSlotIdsOf(b) {
   if (Array.isArray(b.bookingSlotIds) && b.bookingSlotIds.length) return b.bookingSlotIds;
   if (!b.date || !b.startTime) return [];
@@ -252,8 +217,8 @@ async function handleSubmitBookingSlip(req, res, body, db) {
 
   if (!bookingId)   return res.status(400).json({ ok: false, error: 'Missing bookingId' });
   if (!bookingCode) return res.status(400).json({ ok: false, error: 'Missing bookingCode' });
-  if (!slipUrl || !isOwnStorageUrl(slipUrl)) {
-    return res.status(400).json({ ok: false, error: 'slipUrl must be a Firebase Storage URL for this project' });
+  if (!/^private:[a-f0-9]{64}$/.test(slipUrl)) {
+    return res.status(400).json({ ok: false, error: 'Refresh the page and upload through the private slip endpoint' });
   }
   if (!isValidIdempotencyKey(idemKey)) return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey has invalid format or length' });
 
@@ -309,15 +274,20 @@ async function handleSubmitBookingSlip(req, res, body, db) {
   let replayed = null;
 
   try {
-    await db.runTransaction(async (t) => {
+    await runSlipTransaction(db, async (t) => {
       const idem = await readIdempotencyInTx(t, idemRef, idemFp);
       if (idem.state === 'conflict') throw new Error('IDEMPOTENCY_CONFLICT');
       if (idem.state === 'replay')  { replayed = idem.response; return; }
+
+      const receipt = await readReceiptInTransaction(t, db, slipUrl, 'booking', bookingId, auth.actorRole === 'guest' ? `guest:${bookingId}` : auth.actor);
 
       // 2. Booking state.
       const snap = await t.get(bookingRef);
       if (!snap.exists) throw new Error('GONE');
       const b = snap.data();
+      if (auth.actorRole !== 'guest' && b.lineUserId !== auth.actor) throw Object.assign(new Error('Owner changed'), { status: 403, code: 'SLIP_OWNER' });
+      if (auth.actorRole === 'guest' && b.lineUserId && b.lineUserId !== 'guest') throw Object.assign(new Error('Owner changed'), { status: 403, code: 'SLIP_OWNER' });
+      if (!isCoachAddonV2Booking(b)) assertUploadState(b, 'booking');
       if (b.paymentStatus === 'paid' || b.paymentStatus === 'package') throw new Error('ALREADY_SETTLED');
       if (b.bookingStatus === 'cancelled') throw new Error('CANCELLED');
       if (b.paymentStatus !== 'unpaid' && b.paymentStatus !== 'pending_review') throw new Error('BAD_STATE');
@@ -360,6 +330,7 @@ async function handleSubmitBookingSlip(req, res, body, db) {
 
       // 4. pending_review is an occupied pre-confirmation state. Only admin
       // approval promotes it to confirmed.
+      t.update(receipt.ref, { state: 'consumed', consumedAt: FieldValue.serverTimestamp() });
       t.update(bookingRef, {
         bookingStatus:  'pending_review',
         paymentStatus:  'pending_review',
@@ -394,6 +365,7 @@ async function handleSubmitBookingSlip(req, res, body, db) {
       writeIdempotencyInTx(t, idemRef, { scope: idemScope, fingerprint: idemFp, response });
     });
   } catch (e) {
+    if (e.status) return slipError(res, e);
     if (e.message === 'HOLD_EXPIRED') {
       await releaseCoachAddonV2Hold(db, bookingId, {
         reason: 'slip_submitted_after_expiry', actor: auth.actor, requireExpired: true,
@@ -449,14 +421,14 @@ async function handleSubmitPassSlip(req, res, body, db) {
   const idemKey    = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : '';
 
   if (!purchaseId) return res.status(400).json({ ok: false, error: 'Missing purchaseId' });
-  if (!slipUrl || !isOwnStorageUrl(slipUrl)) {
-    return res.status(400).json({ ok: false, error: 'slipUrl must be a Firebase Storage URL for this project' });
+  if (!/^private:[a-f0-9]{64}$/.test(slipUrl)) {
+    return res.status(400).json({ ok: false, error: 'Refresh the page and upload through the private slip endpoint' });
   }
   if (!isValidIdempotencyKey(idemKey)) return res.status(400).json({ ok: false, code: 'IDEMPOTENCY', error: 'idempotencyKey has invalid format or length' });
 
   // Passes are a LINE-only product (Addendum 02 sec 9.4) — no guest path.
   let uid = null;
-  try { if (idToken) uid = (await getAdminAuth().verifyIdToken(idToken)).uid; }
+  try { if (idToken) uid = (await getAdminAuth().verifyIdToken(idToken, true)).uid; }
   catch { /* fall through */ }
   if (!uid) return res.status(403).json({ ok: false, code: 'AUTH', error: 'กรุณาเข้าสู่ระบบผ่าน LINE' });
 
@@ -480,16 +452,20 @@ async function handleSubmitPassSlip(req, res, body, db) {
   let replayed   = null;
 
   try {
-    await db.runTransaction(async (t) => {
+    await runSlipTransaction(db, async (t) => {
       const idem = await readIdempotencyInTx(t, idemRef, idemFp);
       if (idem.state === 'conflict') throw new Error('IDEMPOTENCY_CONFLICT');
       if (idem.state === 'replay')  { replayed = idem.response; return; }
 
+      const receipt = await readReceiptInTransaction(t, db, slipUrl, 'pass_purchase', purchaseId, uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('GONE');
       const p = snap.data();
+      if (p.lineUserId !== uid) throw Object.assign(new Error('Owner changed'), { status: 403, code: 'SLIP_OWNER' });
+      assertUploadState(p, 'pass_purchase');
       if (p.issuedPackageId || p.paymentStatus === 'paid') throw new Error('ALREADY_SETTLED');
       if (p.status === 'rejected' || p.paymentStatus === 'rejected') throw new Error('REJECTED');
+      t.update(receipt.ref, { state: 'consumed', consumedAt: FieldValue.serverTimestamp() });
       t.update(ref, {
         status: 'pending_review', paymentStatus: 'pending_review',
         slipUrl, slipUploadedAt: FieldValue.serverTimestamp(),
@@ -500,6 +476,7 @@ async function handleSubmitPassSlip(req, res, body, db) {
       writeIdempotencyInTx(t, idemRef, { scope: idemScope, fingerprint: idemFp, response });
     });
   } catch (e) {
+    if (e.status) return slipError(res, e);
     if (e.message === 'IDEMPOTENCY_CONFLICT') {
       return res.status(409).json({ ok: false, code: 'IDEMPOTENCY_CONFLICT', error: 'idempotencyKey ถูกใช้กับคำขออื่นแล้ว' });
     }
@@ -529,6 +506,30 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' });
   const body = parseBody(req);
   if (!body) return res.status(400).json({ ok: false, error: 'Invalid request body' });
+
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('Pragma', 'no-cache');
+  // JSON-only POST plus same-origin enforcement prevents cookie CSRF. Tokens never enter URLs.
+  if (!(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) {
+    return res.status(415).json({ ok: false, code: 'SLIP_JSON_REQUIRED' });
+  }
+  if (req.headers.origin) {
+    let sameOrigin = false;
+    try { sameOrigin = new URL(req.headers.origin).host === req.headers.host; } catch {}
+    if (!sameOrigin) return res.status(403).json({ ok: false, code: 'SLIP_ORIGIN' });
+  }
+  if (req.headers['sec-fetch-site'] === 'cross-site') return res.status(403).json({ ok: false, code: 'SLIP_ORIGIN' });
+  let securityDb;
+  try {
+    securityDb = getAdminDb();
+    if (body.action === 'read_slip') return await servePrivateSlip(req, res, body, securityDb);
+    if (body.action === 'upload_slip') {
+      if (process.env.SLIP_UPLOADS_DISABLED === 'true') return res.status(503).json({ ok: false, code: 'SLIP_MAINTENANCE', error: 'รับสลิปผ่านแอดมินชั่วคราว กรุณาติดต่อช่องทางเดิมของสตูดิโอ' });
+      return res.status(200).json(await uploadPrivateSlip(req, body, securityDb));
+    }
+    // Protect verification too: codes alone previously permitted registry writes / notifications.
+    await authorizeSlipTarget(req, body, securityDb, 'verify');
+  } catch (error) { return slipError(res, error); }
 
   // ── Security Hotfix 2026-08-04: server-side slip submission ────────
   // Moves the protected mutation from the browser to this fail-closed action.
@@ -601,12 +602,12 @@ export default async function handler(req, res) {
 
   // ── Idempotency / cost guard: same slipUrl already checked → return it ──
   const prevPv = booking.paymentVerification;
-  if (prevPv && prevPv.slipUrlChecked === slipUrl && prevPv.status && prevPv.status !== 'checking') {
+  if (prevPv && prevPv.slipUrlChecked === (slipUrl.startsWith('private:') ? slipUrl : crypto.createHash('sha256').update(slipUrl).digest('hex')) && prevPv.status && prevPv.status !== 'checking') {
     return res.status(200).json({ ok: true, verification: { status: prevPv.status, reason: prevPv.reason ?? null }, cached: true });
   }
 
   // ── Server-side hash (authoritative) ──────────────────────────────
-  const hashResult = await computeServerSlipHash(slipUrl);
+  const hashResult = await computeServerSlipHash(db, booking, 'booking', bookingId);
   const serverHash = hashResult.hash || null;
   if (!serverHash) console.warn(`[slip-verify] ${bookingCode} server hash unavailable: ${hashResult.error}`);
 
@@ -634,14 +635,14 @@ export default async function handler(req, res) {
   const hashRegRef = serverHash ? db.collection('slip_registry').doc(`hash_${serverHash}`) : null;
   let outcome; // { status, reason, dupOfBookingCode }
   try {
-    outcome = await db.runTransaction(async (t) => {
+    outcome = await runSlipTransaction(db, async (t) => {
       const bSnap = await t.get(bookingRef);
       const hSnap = hashRegRef ? await t.get(hashRegRef) : null;
       if (!bSnap.exists) throw new Error('GONE');
       const bNow = bSnap.data();
       // Paid/cancelled must never accept a verification update.
       if (bNow.bookingStatus === 'cancelled') throw new Error('CANCELLED');
-      if (bNow.paymentStatus !== 'pending_review') throw new Error('BAD_STATE');
+      if (bNow.paymentStatus !== 'pending_review' || bNow.slipUrl !== slipUrl) throw new Error('BAD_STATE');
 
       let status = 'not_checked', reason = 'server_fetch_failed', dupOfBookingCode = null;
       if (serverHash && hSnap && hSnap.exists && hSnap.data().bookingId !== bookingId) {
@@ -683,7 +684,7 @@ export default async function handler(req, res) {
           slipHash: serverHash,
           slipHashSource: serverHash ? 'server' : null,
           clientSlipHash,                     // helper data only
-          slipUrlChecked: slipUrl,
+          slipUrlChecked: slipUrl.startsWith('private:') ? slipUrl : crypto.createHash('sha256').update(slipUrl).digest('hex'),
           engine: 'slip-verify-1a',
         },
       });
@@ -798,11 +799,11 @@ async function handlePassSlipVerify(res, body) {
   if (!slipUrl) return res.status(409).json({ ok: false, error: 'Purchase has no slipUrl' });
 
   const prevPv = purchase.paymentVerification;
-  if (prevPv && prevPv.slipUrlChecked === slipUrl && prevPv.status && prevPv.status !== 'checking') {
+  if (prevPv && prevPv.slipUrlChecked === (slipUrl.startsWith('private:') ? slipUrl : crypto.createHash('sha256').update(slipUrl).digest('hex')) && prevPv.status && prevPv.status !== 'checking') {
     return res.status(200).json({ ok: true, verification: { status: prevPv.status, reason: prevPv.reason ?? null }, cached: true });
   }
 
-  const hashResult = await computeServerSlipHash(slipUrl);
+  const hashResult = await computeServerSlipHash(db, purchase, 'pass_purchase', purchaseId);
   const serverHash = hashResult.hash || null;
   if (!serverHash) console.warn(`[slip-verify pass] ${purchaseCode} server hash unavailable: ${hashResult.error}`);
 
@@ -825,12 +826,12 @@ async function handlePassSlipVerify(res, body) {
   const hashRegRef = serverHash ? db.collection('slip_registry').doc(`hash_${serverHash}`) : null;
   let outcome;
   try {
-    outcome = await db.runTransaction(async (t) => {
+    outcome = await runSlipTransaction(db, async (t) => {
       const pSnap = await t.get(purchaseRef);
       const hSnap = hashRegRef ? await t.get(hashRegRef) : null;
       if (!pSnap.exists) throw new Error('GONE');
       const pNow = pSnap.data();
-      if (pNow.paymentStatus !== 'pending_review' || pNow.issuedPackageId) throw new Error('BAD_STATE');
+      if (pNow.paymentStatus !== 'pending_review' || pNow.slipUrl !== slipUrl || pNow.issuedPackageId) throw new Error('BAD_STATE');
 
       let status = 'not_checked', reason = 'server_fetch_failed', dupOfCode = null;
       if (serverHash && hSnap && hSnap.exists) {
@@ -871,7 +872,7 @@ async function handlePassSlipVerify(res, body) {
           slipHash: serverHash,
           slipHashSource: serverHash ? 'server' : null,
           clientSlipHash,
-          slipUrlChecked: slipUrl,
+          slipUrlChecked: slipUrl.startsWith('private:') ? slipUrl : crypto.createHash('sha256').update(slipUrl).digest('hex'),
           engine: 'slip-verify-1a-pass',
         },
       });

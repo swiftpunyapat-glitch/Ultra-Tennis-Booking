@@ -320,7 +320,11 @@ function projectAdminDoc(id, data, fields, { pii, slip }) {
   const out = { id };
   for (const key of fields) {
     if (!pii && PII_FIELDS.has(key)) continue;
-    if (key === 'slipUrl' && !slip) continue;
+    if (key === 'slipUrl') { if (slip) out.hasSlip = !!data.slipUrl; continue; }
+    if (key === 'paymentVerification') {
+      if (slip && data[key]) { const { slipUrlChecked, ...safe } = data[key]; out[key] = serializeFsDoc({ value: safe }).value; }
+      continue;
+    }
     if (data[key] !== undefined) out[key] = serializeFsDoc({ value: data[key] }).value;
   }
   return out;
