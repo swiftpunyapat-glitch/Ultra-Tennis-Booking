@@ -570,7 +570,7 @@
     <div class="main" style="padding-bottom:6px">
       <div class="psum-section">
         <div class="psum-hdr">
-          <h2>📋 Paid Summary / ยืนยันชำระแล้ว</h2>
+          <h2>📋 Paid Summary / ตามวันรับเงิน (paidAt)</h2>
           <div class="psum-controls">
             <input type="date" id="paidSummaryDate" style="background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--t);padding:5px 9px;font-size:.78rem"/>
             <button class="rfbtn" id="paidSummaryToday">Today</button>
@@ -1359,6 +1359,7 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
+import { collectAdminBookingPages, paidSummary, paymentTime } from "./admin-booking-data.js";
 import { mountCommerceEditor } from "./commerce-admin.js";
 import { courtRequest, loadCourtSelector } from "./court-selector.js";
 
@@ -1514,17 +1515,12 @@ function reviveAdminValue(value){
 }
 async function adminRead(resource,options={}){
   if(resource==="bookings"){
-    const items=[];let cursor;const target=options.limit||500;
-    do{
-      const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"admin_read",resource,...options,...(cursor?{cursorBookingId:cursor}:{})})});
+    return (await collectAdminBookingPages(async pageOptions=>{
+      const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"admin_read",resource,...pageOptions})});
       const data=await res.json().catch(()=>({}));
       if(!res.ok||!data.ok)throw new Error(data.error||`HTTP ${res.status}`);
-      items.push(...(data.items||[]));
-      const next=data.nextCursorId;
-      if(!next||next===cursor)break;
-      cursor=next;
-    }while(items.length<target);
-    return items.slice(0,target).map(reviveAdminValue);
+      return data;
+    },options)).map(reviveAdminValue).sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)||String(a.id).localeCompare(String(b.id)));
   }
   const res=await courtFetch("/api/admin-ops",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"admin_read",resource,...options})});
   const data=await res.json().catch(()=>({}));
@@ -1995,7 +1991,7 @@ async function loadBookings(){
   $("bookingsList").innerHTML=`<div class="lstate"><div class="spinner"></div><p>Loading...</p></div>`;
   updateAdminQueueBadges("loading");
   try{
-    allBookings=await adminRead("bookings",{limit:500});
+    allBookings=await adminRead("bookings",{limit:500}); // complete cursor-paginated history, 500 per page
     updateStats();renderBookings();
     $("lastUpd").textContent=`Updated ${new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}`;
   }catch(e){console.error(e);updateAdminQueueBadges("error");$("bookingsList").innerHTML=`<div class="estate">❌ Failed to load. Check Firestore rules.</div>`;}
@@ -3175,9 +3171,8 @@ async function retrySyncGcal(b){
 // ─────────────────────────────────────────────────────────────────
 
 // ── PAID SUMMARY ─────────────────────────────────────────────────
-// Shows all bookings confirmed as paid on the selected date.
-// Date filter uses adminReviewedAt (set by markPaid → serverTimestamp).
-// Time display uses the browser's local timezone — admin is in Bangkok (UTC+7).
+// Same payment-date semantics as Finance: paidAt in Asia/Bangkok.
+// Missing paidAt is reported, never inferred from review/confirmation/play dates.
 
 // Return HH:MM in the browser's local timezone (Bangkok for admin use).
 function tsPaidTime(ts){
@@ -3193,14 +3188,10 @@ function renderPaidSummary(){
   const selDate=$("paidSummaryDate")?.value;
   if(!selDate){el.innerHTML=`<p class="psum-empty">Select a date.</p>`;return;}
 
-  // Filter: paid bookings whose adminReviewedAt falls on the selected local date.
-  // tsToDate() uses local time — matches what Bangkok admins see on their clocks.
-  const rows=allBookings
-    .filter(b=>b.paymentStatus==="paid"&&tsToDate(b.adminReviewedAt)===selDate)
-    .sort((a,b)=>(a.adminReviewedAt?.seconds||0)-(b.adminReviewedAt?.seconds||0));
-
+  const {rows,missingPaidAt}=paidSummary(allBookings,selDate,RESOURCE_ID);
+  const warning=missingPaidAt?`<p class="psum-empty">⚠ ${missingPaidAt} paid record(s) for this court have no valid paidAt and are excluded, as in Finance payment basis. Check their original payment evidence.</p>`:"";
   if(!rows.length){
-    el.innerHTML=`<p class="psum-empty">No paid bookings confirmed on this date.</p>`;
+    el.innerHTML=`<p class="psum-empty">No paidAt records for this date (Asia/Bangkok).</p>${warning}`;
     return;
   }
 
@@ -3210,13 +3201,14 @@ function renderPaidSummary(){
     return `<span class="psum-dim">— Not synced</span>`;
   };
 
-  el.innerHTML=rows.map(b=>{
+  el.innerHTML=warning+rows.map(b=>{
     const typeOrSrc=b.bookingType||b.source||"";
     return `<div class="psum-row">
       <span class="psum-name">${esc(b.customerName||"—")}</span>
-      <span class="psum-meta">· Paid ${esc(tsPaidTime(b.adminReviewedAt))}</span>
+      <span class="psum-meta">· Paid ${esc(paymentTime(b.paidAt))}</span>
       <span class="psum-meta">· Plays ${esc(b.date||"—")} ${esc(b.startTime||"—")}–${esc(b.endTime||"—")}</span>
       <span class="psum-code">${esc(b.bookingCode||"—")}</span>
+      <span class="psum-meta">· ${esc(bookingStatusDisplay(b))}${b.refundStatus?` · Refund: ${esc(b.refundStatus)} ฿${Number(b.refundAmount)||0}`:""}</span>
       ${typeOrSrc?`<span class="psum-meta">· ${esc(typeOrSrc)}</span>`:""}
       · ${syncLabel(b.googleCalendarSyncStatus)}
     </div>`;
