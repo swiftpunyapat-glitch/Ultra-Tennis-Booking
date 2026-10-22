@@ -4,5 +4,10 @@
       "source": "/api/admin_ops",
       "destination": "/api/admin-ops"
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "codex/booking-payment-date-pagination-20261022": false
+    }
+  }
 }
