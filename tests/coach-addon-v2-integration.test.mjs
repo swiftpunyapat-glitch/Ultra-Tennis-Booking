@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Timestamp, DocumentReference } from 'firebase-admin/firestore';
 import { traceTransactions } from './helpers/transaction-trace.mjs';
+import { privateSlipFixture } from './helpers/private-slip-fixture.mjs';
 
 const UID = 'U_COACH_ADDON_V2_TEST';
 const DATE = '2027-06-14';
@@ -29,7 +30,7 @@ beforeAll(async () => {
 });
 
 function request(body, admin = false) {
-  return { method: 'POST', body, headers: { 'x-forwarded-for': '198.51.100.44', ...(admin ? { cookie: adminCookie } : {}) }, socket: {} };
+  return { method: 'POST', body, headers: { 'content-type':'application/json', 'x-forwarded-for': '198.51.100.44', ...(admin ? { cookie: adminCookie } : {}) }, socket: {} };
 }
 function response() {
   const value = { statusCode: null, body: null, headers: {} };
@@ -579,7 +580,7 @@ describe('Coach Add-on v2 mixed payment lifecycle', () => {
     expect((await db.collection('coach_slot_claims').get()).size).toBe(2);
     const read = await call(bookingHandler, { action: 'guest_booking', bookingId, guestToken });
     expect(read.statusCode).toBe(200);
-    const submitted = await call(slipHandler, { action: 'submit_slip', bookingId, bookingCode: created.body.booking.bookingCode, guestToken, slipUrl: storageUrl('guest'), idempotencyKey: 'guest-slip' });
+    const submitted = await call(slipHandler, { action: 'submit_slip', bookingId, bookingCode: created.body.booking.bookingCode, guestToken, slipUrl: await privateSlipFixture(db,{id:bookingId,actor:`guest:${bookingId}`,key:'guest'}), idempotencyKey: 'guest-slip' });
     expect(submitted.statusCode).toBe(200);
     expect((await db.collection('bookings').doc(bookingId).get()).data().cashState).toBe('pending_review');
   });
@@ -713,7 +714,7 @@ describe('Coach Add-on v2 mixed payment lifecycle', () => {
     const bookingId = created.body.booking.id;
     const submitted = await call(slipHandler, {
       action: 'submit_slip', bookingId, bookingCode: created.body.booking.bookingCode,
-      idToken: 'stubbed', slipUrl: storageUrl('approved-late'), idempotencyKey: 'slip-approved-late',
+      idToken: 'stubbed', slipUrl: await privateSlipFixture(db,{id:bookingId,actor:UID,key:'approved-late'}), idempotencyKey: 'slip-approved-late',
     });
     expect(submitted.statusCode).toBe(200);
     await db.collection('bookings').doc(bookingId).update({ paymentExpiresAt: Timestamp.fromMillis(Date.now() - 1000) });

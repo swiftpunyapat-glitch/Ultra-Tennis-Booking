@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { privateSlipFixture } from './helpers/private-slip-fixture.mjs';
 
 const UID = 'U_OWNER_REVIEW_FLOW_USER';
 const DATE = '2027-04-12';
@@ -29,7 +30,7 @@ beforeAll(async () => {
 function req(body, { admin=false, ip=IP }={}) {
   return {
     method:'POST', body,
-    headers:{ 'x-forwarded-for':ip, ...(admin?{cookie:adminCookie}:{}) },
+    headers:{ 'content-type':'application/json', 'x-forwarded-for':ip, ...(admin?{cookie:adminCookie}:{}) },
     socket:{ remoteAddress:ip },
   };
 }
@@ -82,7 +83,7 @@ async function submitGuestSlip(created, suffix='one', opts) {
     action:'submit_slip', bookingId:created.body.booking.id,
     bookingCode:created.body.booking.bookingCode,
     guestToken:created.body.guestAccessToken,
-    slipUrl:storageUrl(suffix), idempotencyKey:`slip-${suffix}`,
+    slipUrl:await privateSlipFixture(db,{id:created.body.booking.id,actor:`guest:${created.body.booking.id}`,key:suffix}), idempotencyKey:`slip-${suffix}`,
   },opts);
 }
 
@@ -226,8 +227,8 @@ describe('OR-04 bounded guest rate-limit keys', () => {
     expect(slip.statusCode).toBe(200);
 
     const docs=await db.collection('rate_limits').get();
-    expect(docs.size).toBe(3);
-    expect(docs.docs.map(d=>d.data().bucket).sort()).toEqual(['guestMutation','guestMutation','guestRead']);
+    expect(docs.size).toBe(4);
+    expect(docs.docs.map(d=>d.data().bucket).sort()).toEqual(['guestMutation','guestMutation','guestRead','slipIp']);
   });
 
   test('oversized credentials fail before hashing or lookup', async () => {

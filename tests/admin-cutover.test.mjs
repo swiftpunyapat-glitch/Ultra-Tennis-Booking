@@ -147,7 +147,8 @@ describe('admin_read authentication, scope, limits, and projections',()=>{
     expect(manager.statusCode).toBe(200);
     expect(manager.body.items.every(x=>x.branchId==='ladprao1')).toBe(true);
     expect(manager.body.items[0]).toHaveProperty('customerName');
-    expect(manager.body.items[0]).toHaveProperty('slipUrl');
+    expect(manager.body.items[0]).toHaveProperty('hasSlip', true);
+    expect(manager.body.items[0]).not.toHaveProperty('slipUrl');
   });
 });
 
