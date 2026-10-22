@@ -2714,12 +2714,10 @@ function cardHTML(b){
     `<div><div class="fl">📋 Booked At</div><div class="fv dim" style="font-size:.76rem">${esc(createdStr)}</div></div>`+
     `<div><div class="fl" style="${paidLblColor}">💳 Paid / Confirmed At</div><div class="fv" style="font-size:.76rem">${esc(paidStr)}${paidByLine}</div></div>`+
     `</div>`;
-  // slipUrl comes from Firebase Storage getDownloadURL — escape for safety; only render if it begins with http(s).
-  const safeSlip=(typeof b.slipUrl==="string"&&/^https?:\/\//.test(b.slipUrl))?b.slipUrl:"";
-  const hasPaymentProof=!!safeSlip||!!b.paymentProofUrl||!!b.proofUrl||!!b.paymentSlipUrl;
+  const hasPaymentProof=!!getSlipUrl(b);
   const canConfirmNoSlip=!canMarkPaid&&!isConfirmed&&!isTerminal&&!isPaid&&!hasPaymentProof;
-  const slip=safeSlip
-    ?`<div class="slip-sec" style="margin-top:10px"><div class="slbl">Payment Slip${pvBadgeHTML(b)}</div><a href="${esc(safeSlip)}" target="_blank" rel="noopener noreferrer"><img class="simg" src="${esc(safeSlip)}" alt="Slip"/></a></div>`
+  const slip=hasPaymentProof
+    ?`<div class="slip-sec" style="margin-top:10px"><div class="slbl">Payment Slip${pvBadgeHTML(b)}</div>${privateSlipButton(b.id)}</div>`
     :`<div class="slip-sec" style="margin-top:10px"><div class="slbl">Payment Slip</div><p class="noslip">No slip yet</p></div>`;
 
   // Show paid badge separately + reschedule button even when paid
@@ -4043,9 +4041,7 @@ async function loadPendingPurchases(){
     box.innerHTML=items.map(p=>{
       const pv=p.paymentVerification;
       const pvBadge=pvBadgeHTML({paymentVerification:pv});
-      const slip=p.slipUrl
-        ?`<a href="${esc(p.slipUrl)}" target="_blank" rel="noopener noreferrer"><img src="${esc(p.slipUrl)}" alt="Slip" style="width:64px;height:64px;object-fit:cover;border-radius:7px;border:1px solid var(--bd)" loading="lazy"/></a>`
-        :`<span style="font-size:.7rem;color:var(--m)">no slip</span>`;
+      const slip=p.hasSlip ? privateSlipButton(p.id,"pass_purchase") : `<span>no slip</span>`;
       return `<div style="display:flex;align-items:center;gap:12px;background:var(--s1);border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin-bottom:6px">
         ${slip}
         <div style="flex:1;min-width:0">
@@ -5366,15 +5362,27 @@ $("alertSend").addEventListener("click",async()=>{
 // ── SLIP REVIEW ───────────────────────────────────────────────────
 let srMonthFilter=currentMonthValue(), srGroupBy="paid", srStatusFilter="all";
 
-// getSlipUrl — returns the first safe HTTPS slip URL found on a booking, or null.
-// Checks all known slip field names so legacy docs still work.
-function getSlipUrl(b){
-  for(const f of["slipUrl","paymentProofUrl","proofUrl","paymentSlipUrl"]){
-    const u=b[f];
-    if(typeof u==="string"&&/^https?:\/\//.test(u)) return u;
-  }
-  return null;
+// Presence only. Public download URLs are never rendered, including historical records.
+function getSlipUrl(b){ return b.hasSlip||b.slipUrl ? "available" : null; }
+function privateSlipButton(id,type="booking"){
+  return `<button type="button" class="sr-view" data-private-slip="${esc(id)}" data-slip-type="${esc(type)}">เปิดสลิป (ตรวจสิทธิ์)</button>`;
 }
+document.addEventListener("click",async event=>{
+  const button=event.target.closest("[data-private-slip]"); if(!button) return;
+  button.disabled=true;
+  try{
+    const type=button.dataset.slipType;
+    const response=await fetch("/api/slip-verify",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",
+      body:JSON.stringify({action:"read_slip",targetType:type,bookingId:type==="booking"?button.dataset.privateSlip:undefined,purchaseId:type==="pass_purchase"?button.dataset.privateSlip:undefined})});
+    if(!response.ok){ const data=await response.json().catch(()=>({}));throw new Error(data.error||"เปิดสลิปไม่ได้ กรุณาเข้าสู่ระบบใหม่"); }
+    const url=URL.createObjectURL(await response.blob());
+    const image=document.createElement("img"); image.src=url; image.alt="Payment slip"; image.style.cssText="max-width:100%;max-height:75vh;object-fit:contain";
+    const dialog=document.createElement("dialog"); const close=document.createElement("button");close.textContent="ปิดสลิป";
+    close.addEventListener("click",()=>dialog.close()); dialog.append(image,close);
+    dialog.addEventListener("close",()=>{URL.revokeObjectURL(url);dialog.remove();},{once:true});
+    document.body.append(dialog);dialog.showModal();
+  }catch(error){alert(error.message);}finally{button.disabled=false;}
+});
 
 // getSlipGroupDateStr — returns YYYY-MM-DD for the selected group mode, or null if missing.
 function getSlipGroupDateStr(b,mode){
@@ -5453,9 +5461,7 @@ function renderSlipItem(b){
   const isPaid=b.paymentStatus==="paid";
   const isRej=b.paymentStatus==="rejected"||b.bookingStatus==="cancelled";
   const pStatusColor=isPaid?"color:var(--g)":isRej?"color:var(--dan)":"color:var(--warn)";
-  const slipBlock=slipUrl
-    ?`<div style="flex-shrink:0;text-align:center"><a href="${esc(slipUrl)}" target="_blank" rel="noopener noreferrer"><img class="sr-thumb" src="${esc(slipUrl)}" alt="Slip" loading="lazy"/></a><a class="sr-view" href="${esc(slipUrl)}" target="_blank" rel="noopener noreferrer">View Slip ↗</a></div>`
-    :"";
+  const slipBlock=slipUrl ? `<div>${privateSlipButton(b.id)}</div>` : "";
   return `<div class="sr-item"><div class="sr-meta">`+
     `<div><div class="fl">Customer</div><div class="fv">${esc(b.customerName||"—")}</div></div>`+
     `<div><div class="fl">Phone</div><div class="fv">${esc(b.customerPhone||"—")}</div></div>`+

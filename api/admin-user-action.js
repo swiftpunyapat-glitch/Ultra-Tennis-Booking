@@ -500,7 +500,7 @@ async function handleListPendingPassPurchases({ res }) {
         customerName: p.customerName ?? '',
         customerPhone: p.customerPhone ?? '',
         lineUserId: p.lineUserId ?? null,
-        slipUrl: (typeof p.slipUrl === 'string' && /^https?:\/\//.test(p.slipUrl)) ? p.slipUrl : null,
+        hasSlip: !!p.slipUrl,
         slipUploadedAt: p.slipUploadedAt?.toMillis?.() ?? null,
         createdAt: p.createdAt?.toMillis?.() ?? null,
         paymentVerification: p.paymentVerification

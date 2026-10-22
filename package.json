@@ -5,10 +5,11 @@
   "type": "module",
   "description": "Ultra Tennis Booking — static frontend (index.html, admin.html) + Vercel functions in /api/ for LINE notifications.",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.9.0"
   },
   "dependencies": {
-    "firebase-admin": "^12.7.0"
+    "firebase-admin": "^12.7.0",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",

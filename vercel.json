@@ -1,4 +1,8 @@
 {
+  "git": { "deploymentEnabled": { "codex/payment-slip-security-20261022": false } },
+  "headers": [
+    { "source": "/api/slip-verify", "headers": [{ "key": "Cache-Control", "value": "private, no-store" }] }
+  ],
   "rewrites": [
     {
       "source": "/api/admin_ops",

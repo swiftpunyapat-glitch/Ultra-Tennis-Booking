@@ -1,0 +1,3 @@
+{
+  "storage": [{ "target": "payment-slips", "rules": "storage.rules" }]
+}

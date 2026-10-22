@@ -1,0 +1,70 @@
+rules_version = '2';
+
+
+// ════════════════════════════════════════════════════════════════════
+// Ultra Tennis Booking — Cloud Storage rules  (STABILIZING / NO-AUTH)
+// ════════════════════════════════════════════════════════════════════
+// Mirrors firestore.rules: locks down what the app actually does,
+// blocks everything else, leaves a roadmap for the auth migration.
+//
+// What this enforces today:
+//   • Slips must be images and < 5MB.
+//   • Slip objects are write-once: no update, no delete (admins can
+//     still moderate via Firestore status fields).
+//   • Reads stay public (admin needs to view from admin.html, which is
+//     unauthenticated for now).
+//   • Anything outside /payment_slips/ and /pass_slips/ is denied.
+//
+// What it does NOT enforce (same auth gap as Firestore):
+//   • That the uploader owns the bookingCode / purchaseCode path.
+//   • That a slip belongs to the LINE userId the booking is filed under.
+//
+// ─── ROADMAP — when auth-step-1 lands ───────────────────────────────
+//
+//   1. Require request.auth != null on every create.
+//   2. Pass the booking's lineUserId into the storage path
+//      (e.g. /payment_slips/{lineUserId}/{bookingCode}/{file}) and
+//      assert request.auth.uid matches the verified-binding doc in
+//      /users/{uid}.lineUserId via a Cloud Function-issued claim, or
+//      use a custom claim that pins the LINE userId.
+//   3. Drop the public read on slips — only the owner + admins should
+//      see them. Once admins have Firebase Auth, gate read on
+//      request.auth.token.admin == true || ownerMatches().
+// ════════════════════════════════════════════════════════════════════
+
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+
+    // ───────── helpers ──────────────────────────────────────────────
+    function isImageUnder5MB() {
+      return request.resource != null &&
+             request.resource.size < 5 * 1024 * 1024 &&
+             request.resource.contentType.matches('image/.*');
+    }
+
+
+    // ───────── payment slips (per-booking) ─────────────────────────
+    match /payment_slips/{bookingCode}/{file=**} {
+      allow read:           if true;             // TODO(auth-step-1): admin OR owner only
+      allow create:         if isImageUnder5MB();
+      allow update, delete: if false;            // slips are write-once
+    }
+
+
+    // ───────── pass purchase slips (reserved) ──────────────────────
+    match /pass_slips/{purchaseCode}/{file=**} {
+      allow read:           if true;             // TODO(auth-step-1): admin OR owner only
+      allow create:         if isImageUnder5MB();
+      allow update, delete: if false;
+    }
+
+
+    // ───────── catch-all deny ──────────────────────────────────────
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
